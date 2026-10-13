@@ -48,7 +48,7 @@ ctest --preset host-debug
 | `format` | `clang-format --dry-run --Werror` on all tracked `.c`/`.h` files |
 | `clang-tidy` | `.clang-tidy` profile against the `host-debug` compile database |
 | `linux (gcc\|clang, host-debug\|host-release)` | Build + unit tests on Ubuntu 24.04 (ASan + UBSan in debug) |
-| `windows (cl\|clang-cl, host-debug\|host-release)` | Build + unit tests on Windows Server 2025 with VS 2022 (ASan in debug) |
+| `windows (cl\|clang-cl, host-debug\|host-release)` | Build + unit tests on Windows Server 2025 with the runner's Visual Studio (VS 2026, MSVC 19.51, LLVM clang-cl 20.1 as of 2026-10; ASan in debug) |
 
 All of these jobs are required checks in the `main` ruleset. If you rename a job or change the matrix, update the ruleset's required checks in the same MR, or pull requests will wait forever for a check that no longer exists.
 
