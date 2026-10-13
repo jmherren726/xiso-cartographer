@@ -1,5 +1,7 @@
 # xiso-cartographer
 
+[![CI](https://github.com/jmherren726/xiso-cartographer/actions/workflows/ci.yml/badge.svg)](https://github.com/jmherren726/xiso-cartographer/actions/workflows/ci.yml)
+
 Homebrew game catalog and installer for the modded original Xbox. Browse the full library, then download and install your own game backups directly on the console, with streaming xiso extraction, HTTPS and resumable installs. Built with [nxdk](https://github.com/XboxDev/nxdk).
 
 ## Status
