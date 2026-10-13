@@ -1,4 +1,4 @@
-# Host CI: formatting, static analysis, and build + unit tests on Linux and Windows.
+# CI: formatting, static analysis, host build + unit tests (Linux, Windows) and the XBE build.
 # The job names are referenced by the "Protect main" ruleset as required checks;
 # renaming a job means updating the ruleset too (see CONTRIBUTING.md).
 name: CI
@@ -50,7 +50,8 @@ jobs:
       - name: Run clang-tidy
         run: |
           clang-tidy --version
-          git ls-files -z '*.c' | xargs -0 --no-run-if-empty clang-tidy -p build/host-debug --quiet
+          # Host-built code only; app/ needs nxdk headers and isn't in the host compile database.
+          git ls-files -z 'core/*.c' | xargs -0 --no-run-if-empty clang-tidy -p build/host-debug --quiet
 
   linux:
     name: linux (${{ matrix.cc }}, ${{ matrix.preset }})
@@ -102,3 +103,26 @@ jobs:
           cmake --preset ${{ matrix.preset }} || exit /b 1
           cmake --build --preset ${{ matrix.preset }} || exit /b 1
           ctest --preset ${{ matrix.preset }} || exit /b 1
+
+  xbe:
+    name: xbe
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+      - name: Build nxdk image and XBE
+        run: make docker-xbe
+      - name: Check output
+        run: |
+          ls -l app/bin/default.xbe app/xiso-cartographer.iso
+          # Every XBE starts with the "XBEH" magic.
+          test "$(head -c 4 app/bin/default.xbe)" = "XBEH"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: xiso-cartographer-xbe-${{ github.sha }}
+          path: |
+            app/bin/default.xbe
+            app/xiso-cartographer.iso
+          if-no-files-found: error
+          retention-days: 30

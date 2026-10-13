@@ -35,3 +35,15 @@ xiso-cartographer is licensed under the **MIT License**. Before anything was rel
 - **GPL code can't be copied in.** Code from GPL Xbox projects (e.g. XBMC-derived code) must not be added, even if it's convenient. Write our own instead, or use a permissively licensed equivalent.
 - Any new dependency's licence is checked in the MR that adds it. Anything not on the permissive list (MIT, BSD, zlib, ISC, Apache-2.0, CC0/public domain) needs a new ADR.
 - When nxdk is added as a submodule (MR-4), recheck its `LICENSES` folder at the pinned commit and update this table if anything differs.
+
+## Recheck: nxdk added in MR-4
+
+Checked against nxdk `14d5ee9` (2026-09-30). Its `LICENSES/` folder has Apache-2.0, CC0-1.0, MIT, NCSA and LicenseRef-NVIDIA-CG. Its Docker image label also lists BSD-3-Clause and GPL-2.0-or-later. Two items weren't in the table above:
+
+| Component | Licence | Where it ends up | Effect on us |
+|---|---|---|---|
+| `tools/cxbe` (EXE → XBE converter) | GPL-2.0-or-later | Build machine only. It reads our linked `main.exe` and writes the XBE container; none of its code is linked into the XBE. | None. Running a GPL tool doesn't relicense its input or output, just as compiling with GCC doesn't. We don't redistribute cxbe; the Docker image is built locally and in CI, never published. |
+| `tools/cg` (NVIDIA Cg compiler binary) | Proprietary (LicenseRef-NVIDIA-CG) | Build machine only, and only for shader sources, which we don't have yet. | None now. Revisit if the UI uses Cg shaders and we ever publish the build image. |
+| libc++ (`lib/libcxx`) | Apache-2.0 WITH LLVM-exception / NCSA | Linked only into C++ builds (`NXDK_CXX`). The C app doesn't link it. | Compatible with MIT. Include its notice if a later ADR adopts C++. |
+
+The decision stands. If we ever publish the nxdk build image, revisit it: that would mean redistributing cxbe (GPL) and cgc (proprietary).
