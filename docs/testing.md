@@ -15,7 +15,7 @@ Steps 3 and 4 are required for every milestone that touches the platform layer. 
 
 | Console | Revision | RAM | HDD | Mod | Dashboard |
 |---|---|---|---|---|---|
-| _to fill in_ | | | | | |
+| Main console | _revision?_ | _64/128 MB?_ | _stock/upgraded?_ | _soft/hard?_ | _dashboard?_ |
 
 ## Results log
 
@@ -23,8 +23,8 @@ Newest first. "Build" is the commit or CI artifact tested.
 
 | Date | Milestone | Build | Where | Result | Notes |
 |---|---|---|---|---|---|
+| 2026-10-13 | M0 | `e4c26ab` (local Docker build) | Hardware: main console (see bench) | ✅ Pass | `app/bin/default.xbe` copied with FileZilla (FTP) and launched from the dashboard. Same three lines as in xemu. |
 | 2026-10-13 | M0 | `e4c26ab` (local Docker build) | xemu v0.8.136 (Windows 11) | ✅ Pass | `app/xiso-cartographer.iso` via Load Disc. Shows `xiso-cartographer 0.0.0`, `libxcat version number: 0x000000`, `Hello from nxdk. Toolchain OK.` |
-| _pending_ | M0 | MR-4 | Hardware | | `default.xbe` via FTP to `E:\Apps\xiso-cartographer\` |
 
 ## Benchmarks
 
