@@ -51,7 +51,9 @@ See [docs/build-xbox.md](docs/build-xbox.md) for building without `make`, the Wi
 
 | Doc | Contents |
 |---|---|
-| [docs/HANDOFF.md](docs/HANDOFF.md) | Goals, design decisions, architecture, roadmap and standards |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Layers, modules, interfaces, install flow, memory budget |
+| [docs/formats/map.md](docs/formats/map.md) | The map file format (where your images are) |
+| [docs/HANDOFF.md](docs/HANDOFF.md) | Goals, design decisions, roadmap and standards |
 | [docs/build-xbox.md](docs/build-xbox.md) | Building the XBE and running it in xemu or on hardware |
 | [docs/testing.md](docs/testing.md) | Test ladder, hardware bench and results log |
 | [docs/adr/](docs/adr/) | Architecture decision records |

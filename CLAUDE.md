@@ -1,6 +1,6 @@
 # xiso-cartographer: agent guide
 
-- Read docs/HANDOFF.md first (and docs/ARCHITECTURE.md once it exists).
+- Read docs/ARCHITECTURE.md and docs/HANDOFF.md first. Formats are specified in docs/formats/ (normative); parsers must follow them and link the section they implement.
 - Build/test (host): cmake --preset host-debug && cmake --build --preset host-debug && ctest --preset host-debug
 - Clone or update with submodules: git submodule update --init.
 - New tests: core/tests/test_<module>.c (Unity) + xcat_add_test() in core/tests/CMakeLists.txt.
