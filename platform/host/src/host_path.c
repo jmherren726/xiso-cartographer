@@ -1,7 +1,5 @@
-#if !defined(_WIN32)
-#define _POSIX_C_SOURCE 200809L /* mkdir() under strict C11 */
-#endif
-
+/* On POSIX, mkdir() needs _POSIX_C_SOURCE under strict C11; CMake defines it
+   (platform/host/CMakeLists.txt) so no reserved identifier is declared here. */
 #include "host_path.h"
 
 #include <errno.h>
