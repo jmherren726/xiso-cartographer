@@ -19,6 +19,10 @@ const char *xc_err_str(xc_err err)
         return "The image is damaged or invalid";
     case XC_ERR_LIMIT:
         return "The image exceeds a safety limit";
+    case XC_ERR_CANCELLED:
+        return "Cancelled";
+    case XC_ERR_COUNT_:
+        break;
     }
     return "Unknown error";
 }

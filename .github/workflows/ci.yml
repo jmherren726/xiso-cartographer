@@ -52,7 +52,8 @@ jobs:
         run: |
           clang-tidy --version
           # Host-built code only; app/ needs nxdk headers and isn't in the host compile database.
-          git ls-files -z 'core/*.c' | xargs -0 --no-run-if-empty clang-tidy -p build/host-debug --quiet
+          git ls-files -z 'core/*.c' 'platform/host/*.c' 'tools/xcat-cli/*.c' |
+            xargs -0 --no-run-if-empty clang-tidy -p build/host-debug --quiet
 
   linux:
     name: linux (${{ matrix.cc }}, ${{ matrix.preset }})

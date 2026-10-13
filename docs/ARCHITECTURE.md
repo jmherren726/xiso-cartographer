@@ -32,7 +32,7 @@ The user picks a game from the **catalog**, the **map** says where the user's im
 | Layer | Path | Contains | Depends on |
 |---|---|---|---|
 | Core (`libxcat`) | `core/` | All parsing and logic. Portable C11, no platform headers. | C standard library only, plus BearSSL from M5 |
-| Platform | `platform/` | Thin adapters that implement the core's interfaces (§4): `nxdk/` for the Xbox, `host/` for POSIX/Windows (tests, CLI). | Core interfaces; nxdk or the host OS |
+| Platform | `platform/` | Thin adapters that implement the core's interfaces (§4): `nxdk/` for the Xbox (M2), `host/` for POSIX/Windows (tests, CLI; exists: file source and directory sink). | Core interfaces; nxdk or the host OS |
 | App | `app/` | The XBE: UI, screens, job orchestration. No parsing. | Core, platform/nxdk |
 | Tools | `tools/` | `xcat-cli` (runs the core on a PC), the fixture generator ([`tools/fixtures/`](../tools/fixtures/README.md), Python), catalog pipeline. | Core, platform/host (the fixture generator is standalone Python) |
 
@@ -52,7 +52,7 @@ Status: ✅ exists · 🔜 next milestone · ⏳ later.
 | `error` | `xc_err` result codes and user-readable messages (`xcat/error.h`) | M1 | ✅ |
 | `source` | `xc_source` random-access byte source + in-memory source (`xcat/source.h`) | M1 | ✅ |
 | `xdvdfs` | Find the game partition (xiso, XGD1/2/3) and walk the directory trees; produce an offset-sorted file list ([xdvdfs.md](formats/xdvdfs.md), `xcat/xdvdfs.h`) | M1 | ✅ |
-| `extract` | Pull byte ranges from a `ByteSource` and write them to a `Sink`; coalesce ranges; journal and resume; verify | M1 (local), M4 (network) | 🔜 |
+| `extract` | Pull byte ranges from a `ByteSource` and write them to a `Sink`, coalescing small gaps into one span (`xcat/extract.h`). Output matches extract-xiso byte for byte. Journal/resume and hash verification follow with the network install | M1 ✅ (local), M4 (resume), M5 (hashes) | ✅ local |
 | `fatxname` | Sanitise names to FATX rules (≤ 42 chars, allowed character set); prevent collisions | M2 | ⏳ |
 | `http` | HTTP/1.1 client: `Range`, cross-host redirects (max 5), chunked transfer, `Content-Range` checks, timeouts, backoff. Asks `credentials` what to attach **on every redirect hop** | M3 | ⏳ |
 | `credentials` | Parse the credentials file and decide, per request hop, which scoped cookie/headers may be attached ([credentials.md](formats/credentials.md), [ADR 0007](adr/0007-scoped-user-credentials.md)) | M3 (LAN), M6 (archive.org) | ⏳ |
@@ -78,10 +78,10 @@ The core reaches the outside world only through small structs of function pointe
 
 The streaming abstractions used by `extract`:
 
-- **`ByteSource`** = [`xc_source`](../core/include/xcat/source.h): "read exactly `[offset, offset+len)`", with the total size known up front. Backed by memory (tests, fuzzing), a local file (host tests now; the Xbox HDD in M2) or HTTP Range (M4, M5).
-- **`Sink`:** "create this file, append these bytes, close it". Backed by the host filesystem (tests, CLI) or FATX (Xbox).
+- **`ByteSource`** = [`xc_source`](../core/include/xcat/source.h): "read exactly `[offset, offset+len)`", with the total size known up front. Backed by memory (tests, fuzzing), a local file ([`xc_host_file`](../platform/host/include/xcat/host.h) now; the Xbox HDD in M2) or HTTP Range (M4, M5). `xc_extract` reads each span contiguously, so an HTTP source can serve a span from one request.
+- **`Sink`** = [`xc_sink`](../core/include/xcat/sink.h): `make_dir`, `begin_file`, `write`, `end_file(complete)`. Backed by a host directory ([`xc_host_dir_sink`](../platform/host/include/xcat/host.h), with long-path support on Windows), memory in tests, or FATX on the Xbox (M2).
 
-The exact signatures are defined in the MR that adds each interface. This section is then updated to link the header.
+`xc_io`, `xc_net`, `xc_clock` and `xc_log` get their exact signatures in the MR that adds each one, and this section then links the header.
 
 ## 5. Install flow
 

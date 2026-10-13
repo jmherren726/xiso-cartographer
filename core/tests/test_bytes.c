@@ -3,6 +3,8 @@
 #include "xcat/error.h"
 #include "xcat/source.h"
 
+#include <string.h>
+
 #include "bytes.h"
 
 void setUp(void) {}
@@ -71,8 +73,10 @@ static void test_source_read_checks_range(void)
 
 static void test_error_strings(void)
 {
-    for (int e = XC_OK; e <= XC_ERR_LIMIT; e++) {
+    /* Every code has its own message, so a new code can't ship without one. */
+    for (int e = XC_OK; e < XC_ERR_COUNT_; e++) {
         TEST_ASSERT_NOT_NULL(xc_err_str((xc_err)e));
+        TEST_ASSERT_TRUE(strcmp("Unknown error", xc_err_str((xc_err)e)) != 0);
     }
     TEST_ASSERT_EQUAL_STRING("Unknown error", xc_err_str((xc_err)1000));
 }

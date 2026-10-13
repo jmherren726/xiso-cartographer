@@ -36,7 +36,14 @@ cmake --build --preset host-debug
 ctest --preset host-debug
 ```
 
-You need CMake 3.25+, Ninja and a C11 compiler: gcc or clang on Linux/macOS, or MSVC/clang-cl on Windows. See [CONTRIBUTING.md](CONTRIBUTING.md#setup) for details.
+You need CMake 3.25+, Ninja, Python 3.10+ and a C11 compiler: gcc or clang on Linux/macOS, or MSVC/clang-cl on Windows. See [CONTRIBUTING.md](CONTRIBUTING.md#setup) for details.
+
+The host build also produces **`xcat-cli`**, which runs the core on a PC. It works on both trimmed xisos and full-disc `.iso` dumps:
+
+```sh
+build/host-debug/tools/xcat-cli/xcat-cli list <image>               # layout + every file, in disc order
+build/host-debug/tools/xcat-cli/xcat-cli extract <image> <out-dir>  # same output as extract-xiso -x
+```
 
 **Xbox app** (needs Docker):
 

@@ -8,16 +8,6 @@ target_compile_definitions(unity PUBLIC UNITY_SUPPORT_64
   # whose `noreturn` macro breaks __declspec(noreturn) in the Windows SDK headers.
   UNITY_NORETURN=_Noreturn)
 
-# Helpers shared by tests (host-only code; never part of libxcat).
-add_library(xcat_test_support STATIC support/file_source.c)
-target_include_directories(xcat_test_support PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(xcat_test_support PUBLIC xcat::xcat)
-# Test code uses plain stdio (fopen); the CRT's "use fopen_s" deprecation doesn't apply.
-if(WIN32)
-  target_compile_definitions(xcat_test_support PUBLIC _CRT_SECURE_NO_WARNINGS)
-endif()
-xcat_target_warnings(xcat_test_support)
-
 # Synthetic xiso fixtures (tools/fixtures/), generated at build time.
 find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
 option(XCAT_LARGE_FIXTURES "Also generate and test the >4 GiB sparse fixture" OFF)
@@ -42,6 +32,13 @@ add_custom_command(
   VERBATIM)
 add_custom_target(xcat_fixtures ALL DEPENDS ${_fixture_outputs})
 
+# Test code uses plain stdio (fopen); the CRT's "use fopen_s" deprecation doesn't apply.
+function(xcat_test_target target)
+  if(WIN32)
+    target_compile_definitions(${target} PRIVATE _CRT_SECURE_NO_WARNINGS)
+  endif()
+endfunction()
+
 # Puts LLVM's ASan DLL first on PATH for clang-cl builds; it must win over MSVC's
 # identically named one.
 function(xcat_test_env test)
@@ -56,7 +53,8 @@ endfunction()
 function(xcat_add_test name)
   cmake_parse_arguments(PARSE_ARGV 1 T "" "" "ARGS")
   add_executable(${name} ${name}.c)
-  target_link_libraries(${name} PRIVATE xcat::xcat xcat_test_support unity)
+  target_link_libraries(${name} PRIVATE xcat::xcat xcat::host unity)
+  xcat_test_target(${name})
   # Tests may use libxcat's internal headers (e.g. bytes.h).
   target_include_directories(${name} PRIVATE ${PROJECT_SOURCE_DIR}/core/src)
   xcat_target_warnings(${name})
@@ -70,7 +68,8 @@ endfunction()
 function(xcat_add_fuzzer name)
   cmake_parse_arguments(PARSE_ARGV 1 F "" "" "SEEDS")
   add_executable(${name}_replay ${name}.c support/fuzz_replay.c)
-  target_link_libraries(${name}_replay PRIVATE xcat::xcat xcat_test_support)
+  target_link_libraries(${name}_replay PRIVATE xcat::xcat)
+  xcat_test_target(${name}_replay)
   xcat_target_warnings(${name}_replay)
   add_test(NAME ${name}_seeds COMMAND ${name}_replay ${F_SEEDS})
   xcat_test_env(${name}_seeds)
@@ -86,6 +85,17 @@ xcat_add_test(test_version)
 xcat_add_test(test_bytes)
 xcat_add_test(test_xdvdfs ARGS ${XCAT_FIXTURES_DIR} ${XCAT_FIXTURES})
 add_dependencies(test_xdvdfs xcat_fixtures)
+xcat_add_test(test_extract)
+
+# End to end: xcat-cli extracts every fixture, and the result must match its manifest (and so
+# extract-xiso's output: tools/fixtures/verify.sh checks the manifests against extract-xiso).
+foreach(_name IN LISTS XCAT_FIXTURES)
+  add_test(NAME extract_${_name}
+    COMMAND ${Python3_EXECUTABLE} -I ${PROJECT_SOURCE_DIR}/tools/fixtures/extract_and_check.py
+            --cli $<TARGET_FILE:xcat-cli> --fixtures ${XCAT_FIXTURES_DIR}
+            --out ${CMAKE_BINARY_DIR}/extracted ${_name})
+  xcat_test_env(extract_${_name})
+endforeach()
 
 # Fuzz seeds: the directory tables of the xiso fixtures, in the harness's input layout.
 set(XCAT_FUZZ_SEEDS_DIR ${CMAKE_BINARY_DIR}/fuzz-seeds)

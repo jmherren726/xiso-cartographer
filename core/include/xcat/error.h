@@ -14,7 +14,9 @@ typedef enum xc_err {
     XC_ERR_RANGE,       /* a read reached outside the source */
     XC_ERR_NOT_XDVDFS,  /* no Xbox volume descriptor at any known layout */
     XC_ERR_CORRUPT,     /* the data violates its format (or is hostile) */
-    XC_ERR_LIMIT        /* the data exceeds a configured safety limit */
+    XC_ERR_LIMIT,       /* the data exceeds a configured safety limit */
+    XC_ERR_CANCELLED,   /* the caller asked to stop (e.g. a progress callback) */
+    XC_ERR_COUNT_       /* number of codes; not an error */
 } xc_err;
 
 /* Returns a short, user-readable description. Never NULL, even for unknown values. */
