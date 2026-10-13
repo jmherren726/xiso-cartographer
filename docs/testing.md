@@ -25,6 +25,7 @@ Newest first. "Build" is the commit or CI artifact tested.
 
 | Date | Milestone | Build | Where | Result | Notes |
 |---|---|---|---|---|---|
+| 2026-10-13 | M1 | `feat/extractor` | Host: Windows (cl, clang-cl, clang), Ubuntu 24.04 (gcc, clang) | ✅ Pass | `xcat-cli extract` output matches each fixture's manifest (all layouts, incl. >4 GiB on Linux). Direct check: `diff -r` against `extract-xiso -x` output is identical for `small` (9 files) and `deep` (311 files, 17 dirs). Parser fuzzed (#21). |
 | 2026-10-13 | M0 | `e4c26ab` (local Docker build) | Hardware: main console (see bench) | ✅ Pass | `app/bin/default.xbe` copied with FileZilla (FTP) and launched from the dashboard. Same three lines as in xemu. |
 | 2026-10-13 | M0 | `e4c26ab` (local Docker build) | xemu v0.8.136 (Windows 11) | ✅ Pass | `app/xiso-cartographer.iso` via Load Disc. Shows `xiso-cartographer 0.0.0`, `libxcat version number: 0x000000`, `Hello from nxdk. Toolchain OK.` |
 

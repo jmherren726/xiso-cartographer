@@ -56,6 +56,14 @@ ctest --preset host-debug
 
 All of these jobs are required checks in the `main` ruleset. If you rename a job or change the matrix, update the ruleset's required checks in the same MR, or pull requests will wait forever for a check that no longer exists.
 
+### Source layout for host code
+
+- `core/` is libxcat: portable, with no OS calls.
+- `platform/host/` adapts it to a PC: a stdio file source and a directory sink. Use these in tests and tools instead of writing new file I/O.
+- `tools/xcat-cli/` is the command-line front end.
+
+Fixture extraction is tested end to end: one `extract_<fixture>` CTest per fixture runs `xcat-cli extract` and compares the output with the manifest.
+
 ### Adding a unit test
 
 Tests use [Unity](https://github.com/ThrowTheSwitch/Unity) ([ADR 0003](docs/adr/0003-unit-test-framework.md)). Create `core/tests/test_<module>.c` with `setUp`/`tearDown` and a `main()` that calls `RUN_TEST` for each test, then add `xcat_add_test(test_<module>)` to [core/tests/CMakeLists.txt](core/tests/CMakeLists.txt). [test_version.c](core/tests/test_version.c) is the minimal example.

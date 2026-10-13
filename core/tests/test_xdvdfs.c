@@ -14,7 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "support/file_source.h"
+#include "xcat/host.h"
 
 #define SECTOR 2048U
 #define IMG_SECTORS 40U
@@ -407,15 +407,15 @@ static void test_fixture(void)
 {
     char path[1024];
     TEST_ASSERT_TRUE(snprintf(path, sizeof path, "%s/%s.iso", fixtures_dir, fixture_name) > 0);
-    test_file_source fs = {NULL};
+    xc_host_file fs = {NULL};
     xc_source src;
-    TEST_ASSERT_EQUAL_INT_MESSAGE(XC_OK, test_file_source_open(&src, &fs, path), path);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(XC_OK, xc_host_file_open(&src, &fs, path), path);
 
     xc_xdvdfs_volume vol;
     xc_xdvdfs_listing l;
     TEST_ASSERT_EQUAL_INT(XC_OK, xc_xdvdfs_open(&src, &vol));
     TEST_ASSERT_EQUAL_INT(XC_OK, xc_xdvdfs_list(&src, &vol, NULL, &l));
-    test_file_source_close(&fs);
+    xc_host_file_close(&fs);
 
     xc_xdvdfs_entry *dirs = NULL;
     if (l.dir_count > 0) {
