@@ -50,12 +50,17 @@ ctest --preset host-debug
 | `linux (gcc\|clang, host-debug\|host-release)` | Build + unit tests on Ubuntu 24.04 (ASan + UBSan in debug) |
 | `windows (cl\|clang-cl, host-debug\|host-release)` | Build + unit tests on Windows Server 2025 with the runner's Visual Studio (VS 2026, MSVC 19.51, LLVM clang-cl 20.1 as of 2026-10; ASan in debug) |
 | `xbe` | Builds the nxdk Docker image and the XBE; uploads `default.xbe` + ISO as an artifact |
+| `fixtures` | Generator unit tests; builds all fixtures (incl. >4 GiB), cross-checks them with extract-xiso, and checks the output is deterministic |
 
 All of these jobs are required checks in the `main` ruleset. If you rename a job or change the matrix, update the ruleset's required checks in the same MR, or pull requests will wait forever for a check that no longer exists.
 
 ### Adding a unit test
 
 Tests use [Unity](https://github.com/ThrowTheSwitch/Unity) ([ADR 0003](docs/adr/0003-unit-test-framework.md)). Create `core/tests/test_<module>.c` with `setUp`/`tearDown` and a `main()` that calls `RUN_TEST` for each test, then add `xcat_add_test(test_<module>)` to [core/tests/CMakeLists.txt](core/tests/CMakeLists.txt). [test_version.c](core/tests/test_version.c) is the minimal example.
+
+### Test fixtures
+
+Core tests use synthetic xiso images generated from dummy data by [tools/fixtures/](tools/fixtures/README.md). Generating them needs Python 3.10+ and no packages: `make fixtures`, or `python3 tools/fixtures/fixtures.py --out build/fixtures` without make. Never add real game images to the repo or to tests.
 
 ### Xbox build
 

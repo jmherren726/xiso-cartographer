@@ -1,4 +1,5 @@
-# CI: formatting, static analysis, host build + unit tests (Linux, Windows) and the XBE build.
+# CI: formatting, static analysis, host build + unit tests (Linux, Windows), the XBE
+# build, and the synthetic test fixtures.
 # The job names are referenced by the "Protect main" ruleset as required checks;
 # renaming a job means updating the ruleset too (see CONTRIBUTING.md).
 name: CI
@@ -126,3 +127,24 @@ jobs:
             app/xiso-cartographer.iso
           if-no-files-found: error
           retention-days: 30
+
+  fixtures:
+    name: fixtures
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+      - name: Generator unit tests
+        run: python3 -I -m unittest discover -s tools/fixtures -p 'test_*.py' -v
+      - name: Generate fixtures and cross-check with extract-xiso
+        # Includes the >4 GiB sparse image; extracting it writes ~4 GiB, freed per fixture.
+        run: make fixtures-verify FIXTURES_DIR=build/fixtures FIXTURES_ARGS=--large
+      - name: Check determinism
+        # Manifests carry every file's sector, size and SHA-256, so equal manifests plus
+        # equal small images mean equal output without re-reading GBs of sparse holes.
+        run: |
+          python3 tools/fixtures/fixtures.py --out build/fixtures-again --large
+          for f in build/fixtures/*.json build/fixtures/small.iso build/fixtures/deep.iso; do
+            cmp "$f" "build/fixtures-again/$(basename "$f")"
+          done

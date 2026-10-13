@@ -17,3 +17,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - M0 complete: the hello XBE boots in xemu and on real hardware (docs/testing.md).
 - Map file format v1 specification (docs/formats/map.md) and architecture document (docs/ARCHITECTURE.md).
 - ADRs 0004 (streaming install over HTTP Range), 0005 (BearSSL for TLS) and 0006 (no links, no bypasses, good-guest networking).
+- Synthetic xiso fixture generator (tools/fixtures/): small, deep, XGD1/XGD3 full-disc and >4 GiB images from dummy data, with manifests; deterministic, sparse, and cross-checked against extract-xiso in CI.
