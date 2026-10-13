@@ -24,6 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Extractor (`xc_extract`) and the `xc_sink` interface: directories first, then files in offset order through one caller-provided buffer, coalescing small gaps into a single read span (ADR 0004); progress reporting and cancellation. Output matches `extract-xiso -x` byte for byte.
 - Host platform layer (`platform/host`): file source and directory sink, with UTF-8 and long-path support on Windows.
 - `xcat-cli list` and `xcat-cli extract` for PCs.
+- FATX rules measured on the console (docs/formats/fatx-names.md) and `xcat/fatx.h`: games whose files the Xbox hard disk can't store are refused, with every problem listed (ADR 0008); install folder names are generated from titles. `xcat-cli check` runs the same check on a PC.
 
 ### Changed
 

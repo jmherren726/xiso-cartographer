@@ -86,6 +86,15 @@ xcat_add_test(test_bytes)
 xcat_add_test(test_xdvdfs ARGS ${XCAT_FIXTURES_DIR} ${XCAT_FIXTURES})
 add_dependencies(test_xdvdfs xcat_fixtures)
 xcat_add_test(test_extract)
+xcat_add_test(test_fatx)
+
+# FATX installability (ADR 0008): every fixture can be installed except "deep", whose names
+# of 43 and 255 characters can't be stored on FATX; `xcat-cli check` must refuse it (exit 3).
+foreach(_name IN LISTS XCAT_FIXTURES)
+  add_test(NAME check_${_name} COMMAND xcat-cli check ${XCAT_FIXTURES_DIR}/${_name}.iso)
+  xcat_test_env(check_${_name})
+endforeach()
+set_tests_properties(check_deep PROPERTIES WILL_FAIL TRUE)
 
 # End to end: xcat-cli extracts every fixture, and the result must match its manifest (and so
 # extract-xiso's output: tools/fixtures/verify.sh checks the manifests against extract-xiso).

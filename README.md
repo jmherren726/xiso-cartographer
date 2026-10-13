@@ -43,6 +43,7 @@ The host build also produces **`xcat-cli`**, which runs the core on a PC. It wor
 ```sh
 build/host-debug/tools/xcat-cli/xcat-cli list <image>               # layout + every file, in disc order
 build/host-debug/tools/xcat-cli/xcat-cli extract <image> <out-dir>  # same output as extract-xiso -x
+build/host-debug/tools/xcat-cli/xcat-cli check <image> [title]      # can the Xbox HDD store it?
 ```
 
 **Xbox app** (needs Docker):
@@ -61,6 +62,7 @@ See [docs/build-xbox.md](docs/build-xbox.md) for building without `make`, the Wi
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Layers, modules, interfaces, install flow, memory budget |
 | [docs/formats/map.md](docs/formats/map.md) | The map file format (where your images are) |
 | [docs/formats/credentials.md](docs/formats/credentials.md) | Logins for sources that need them: host-scoped tokens, kept out of maps (design) |
+| [docs/formats/fatx-names.md](docs/formats/fatx-names.md) | What the Xbox hard disk can store, measured on the console, and when an install is refused |
 | [docs/HANDOFF.md](docs/HANDOFF.md) | Goals, design decisions, roadmap and standards |
 | [docs/build-xbox.md](docs/build-xbox.md) | Building the XBE and running it in xemu or on hardware |
 | [docs/testing.md](docs/testing.md) | Test ladder, hardware bench and results log |

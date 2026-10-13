@@ -21,6 +21,8 @@ const char *xc_err_str(xc_err err)
         return "The image exceeds a safety limit";
     case XC_ERR_CANCELLED:
         return "Cancelled";
+    case XC_ERR_NOT_INSTALLABLE:
+        return "This game has files the Xbox hard disk can't store";
     case XC_ERR_COUNT_:
         break;
     }
