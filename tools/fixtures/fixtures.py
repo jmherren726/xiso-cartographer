@@ -85,6 +85,7 @@ FIXTURES = {
     "small": ("xiso", small_tree),
     "deep": ("xiso", deep_tree),
     "redump-xgd1": ("xgd1", small_tree),
+    "redump-xgd2": ("xgd2", small_tree),
     "redump-xgd3": ("xgd3", small_tree),
 }
 LARGE = {"large": ("xiso", large_tree)}
@@ -102,7 +103,25 @@ def build(name: str, layout_name: str, tree, out: str) -> dict:
     with open(os.path.join(out, f"{name}.json"), "w", encoding="utf-8", newline="\n") as f:
         json.dump(m, f, indent=1, sort_keys=True)
         f.write("\n")
+    write_tsv(m, os.path.join(out, f"{name}.tsv"))
     return m
+
+
+def write_tsv(m: dict, path: str) -> None:
+    """The manifest as tab-separated lines, for tests in C (no JSON parser needed).
+
+    layout <layout> <partition_offset>
+    root   <sector> <size>
+    file   <offset> <size> <sector> <path>    (offset-sorted, as in the JSON)
+    dir    <offset> <size> <sector> <path>    (sorted by path)
+    """
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write(f"# xcat-fixture-manifest {m['version']} (tsv), see tools/fixtures/README.md\n")
+        f.write(f"layout\t{m['layout']}\t{m['partition_offset']}\n")
+        f.write(f"root\t{m['root']['sector']}\t{m['root']['size']}\n")
+        for kind, entries in (("file", m["files"]), ("dir", m["dirs"])):
+            for e in entries:
+                f.write(f"{kind}\t{e['offset']}\t{e['size']}\t{e['sector']}\t{e['path']}\n")
 
 
 def main(argv: list[str] | None = None) -> int:

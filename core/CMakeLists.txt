@@ -1,6 +1,9 @@
 # libxcat: portable core. Must not depend on nxdk or any platform headers.
 add_library(xcat
+  src/error.c
+  src/source.c
   src/version.c
+  src/xdvdfs.c
 )
 add_library(xcat::xcat ALIAS xcat)
 

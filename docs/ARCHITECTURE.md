@@ -49,7 +49,9 @@ Status: ✅ exists · 🔜 next milestone · ⏳ later.
 | Module | Responsibility | Milestone | Status |
 |---|---|---|---|
 | `version` | Library version (`xc_version_string`, `xc_version_number`) | M0 | ✅ |
-| `xdvdfs` | Parse the volume descriptor (sector 32, `MICROSOFT*XBOX*MEDIA`) and directory trees; find the game partition for xiso and Redump layouts; produce an offset-sorted `(path, offset, size)` list | M1 | 🔜 |
+| `error` | `xc_err` result codes and user-readable messages (`xcat/error.h`) | M1 | ✅ |
+| `source` | `xc_source` random-access byte source + in-memory source (`xcat/source.h`) | M1 | ✅ |
+| `xdvdfs` | Find the game partition (xiso, XGD1/2/3) and walk the directory trees; produce an offset-sorted file list ([xdvdfs.md](formats/xdvdfs.md), `xcat/xdvdfs.h`) | M1 | ✅ |
 | `extract` | Pull byte ranges from a `ByteSource` and write them to a `Sink`; coalesce ranges; journal and resume; verify | M1 (local), M4 (network) | 🔜 |
 | `fatxname` | Sanitise names to FATX rules (≤ 42 chars, allowed character set); prevent collisions | M2 | ⏳ |
 | `http` | HTTP/1.1 client: `Range`, cross-host redirects (max 5), chunked transfer, `Content-Range` checks, timeouts, backoff | M3 | ⏳ |
@@ -75,7 +77,7 @@ The core reaches the outside world only through small structs of function pointe
 
 The streaming abstractions used by `extract`:
 
-- **`ByteSource`:** "give me bytes `[offset, offset+len)`". Backed by a local file (M1, M2) or by HTTP Range (M4, M5).
+- **`ByteSource`** = [`xc_source`](../core/include/xcat/source.h): "read exactly `[offset, offset+len)`", with the total size known up front. Backed by memory (tests, fuzzing), a local file (host tests now; the Xbox HDD in M2) or HTTP Range (M4, M5).
 - **`Sink`:** "create this file, append these bytes, close it". Backed by the host filesystem (tests, CLI) or FATX (Xbox).
 
 The exact signatures are defined in the MR that adds each interface. This section is then updated to link the header.
