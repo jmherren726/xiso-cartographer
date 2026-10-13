@@ -19,3 +19,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - ADRs 0004 (streaming install over HTTP Range), 0005 (BearSSL for TLS) and 0006 (no links, no bypasses, good-guest networking).
 - Synthetic xiso fixture generator (tools/fixtures/): small, deep, XGD1/XGD2/XGD3 full-disc and >4 GiB images from dummy data, with manifests; deterministic, sparse, and cross-checked against extract-xiso in CI.
 - XDVDFS reader (`xc_xdvdfs_open`, `xc_xdvdfs_list`): detects trimmed xiso and full-disc XGD1/2/3 images, walks directory trees without recursion, rejects corrupt or hostile images (docs/formats/xdvdfs.md), and lists files in offset order. Plus `xc_err` error codes and the `xc_source` byte-source interface.
+- ADR 0007 and the credentials file format (docs/formats/credentials.md): logins for sources that need them, stored as host-scoped tokens outside the map, sent only over HTTPS and re-checked on every redirect (design; implemented in M3–M6).

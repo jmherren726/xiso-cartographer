@@ -54,7 +54,8 @@ Status: ✅ exists · 🔜 next milestone · ⏳ later.
 | `xdvdfs` | Find the game partition (xiso, XGD1/2/3) and walk the directory trees; produce an offset-sorted file list ([xdvdfs.md](formats/xdvdfs.md), `xcat/xdvdfs.h`) | M1 | ✅ |
 | `extract` | Pull byte ranges from a `ByteSource` and write them to a `Sink`; coalesce ranges; journal and resume; verify | M1 (local), M4 (network) | 🔜 |
 | `fatxname` | Sanitise names to FATX rules (≤ 42 chars, allowed character set); prevent collisions | M2 | ⏳ |
-| `http` | HTTP/1.1 client: `Range`, cross-host redirects (max 5), chunked transfer, `Content-Range` checks, timeouts, backoff | M3 | ⏳ |
+| `http` | HTTP/1.1 client: `Range`, cross-host redirects (max 5), chunked transfer, `Content-Range` checks, timeouts, backoff. Asks `credentials` what to attach **on every redirect hop** | M3 | ⏳ |
+| `credentials` | Parse the credentials file and decide, per request hop, which scoped cookie/headers may be attached ([credentials.md](formats/credentials.md), [ADR 0007](adr/0007-scoped-user-credentials.md)) | M3 (LAN), M6 (archive.org) | ⏳ |
 | `tls` | BearSSL wrapper: TLS 1.2, SNI, CA bundle, time from `xc_clock` ([ADR 0005](adr/0005-bearssl-for-tls.md)) | M5 | ⏳ |
 | `ntp` | Minimal SNTP client, so certificate checks have a correct clock | M5 | ⏳ |
 | `hash` | MD5/SHA-1 with exportable state (from BearSSL) | M5 | ⏳ |
