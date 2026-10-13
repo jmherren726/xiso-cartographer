@@ -52,6 +52,8 @@ A homebrew app (XBE) for **soft- or hard-modded original Xbox consoles**. It pre
 
 ## 3. Architecture
 
+> [`docs/ARCHITECTURE.md`](./ARCHITECTURE.md) is now the maintained version of this section. Decisions referenced here are recorded in ADRs 0004 (streaming install), 0005 (BearSSL) and 0006 (no links / no bypass).
+
 ### 3.1 Overview
 
 ```mermaid
@@ -111,6 +113,8 @@ flowchart LR
 On a resume, skip files already in the journal and restart the partially written one.
 
 ### 3.5 Map format (v1)
+
+> Superseded by the normative spec [`docs/formats/map.md`](./formats/map.md). The sketch below is kept for history.
 
 ```
 # xcat-map v1

@@ -22,12 +22,12 @@ We record every hard-to-reverse decision as an Architecture Decision Record (ADR
 - The reasoning behind a decision survives after the MR discussion is forgotten.
 - There is a small writing cost per decision, which is acceptable for choices of this weight.
 
-## Planned ADRs
+## ADR index
 
 | # | Topic | Lands with |
 |---|---|---|
 | 0002 | Licence and dependency compatibility | MR-1 (accepted) |
 | 0003 | Unit test framework (Unity) | MR-2 (accepted) |
-| 0004 | Streaming install | MR-5 |
-| 0005 | BearSSL for TLS | MR-5 |
-| 0006 | No bypass / no links policy | MR-5 |
+| 0004 | Streaming install | MR-5 (accepted) |
+| 0005 | BearSSL for TLS | MR-5 (accepted) |
+| 0006 | No links, no bypasses, good-guest networking | MR-5 (accepted) |
