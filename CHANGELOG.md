@@ -24,6 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Extractor (`xc_extract`) and the `xc_sink` interface: directories first, then files in offset order through one caller-provided buffer, coalescing small gaps into a single read span (ADR 0004); progress reporting and cancellation. Output matches `extract-xiso -x` byte for byte.
 - Host platform layer (`platform/host`): file source and directory sink, with UTF-8 and long-path support on Windows.
 - `xcat-cli list` and `xcat-cli extract` for PCs.
+- FATX probe XBE (`app/fatx-probe`): measures which names, paths and directory sizes the console's FATX driver accepts, so the M2 naming rules come from the real kernel.
 
 ### Changed
 

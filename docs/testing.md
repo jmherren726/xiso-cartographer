@@ -29,6 +29,35 @@ Newest first. "Build" is the commit or CI artifact tested.
 | 2026-10-13 | M0 | `e4c26ab` (local Docker build) | Hardware: main console (see bench) | ✅ Pass | `app/bin/default.xbe` copied with FileZilla (FTP) and launched from the dashboard. Same three lines as in xemu. |
 | 2026-10-13 | M0 | `e4c26ab` (local Docker build) | xemu v0.8.136 (Windows 11) | ✅ Pass | `app/xiso-cartographer.iso` via Load Disc. Shows `xiso-cartographer 0.0.0`, `libxcat version number: 0x000000`, `Hello from nxdk. Toolchain OK.` |
 
+## FATX probe (M2)
+
+No authoritative list of FATX naming rules exists, and a game's files can't be renamed on install, because the game opens them by name. So the rules in `core/fatxname` come from the console's own kernel, measured by `app/fatx-probe`.
+
+**What it tests**, under `E:\xcat-fatx-probe` (deleted before and after the run):
+
+| Test | What |
+|---|---|
+| Name length | Files and directories with 40–43-character names |
+| Characters | Every byte 0x01–0xFF (except `\`) inside a file name |
+| Edge cases | Trailing dot, trailing space, leading space, `...`, `CON`, … |
+| Case | Is lookup case-insensitive; can `CASEPROBE` be created next to `CaseProbe`? |
+| Path length | Longest directory path and file path, excluding the drive |
+| Entries | Files in one directory, up to 5,000 |
+
+**How to run it:**
+
+1. `make docker-xbe` (or download the CI artifact) builds `app/fatx-probe/xcat-fatx-probe.iso` and `app/fatx-probe/bin/default.xbe`.
+2. **xemu:** Machine → Load Disc → the ISO. It needs an HDD image with a formatted E: partition. **Hardware:** FTP `default.xbe` to e.g. `E:\Apps\xcat-fatx-probe\` and launch it.
+3. Wait for "Done" (the entries test takes the longest), and note or photograph the summary.
+4. Fetch `E:\xcat-fatx-probe.txt` over FTP (hardware). In xemu, the on-screen summary is enough unless something looks unexpected.
+
+### Probe results
+
+| Date | Where | Kernel | Name length (file/dir) | Rejected bytes | Case | Longest path (dir/file) | Entries | Report |
+|---|---|---|---|---|---|---|---|---|
+| _pending_ | xemu | | | | | | | |
+| _pending_ | Hardware | | | | | | | |
+
 ## Benchmarks
 
 | Date | Measurement | Setup | Result |
