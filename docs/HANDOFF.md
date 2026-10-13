@@ -20,7 +20,7 @@ A homebrew app (XBE) for **soft- or hard-modded original Xbox consoles**. It pre
 
 - Runs on a stock or upgraded Xbox (64 or 128 MB), soft or hard mod, launched from common dashboards (XBMC4Gamers, UnleashX).
 - **Xbox-only:** no PC needed. It downloads directly from **archive.org over HTTPS** and from **plain HTTP servers on the LAN**.
-- Installs **uncompressed `.xiso.iso`** images by **stream-extracting** them while downloading, in one pass with no temporary copy, resumable and verified by hash.
+- Installs **uncompressed images** (trimmed `.xiso.iso` or full-disc Redump-style `.iso`, detected by content) by **stream-extracting** them while downloading, in one pass with no temporary copy, resumable and verified by hash.
 - Builds the map automatically from archive.org item metadata, or from a hand-written text file.
 - Ships with **no links and no copyrighted content**. The user supplies all sources.
 
@@ -44,7 +44,7 @@ A homebrew app (XBE) for **soft- or hard-modded original Xbox consoles**. It pre
 | archive.org: plain HTTP is answered with `301` to HTTPS, including on storage servers | curl tests | **On-box HTTPS is mandatory** |
 | archive.org accepts TLS 1.2 | `curl --tls-max 1.2` returned `206` | Use **BearSSL** (small, TLS 1.2) |
 | `archive.org/metadata/<item>` lists files with size, MD5 and SHA-1 | Public API | Automatic mapping, size check before download, hash verification after install |
-| Target images are uncompressed `.xiso.iso` | User's sources | Single-pass install. Zip support is optional (M9b). |
+| Target images are uncompressed: trimmed `.xiso.iso` and full-disc `.iso` dumps | User's sources | Single-pass install for both; full-disc installs skip the video partition (ADR 0004). Compressed CCI/CSO: open question. Zip support is optional (M9b). |
 | Test item: `halo-combat-evolved-usa-rev-2.xiso`, 3,728,867,328 bytes | curl tests | First real-hardware acceptance test (M5) |
 | **Still unknown:** download speed (PC baseline and Xbox) | – | M5 is the go/no-go for the Xbox-only design |
 

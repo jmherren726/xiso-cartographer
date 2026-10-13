@@ -13,7 +13,7 @@ Homebrew game catalog and installer for the modded original Xbox. Browse the ful
 - Run on a soft- or hard-modded Xbox (64 or 128 MB), launched from common dashboards such as XBMC4Gamers or UnleashX.
 - Show a catalog of original Xbox titles (title, region, genre, description, cover art, size) built from openly licensed metadata.
 - Read a **map** that you write, which says where each of your disc images lives: an archive.org item you have access to, or a plain HTTP server on your LAN.
-- Download an uncompressed `.xiso.iso` image and **stream-extract** it straight into `<drive>:\Games\`, with no temporary copy and no PC. Installs are resumable and verified by hash when the source provides one.
+- Download an uncompressed disc image (a trimmed xiso or a full-disc `.iso` dump) and **stream-extract** it straight into `<drive>:\Games\`, with no temporary copy and no PC. Installs are resumable and verified by hash when the source provides one.
 
 ## Legal stance
 

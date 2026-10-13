@@ -14,7 +14,7 @@ Clone with submodules (`git clone --recursive`, or `git submodule update --init`
 
 ### Host build (core library and tests)
 
-Prerequisites: CMake 3.25+, Ninja, and clang-format/clang-tidy from LLVM, plus a C11 compiler:
+Prerequisites: CMake 3.25+, Ninja, Python 3.10+ (generates the test fixtures at build time), and clang-format/clang-tidy from LLVM, plus a C11 compiler:
 
 - **Linux/macOS:** gcc or clang.
 - **Windows:** Visual Studio 2022 Build Tools with the "Desktop development with C++" workload. It provides `cl`, the Windows SDK and the C runtime, which clang-cl also needs. Run the commands from a *Developer PowerShell for VS 2022*. To use clang-cl instead of cl, set `CC=clang-cl` before configuring.
@@ -32,6 +32,7 @@ ctest --preset host-debug
 | `XCAT_BUILD_TESTS` | `ON` | Build the unit tests |
 | `XCAT_WERROR` | `ON` | Treat warnings as errors |
 | `XCAT_SANITIZE` | `OFF` (`ON` in `host-debug`) | ASan, plus UBSan on non-Windows toolchains |
+| `XCAT_LARGE_FIXTURES` | `OFF` | Also generate and test the >4 GiB sparse fixture (needs a filesystem with sparse files) |
 
 ### Formatting and static analysis
 

@@ -73,7 +73,8 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq ninja-build
       - name: Configure
-        run: cmake --preset ${{ matrix.preset }}
+        # Release jobs also test the >4 GiB sparse fixture (64-bit offsets).
+        run: cmake --preset ${{ matrix.preset }} ${{ matrix.preset == 'host-release' && '-DXCAT_LARGE_FIXTURES=ON' || '' }}
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
       - name: Test

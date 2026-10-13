@@ -12,7 +12,7 @@ The words **must**, **must not**, **should** and **may** are used as in RFC 2119
 # xcat-map v1
 # Lines starting with # are comments.
 
-# Title ID = URL of an uncompressed .xiso.iso
+# Title ID = URL of an uncompressed image (trimmed .xiso.iso or full-disc .iso)
 4D530004       = https://archive.org/download/<item>/<file>.xiso.iso
 
 # A regional variant of the same title, served from a PC on the LAN
@@ -88,7 +88,7 @@ variant    = 1*16( ALPHA / DIGIT / "-" / "_" )   ; case-insensitive, normalised 
 - Spaces inside the URL are allowed (`Halo (Europe).xiso.iso`). The reader percent-encodes spaces and non-ASCII characters when it sends the request. Existing `%XX` escapes are kept as they are.
 - The URL **must not** contain a literal `#` (fragment) or any control character. Write `%23` for a `#` in a file name.
 - The URL **must not** contain user credentials (`user:pass@host`). Such entries are invalid: credentials would sit in plain text on the HDD and in logs.
-- The URL **should** point to an uncompressed `.xiso.iso` (or a full Redump-layout `.iso`) on a server that supports HTTP `Range` requests. That is checked at install time, not at load time.
+- The URL **should** point to an uncompressed image, either a trimmed `.xiso.iso` or a full-disc `.iso` dump ([xdvdfs.md §1](xdvdfs.md#1-image-layouts)), on a server that supports HTTP `Range` requests. The layout is detected from the content, not the file name. That is checked at install time, not at load time.
 
 ### 4.3 Duplicate keys
 

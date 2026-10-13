@@ -18,12 +18,13 @@ Output is git-ignored, deterministic (byte-identical on every run and platform) 
 | `small` | xiso | 768 KiB | Files of 0 B, 1 B, exactly one sector, one sector + 1, larger; two subdirectories, one nested; a name with a space |
 | `deep` | xiso | 1.6 MiB | 12 levels of nesting; a 300-entry directory whose table spans several sectors; names of 42, 43 and 255 characters; mixed case; an empty directory and a directory containing only an empty directory |
 | `redump-xgd1` | Full disc, partition at `0x18300000` | 7.8 GB (sparse) | Partition detection and partition-relative sectors (XGD1); same tree as `small` |
+| `redump-xgd2` | Full disc, partition at `0x0FD90000` | 7.8 GB (sparse) | The same for XGD2 |
 | `redump-xgd3` | Full disc, partition at `0x02080000` | 8.7 GB (sparse) | The same for XGD3 |
 | `large` (`--large`) | xiso | 4.3 GB (sparse) | A file of 4,294,965,248 bytes (near the 32-bit size limit), then files whose offsets are past 4 GiB; 64-bit offset arithmetic |
 
 Negative cases (corrupt or hostile images) belong to the M1 parser tests and fuzzing, not this generator. The generator refuses to write invalid images.
 
-## Manifest (`<name>.json`)
+## Manifest (`<name>.json`, `<name>.tsv`)
 
 ```json
 {
@@ -41,6 +42,8 @@ Negative cases (corrupt or hostile images) belong to the M1 parser tests and fuz
 - `size` of a directory is its table size in bytes (a whole number of sectors).
 - `image_sha256` is `null` for images over 64 MiB, so nobody has to hash GBs of holes.
 - A new major `version` means existing tests must be updated.
+- `<name>.tsv` carries the same data for C tests, one record per line: `layout <layout> <partition_offset>`, `root <sector> <size>`, then `file|dir <offset> <size> <sector> <path>` (files offset-sorted, dirs by path).
+- CMake generates the default set into `build/<preset>/fixtures/` before the tests run (`xcat_fixtures` target); `-DXCAT_LARGE_FIXTURES=ON` adds `large`.
 
 ## File content
 
