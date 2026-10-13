@@ -55,8 +55,20 @@ No authoritative list of FATX naming rules exists, and a game's files can't be r
 
 | Date | Where | Kernel | Name length (file/dir) | Rejected bytes | Case | Longest path (dir/file) | Entries | Report |
 |---|---|---|---|---|---|---|---|---|
-| _pending_ | xemu | | | | | | | |
+| 2026-10-13 | xemu v0.8.136 | 1.0.4627.1 | ≤ 42 / ≤ 42 (43 rejected) | 83 of 254: see below | lookup insensitive; other-case duplicate rejected | dir 250; file: see note | 4,096 (then rejected) | on-screen summary (probe v2, `ddc3b53`) |
 | _pending_ | Hardware | | | | | | | |
+
+**Rejected bytes (xemu run):**
+
+- `0x01`–`0x1F` (all control characters). `0x00` can't occur and `0x5C` (`\`) is the separator, so neither was tested.
+- ASCII: `0x22 "`, `0x2A *`, `0x2B +`, `0x2C ,`, `0x2F /`, `0x3A :`, `0x3B ;`, `0x3C <`, `0x3D =`, `0x3E >`, `0x3F ?`, `0x7C |`. All other printable ASCII is accepted, including space, `[` `]` and `0x7F`.
+- Bytes ≥ `0x80` (40, no obvious pattern): `84 86 87 89 8B 8F 91 9F A0 A1 A2 A5 A6 A9 AA AD AE B0 BF C0 C1 C2 C5 C6 C9 CA CD CE D0 DF E0 E1 E4 E5 E6 E7 E9 EF F1 FF`.
+
+**Edge names:** trailing dot, trailing space, leading space, `a..b`, `...`, `CON` and `nul.txt` are all accepted.
+
+**Path note:** paths are counted from the first `\` after `E:`. Directories nested to exactly 250 characters were created, and 251 was rejected. Every file the probe tried went inside the 250-character directory, so it was over the limit. A file path of exactly 250 wasn't tried directly. The limit is evidently on the whole path, and the hardware run should confirm a 250-character file path.
+
+**Consequences for M2:** FATX's 250-character path limit is stricter than nxdk's winapi limit (259 including `E:`), so the app can use nxdk's file calls if it enforces 250 itself. A game is installable only if every path under `\Games\<title>\` fits in 250 characters, every name is valid, and no directory has more than 4,096 entries.
 
 ## Benchmarks
 

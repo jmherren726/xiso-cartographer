@@ -288,20 +288,39 @@ static void probe_path_length(void)
         }
     }
     int dir_len = (int)strlen(cur) - 2;
-    int file_len = -1;
-    NTSTATUS last = 0;
-    for (int k = 42; k >= 1; k--) {
-        char f[PATH_BUF];
-        int n = snprintf(f, sizeof f, "%s\\%.*s", cur, k, f42);
-        last = k_create(f, FALSE);
-        if (NT_SUCCESS(last)) {
-            file_len = n - 2;
+
+    /* Files: walk up from the deepest directory to one where a file name of 1..41 characters
+       makes the path exactly `dir_len` long, then try that length and one more. */
+    int file_ok_len = -1;
+    int file_fail_len = -1;
+    NTSTATUS st_at = 0;
+    NTSTATUS st_over = 0;
+    char parent[PATH_BUF];
+    memcpy(parent, cur, strlen(cur) + 1);
+    for (;;) {
+        char *slash = strrchr(parent, '\\');
+        if (slash == NULL || slash == parent) {
+            break;
+        }
+        *slash = '\0';
+        int k = dir_len + 2 - (int)strlen(parent) - 1; /* name length for a dir_len path */
+        if (k >= 1 && k <= 41) {
+            char f[PATH_BUF];
+            snprintf(f, sizeof f, "%s\\%.*s", parent, k, f42);
+            st_at = k_create(f, FALSE);
+            file_ok_len = (int)strlen(f) - 2;
+            snprintf(f, sizeof f, "%s\\g%.*s", parent, k, f42);
+            st_over = k_create(f, FALSE);
+            file_fail_len = (int)strlen(f) - 2;
             break;
         }
     }
-    rep("longest directory path: %d; longest file path: %d (last failure 0x%08lX)\n", dir_len,
-        file_len, (unsigned long)last);
-    debugPrint("Longest path (excl. E:): dir %d, file %d\n", dir_len, file_len);
+    rep("longest directory path: %d\nfile path of %d: %s (0x%08lX); file path of %d: %s "
+        "(0x%08lX)\n",
+        dir_len, file_ok_len, verdict(st_at), (unsigned long)st_at, file_fail_len, verdict(st_over),
+        (unsigned long)st_over);
+    debugPrint("Longest dir path %d; file path %d=%s, %d=%s (excl. E:)\n", dir_len, file_ok_len,
+               NT_SUCCESS(st_at) ? "ok" : "no", file_fail_len, NT_SUCCESS(st_over) ? "ok" : "no");
 }
 
 /* 6. How many entries one directory can hold. */
@@ -335,7 +354,7 @@ static void probe_entries(void)
 int main(void)
 {
     XVideoSetMode(640, 480, 32, REFRESH_DEFAULT);
-    debugPrint("xiso-cartographer FATX probe (v2)\n");
+    debugPrint("xiso-cartographer FATX probe (v3)\n");
     if (!nxMountDrive('E', "\\Device\\Harddisk0\\Partition1\\")) {
         debugPrint("Could not mount E:\n");
         for (;;) {
@@ -353,7 +372,7 @@ int main(void)
             Sleep(1000);
         }
     }
-    rep("xiso-cartographer FATX probe v2\nkernel %u.%u.%u.%u\n", XboxKrnlVersion.Major,
+    rep("xiso-cartographer FATX probe v3\nkernel %u.%u.%u.%u\n", XboxKrnlVersion.Major,
         XboxKrnlVersion.Minor, XboxKrnlVersion.Build, XboxKrnlVersion.Qfe);
     debugPrint("Kernel %u.%u.%u.%u\n", XboxKrnlVersion.Major, XboxKrnlVersion.Minor,
                XboxKrnlVersion.Build, XboxKrnlVersion.Qfe);
