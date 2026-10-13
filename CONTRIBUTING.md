@@ -37,7 +37,20 @@ ctest --preset host-debug
 
 - Format changed files with `clang-format -i <files>`. The style is in [.clang-format](.clang-format).
 - Run clang-tidy against the compile database: `clang-tidy -p build/host-debug <files>`. The checks are in [.clang-tidy](.clang-tidy).
-- CI enforces both from MR-3.
+- CI checks both on every pull request with pinned versions: clang-format **23.1.3** and clang-tidy **22.1.8**, installed from PyPI. Use the same clang-format version locally (`pip install clang-format==23.1.3`), because other versions can format differently.
+
+### Continuous integration
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every pull request and on pushes to `main`:
+
+| Job | What it checks |
+|---|---|
+| `format` | `clang-format --dry-run --Werror` on all tracked `.c`/`.h` files |
+| `clang-tidy` | `.clang-tidy` profile against the `host-debug` compile database |
+| `linux (gcc\|clang, host-debug\|host-release)` | Build + unit tests on Ubuntu 24.04 (ASan + UBSan in debug) |
+| `windows (cl\|clang-cl, host-debug\|host-release)` | Build + unit tests on Windows Server 2025 with VS 2022 (ASan in debug) |
+
+All of these jobs are required checks in the `main` ruleset. If you rename a job or change the matrix, update the ruleset's required checks in the same MR, or pull requests will wait forever for a check that no longer exists.
 
 ### Adding a unit test
 
