@@ -1,0 +1,26 @@
+# Normalise text to LF in the repo and in working trees on every platform.
+* text=auto eol=lf
+
+# Windows-only scripts need CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary formats: never diff or convert.
+*.iso    binary
+*.xiso   binary
+*.xbe    binary
+*.xbx    binary
+*.bin    binary
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.gif    binary
+*.bmp    binary
+*.tga    binary
+*.dds    binary
+*.zip    binary
+*.7z     binary
+*.gz     binary
+*.ttf    binary
+*.otf    binary

@@ -1,0 +1,33 @@
+# 0001. Record architecture decisions
+
+- **Status:** Accepted
+- **Date:** 2026-10-13
+
+## Context
+
+xiso-cartographer makes several choices that are expensive to undo: dependencies (nxdk, BearSSL), on-disk and wire formats (map, catalog, journal), protocols and the licence. Contributors, including AI coding agents, need to know why each choice was made so they don't reopen settled questions or quietly break the assumptions behind them.
+
+## Decision
+
+We record every hard-to-reverse decision as an Architecture Decision Record (ADR), following Michael Nygard's format.
+
+- ADRs live in `docs/adr/` and are named `NNNN-short-title.md`, numbered sequentially from `0001`.
+- Each ADR has a **Status** (Proposed, Accepted, Deprecated, or Superseded by NNNN), a **Date**, and three sections: **Context**, **Decision** and **Consequences**.
+- An ADR is added in the same MR as the change it justifies, or in an earlier docs-only MR.
+- Accepted ADRs are not rewritten. To change a decision, write a new ADR and mark the old one "Superseded by NNNN".
+
+## Consequences
+
+- Reviewers can ask "where is the ADR?" for any new dependency, format, protocol or licence change.
+- The reasoning behind a decision survives after the MR discussion is forgotten.
+- There is a small writing cost per decision, which is acceptable for choices of this weight.
+
+## Planned ADRs
+
+| # | Topic | Lands with |
+|---|---|---|
+| 0002 | Licence and dependency compatibility | MR-1 (accepted) |
+| 0003 | Streaming install | MR-5 |
+| 0004 | BearSSL for TLS | MR-5 |
+| 0005 | No bypass / no links policy | MR-5 |
+| — | Unit test framework | MR-2 |
