@@ -26,7 +26,7 @@ xiso-cartographer is a tool for installing **backups you are entitled to use**.
 
 ## Building
 
-So far only the portable core library and its unit tests build on a PC. The Xbox (nxdk) build arrives in MR-4.
+There are two builds: the portable core library with its unit tests (CMake, on a PC), and the Xbox app (nxdk, in Docker). Right now the app is a "hello" XBE that proves the toolchain.
 
 ```sh
 git clone --recursive https://github.com/jmherren726/xiso-cartographer.git
@@ -38,11 +38,22 @@ ctest --preset host-debug
 
 You need CMake 3.25+, Ninja and a C11 compiler: gcc or clang on Linux/macOS, or MSVC/clang-cl on Windows. See [CONTRIBUTING.md](CONTRIBUTING.md#setup) for details.
 
+**Xbox app** (needs Docker):
+
+```sh
+git submodule update --init --recursive
+make docker-xbe     # → app/bin/default.xbe, app/xiso-cartographer.iso
+```
+
+See [docs/build-xbox.md](docs/build-xbox.md) for building without `make`, the Windows line-ending fix, and running the XBE in xemu or on a console.
+
 ## Documentation
 
 | Doc | Contents |
 |---|---|
 | [docs/HANDOFF.md](docs/HANDOFF.md) | Goals, design decisions, architecture, roadmap and standards |
+| [docs/build-xbox.md](docs/build-xbox.md) | Building the XBE and running it in xemu or on hardware |
+| [docs/testing.md](docs/testing.md) | Test ladder, hardware bench and results log |
 | [docs/adr/](docs/adr/) | Architecture decision records |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Setup, MR rules and review checklist |
 | [CLAUDE.md](CLAUDE.md) | Guidance for AI coding agents |
