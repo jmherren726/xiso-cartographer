@@ -10,7 +10,42 @@ Thanks for helping. Read [docs/HANDOFF.md](docs/HANDOFF.md) first: it explains w
 
 ## Setup
 
-The toolchain arrives with MR-2 (host build) and MR-4 (nxdk build). This section will list the prerequisites and commands then.
+Clone with submodules (`git clone --recursive`, or `git submodule update --init` in an existing clone).
+
+### Host build (core library and tests)
+
+Prerequisites: CMake 3.25+, Ninja, and clang-format/clang-tidy from LLVM, plus a C11 compiler:
+
+- **Linux/macOS:** gcc or clang.
+- **Windows:** Visual Studio 2022 Build Tools with the "Desktop development with C++" workload. It provides `cl`, the Windows SDK and the C runtime, which clang-cl also needs. Run the commands from a *Developer PowerShell for VS 2022*. To use clang-cl instead of cl, set `CC=clang-cl` before configuring.
+
+```sh
+cmake --preset host-debug          # Debug, warnings as errors, ASan (+ UBSan on gcc/clang)
+cmake --build --preset host-debug
+ctest --preset host-debug
+```
+
+`host-release` is the same build without sanitizers. Build output goes to `build/<preset>/` (git-ignored).
+
+| CMake option | Default | Effect |
+|---|---|---|
+| `XCAT_BUILD_TESTS` | `ON` | Build the unit tests |
+| `XCAT_WERROR` | `ON` | Treat warnings as errors |
+| `XCAT_SANITIZE` | `OFF` (`ON` in `host-debug`) | ASan, plus UBSan on non-Windows toolchains |
+
+### Formatting and static analysis
+
+- Format changed files with `clang-format -i <files>`. The style is in [.clang-format](.clang-format).
+- Run clang-tidy against the compile database: `clang-tidy -p build/host-debug <files>`. The checks are in [.clang-tidy](.clang-tidy).
+- CI enforces both from MR-3.
+
+### Adding a unit test
+
+Tests use [Unity](https://github.com/ThrowTheSwitch/Unity) ([ADR 0003](docs/adr/0003-unit-test-framework.md)). Create `core/tests/test_<module>.c` with `setUp`/`tearDown` and a `main()` that calls `RUN_TEST` for each test, then add `xcat_add_test(test_<module>)` to [core/tests/CMakeLists.txt](core/tests/CMakeLists.txt). [test_version.c](core/tests/test_version.c) is the minimal example.
+
+### Xbox build
+
+Arrives with MR-4 (nxdk in Docker).
 
 ## Merge requests
 

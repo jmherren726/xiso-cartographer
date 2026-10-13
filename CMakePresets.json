@@ -1,0 +1,45 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "host-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}"
+    },
+    {
+      "name": "host-debug",
+      "inherits": "host-base",
+      "displayName": "Host debug (sanitizers)",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "XCAT_SANITIZE": "ON"
+      }
+    },
+    {
+      "name": "host-release",
+      "inherits": "host-base",
+      "displayName": "Host release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "host-debug", "configurePreset": "host-debug" },
+    { "name": "host-release", "configurePreset": "host-release" }
+  ],
+  "testPresets": [
+    {
+      "name": "host-debug",
+      "configurePreset": "host-debug",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "host-release",
+      "configurePreset": "host-release",
+      "output": { "outputOnFailure": true }
+    }
+  ]
+}

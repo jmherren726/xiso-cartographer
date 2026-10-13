@@ -27,7 +27,7 @@ We record every hard-to-reverse decision as an Architecture Decision Record (ADR
 | # | Topic | Lands with |
 |---|---|---|
 | 0002 | Licence and dependency compatibility | MR-1 (accepted) |
-| 0003 | Streaming install | MR-5 |
-| 0004 | BearSSL for TLS | MR-5 |
-| 0005 | No bypass / no links policy | MR-5 |
-| — | Unit test framework | MR-2 |
+| 0003 | Unit test framework (Unity) | MR-2 (accepted) |
+| 0004 | Streaming install | MR-5 |
+| 0005 | BearSSL for TLS | MR-5 |
+| 0006 | No bypass / no links policy | MR-5 |

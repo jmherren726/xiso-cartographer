@@ -1,0 +1,20 @@
+---
+# Static analysis profile from docs/HANDOFF.md §7.1: bugprone, cert, clang-analyzer.
+#
+# Disabled:
+# - bugprone-easily-swappable-parameters: flags most (buf, len, off) helpers; too noisy.
+# - clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling: flags every
+#   memcpy/memset/snprintf and recommends C11 Annex K (*_s) functions, which glibc and
+#   nxdk's PDCLib don't provide. Bounds are enforced by our checked read helpers instead
+#   (HANDOFF §7.3).
+Checks: >
+  -*,
+  bugprone-*,
+  cert-*,
+  clang-analyzer-*,
+  -bugprone-easily-swappable-parameters,
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling
+WarningsAsErrors: '*'
+# Only our own code; third_party/ is never analysed.
+HeaderFilterRegex: '(core|platform|app|tools)[/\\].*'
+...
