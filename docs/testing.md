@@ -23,7 +23,7 @@ Newest first. "Build" is the commit or CI artifact tested.
 
 | Date | Milestone | Build | Where | Result | Notes |
 |---|---|---|---|---|---|
-| _pending_ | M0 | MR-4 | xemu | | Hello XBE from `app/xiso-cartographer.iso` |
+| 2026-10-13 | M0 | `e4c26ab` (local Docker build) | xemu v0.8.136 (Windows 11) | ✅ Pass | `app/xiso-cartographer.iso` via Load Disc. Shows `xiso-cartographer 0.0.0`, `libxcat version number: 0x000000`, `Hello from nxdk. Toolchain OK.` |
 | _pending_ | M0 | MR-4 | Hardware | | `default.xbe` via FTP to `E:\Apps\xiso-cartographer\` |
 
 ## Benchmarks
