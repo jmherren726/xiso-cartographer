@@ -1,0 +1,19 @@
+# Keeps GitHub Actions and pinned submodules (third_party/) up to date.
+# Each update arrives as its own PR, per the "upgrade in a dedicated MR" rule.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    labels: [type:chore, area:ci]
+    commit-message:
+      prefix: chore(ci)
+
+  - package-ecosystem: gitsubmodule
+    directory: /
+    schedule:
+      interval: weekly
+    labels: [type:chore]
+    commit-message:
+      prefix: chore(deps)

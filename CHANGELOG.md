@@ -8,5 +8,5 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-- Repository scaffold: README, contributing guide, agent guide, handoff and plan documents, ADR process, MR template and code owners.
+- Repository scaffold: README, contributing guide, agent guide, handoff and plan documents, ADR process, MR template, code owners and Dependabot config.
 - MIT licence (ADR 0002).
