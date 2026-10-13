@@ -34,7 +34,7 @@ The user picks a game from the **catalog**, the **map** says where the user's im
 | Core (`libxcat`) | `core/` | All parsing and logic. Portable C11, no platform headers. | C standard library only, plus BearSSL from M5 |
 | Platform | `platform/` | Thin adapters that implement the core's interfaces (§4): `nxdk/` for the Xbox, `host/` for POSIX/Windows (tests, CLI). | Core interfaces; nxdk or the host OS |
 | App | `app/` | The XBE: UI, screens, job orchestration. No parsing. | Core, platform/nxdk |
-| Tools | `tools/` | `xcat-cli` (runs the core on a PC), fixture generator, catalog pipeline. | Core, platform/host |
+| Tools | `tools/` | `xcat-cli` (runs the core on a PC), the fixture generator ([`tools/fixtures/`](../tools/fixtures/README.md), Python), catalog pipeline. | Core, platform/host (the fixture generator is standalone Python) |
 
 **Rules** (enforced in review):
 
