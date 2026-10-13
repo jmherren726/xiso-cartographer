@@ -42,6 +42,15 @@ add_custom_command(
   VERBATIM)
 add_custom_target(xcat_fixtures ALL DEPENDS ${_fixture_outputs})
 
+# Puts LLVM's ASan DLL first on PATH for clang-cl builds; it must win over MSVC's
+# identically named one.
+function(xcat_test_env test)
+  if(XCAT_ASAN_RUNTIME_DIR)
+    set_tests_properties(${test} PROPERTIES
+      ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${XCAT_ASAN_RUNTIME_DIR}")
+  endif()
+endfunction()
+
 # xcat_add_test(test_foo [ARGS ...]) builds test_foo.c into an executable and
 # registers it with CTest, passing ARGS on the command line.
 function(xcat_add_test name)
@@ -52,10 +61,24 @@ function(xcat_add_test name)
   target_include_directories(${name} PRIVATE ${PROJECT_SOURCE_DIR}/core/src)
   xcat_target_warnings(${name})
   add_test(NAME ${name} COMMAND ${name} ${T_ARGS})
-  if(XCAT_ASAN_RUNTIME_DIR)
-    # LLVM's ASan DLL must win over MSVC's identically named one on PATH.
-    set_tests_properties(${name} PROPERTIES
-      ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${XCAT_ASAN_RUNTIME_DIR}")
+  xcat_test_env(${name})
+endfunction()
+
+# xcat_add_fuzzer(fuzz_foo SEEDS ...) builds fuzz_foo.c twice: as fuzz_foo_replay
+# (any compiler; CTest runs it over SEEDS as test fuzz_foo_seeds) and, with
+# XCAT_FUZZ, as the libFuzzer binary fuzz_foo. See CONTRIBUTING.md#fuzzing.
+function(xcat_add_fuzzer name)
+  cmake_parse_arguments(PARSE_ARGV 1 F "" "" "SEEDS")
+  add_executable(${name}_replay ${name}.c support/fuzz_replay.c)
+  target_link_libraries(${name}_replay PRIVATE xcat::xcat xcat_test_support)
+  xcat_target_warnings(${name}_replay)
+  add_test(NAME ${name}_seeds COMMAND ${name}_replay ${F_SEEDS})
+  xcat_test_env(${name}_seeds)
+  if(XCAT_FUZZ)
+    add_executable(${name} ${name}.c)
+    target_link_libraries(${name} PRIVATE xcat::xcat)
+    target_link_options(${name} PRIVATE -fsanitize=fuzzer)
+    xcat_target_warnings(${name})
   endif()
 endfunction()
 
@@ -63,3 +86,24 @@ xcat_add_test(test_version)
 xcat_add_test(test_bytes)
 xcat_add_test(test_xdvdfs ARGS ${XCAT_FIXTURES_DIR} ${XCAT_FIXTURES})
 add_dependencies(test_xdvdfs xcat_fixtures)
+
+# Fuzz seeds: the directory tables of the xiso fixtures, in the harness's input layout.
+set(XCAT_FUZZ_SEEDS_DIR ${CMAKE_BINARY_DIR}/fuzz-seeds)
+set(_seed_fixtures small deep)
+set(_seed_outputs)
+set(_seed_inputs)
+foreach(_name IN LISTS _seed_fixtures)
+  list(APPEND _seed_outputs ${XCAT_FUZZ_SEEDS_DIR}/${_name}.seed)
+  list(APPEND _seed_inputs ${XCAT_FIXTURES_DIR}/${_name}.iso)
+endforeach()
+add_custom_command(
+  OUTPUT ${_seed_outputs}
+  COMMAND ${Python3_EXECUTABLE} -I ${PROJECT_SOURCE_DIR}/tools/fixtures/fuzz_seeds.py
+          --fixtures ${XCAT_FIXTURES_DIR} --out ${XCAT_FUZZ_SEEDS_DIR} ${_seed_fixtures}
+  DEPENDS ${PROJECT_SOURCE_DIR}/tools/fixtures/fuzz_seeds.py ${_seed_inputs}
+  COMMENT "Generating fuzz seeds"
+  VERBATIM)
+add_custom_target(xcat_fuzz_seeds ALL DEPENDS ${_seed_outputs})
+
+xcat_add_fuzzer(fuzz_xdvdfs SEEDS ${_seed_outputs})
+add_dependencies(fuzz_xdvdfs_replay xcat_fuzz_seeds)

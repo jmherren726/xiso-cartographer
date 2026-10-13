@@ -16,6 +16,7 @@ project(xiso_cartographer
 option(XCAT_BUILD_TESTS "Build the host unit tests" ON)
 option(XCAT_WERROR "Treat compiler warnings as errors" ON)
 option(XCAT_SANITIZE "Build with AddressSanitizer (+ UBSan where supported)" OFF)
+option(XCAT_FUZZ "Also build libFuzzer targets (clang on Linux/macOS only)" OFF)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -24,6 +25,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 include(cmake/XcatCompilerOptions.cmake)
 xcat_enable_sanitizers()
+xcat_enable_fuzzing()
 
 add_subdirectory(core)
 

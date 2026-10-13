@@ -48,3 +48,14 @@ macro(xcat_enable_sanitizers)
     endif()
   endif()
 endmacro()
+
+# XCAT_FUZZ: instrument everything for libFuzzer coverage; fuzz targets add
+# -fsanitize=fuzzer at link time (core/tests/CMakeLists.txt).
+macro(xcat_enable_fuzzing)
+  if(XCAT_FUZZ)
+    if(WIN32 OR NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
+      message(FATAL_ERROR "XCAT_FUZZ needs clang on Linux or macOS (use the 'fuzz' preset)")
+    endif()
+    add_compile_options(-fsanitize=fuzzer-no-link)
+  endif()
+endmacro()

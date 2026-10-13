@@ -24,11 +24,23 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "RelWithDebInfo"
       }
+    },
+    {
+      "name": "fuzz",
+      "inherits": "host-base",
+      "displayName": "libFuzzer targets (clang, Linux/macOS)",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_C_COMPILER": "clang",
+        "XCAT_SANITIZE": "ON",
+        "XCAT_FUZZ": "ON"
+      }
     }
   ],
   "buildPresets": [
     { "name": "host-debug", "configurePreset": "host-debug" },
-    { "name": "host-release", "configurePreset": "host-release" }
+    { "name": "host-release", "configurePreset": "host-release" },
+    { "name": "fuzz", "configurePreset": "fuzz" }
   ],
   "testPresets": [
     {
@@ -39,6 +51,11 @@
     {
       "name": "host-release",
       "configurePreset": "host-release",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "fuzz",
+      "configurePreset": "fuzz",
       "output": { "outputOnFailure": true }
     }
   ]

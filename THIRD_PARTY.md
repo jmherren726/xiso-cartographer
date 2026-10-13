@@ -4,7 +4,7 @@ Every dependency is a pinned git submodule under `third_party/` (or vendored wit
 
 | Component | Version | Licence | Path | Used for | Ships in release |
 |---|---|---|---|---|---|
-| [Unity](https://github.com/ThrowTheSwitch/Unity) | v2.6.1 | MIT | `third_party/unity` | Host unit tests ([ADR 0003](docs/adr/0003-unit-test-framework.md)) | No |
+| [Unity](https://github.com/ThrowTheSwitch/Unity) | v2.7.0 | MIT | `third_party/unity` | Host unit tests ([ADR 0003](docs/adr/0003-unit-test-framework.md)) | No |
 | [nxdk](https://github.com/XboxDev/nxdk) | `14d5ee9` (2026-09-30) | Mixed; see below | `third_party/nxdk` | XBE toolchain and runtime libraries | Linked parts only |
 
 ## nxdk components

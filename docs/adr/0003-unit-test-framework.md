@@ -20,7 +20,7 @@ The handoff named three candidates:
 
 ## Decision
 
-Use **Unity**, pinned as a git submodule at `third_party/unity` (tag `v2.6.1`). It is built from source by `core/tests/CMakeLists.txt`, with `UNITY_SUPPORT_64` always defined. CMock is not used. Fakes for `xc_io`, `xc_net` and `xc_clock` are written by hand.
+Use **Unity**, pinned as a git submodule at `third_party/unity` (initially tag `v2.6.1`; the current pin is listed in [THIRD_PARTY.md](../../THIRD_PARTY.md)). It is built from source by `core/tests/CMakeLists.txt`, with `UNITY_SUPPORT_64` always defined. CMock is not used. Fakes for `xc_io`, `xc_net` and `xc_clock` are written by hand.
 
 Each test file is a standalone executable registered with CTest through `xcat_add_test()`. Fuzz targets (libFuzzer) are separate and don't use Unity.
 
