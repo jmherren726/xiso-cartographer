@@ -62,6 +62,10 @@ The structures, the name ordering (bytewise, `a`–`z` folded to upper case) and
 
 A reader must accept any valid placement, not just this one. Real images differ.
 
+## Fuzz seeds
+
+`fuzz_seeds.py` turns xiso fixtures into seeds for `core/tests/fuzz_xdvdfs.c`. A seed is a small header followed by the image's directory tables, without file data. CMake runs it at build time into `build/<preset>/fuzz-seeds/`.
+
 ## Verification
 
 - `test_xisogen.py`: unit tests for the generator's rules (run by CI with `python3 -m unittest discover -s tools/fixtures`).

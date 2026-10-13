@@ -4,6 +4,7 @@
 - Build/test (host): cmake --preset host-debug && cmake --build --preset host-debug && ctest --preset host-debug
 - Clone or update with submodules: git submodule update --init.
 - New tests: core/tests/test_<module>.c (Unity) + xcat_add_test() in core/tests/CMakeLists.txt.
+- New parsers of external input also get core/tests/fuzz_<module>.c + xcat_add_fuzzer() (CONTRIBUTING.md#fuzzing).
 - XBE build: make docker-xbe (see docs/build-xbox.md). New core/ sources used by the app must also be added to SRCS in app/Makefile.
 - Test images: generate with make fixtures (tools/fixtures/README.md); tests compare against the <name>.json manifests. Never use or add real game images.
 - Format: clang-format -i on changed files; CI fails on diffs.

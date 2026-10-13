@@ -52,12 +52,30 @@ ctest --preset host-debug
 | `windows (cl\|clang-cl, host-debug\|host-release)` | Build + unit tests on Windows Server 2025 with the runner's Visual Studio (VS 2026, MSVC 19.51, LLVM clang-cl 20.1 as of 2026-10; ASan in debug) |
 | `xbe` | Builds the nxdk Docker image and the XBE; uploads `default.xbe` + ISO as an artifact |
 | `fixtures` | Generator unit tests; builds all fixtures (incl. >4 GiB), cross-checks them with extract-xiso, and checks the output is deterministic |
+| `fuzz` | Builds the libFuzzer targets (clang, ASan + UBSan), replays the seeds, then fuzzes each parser for 60 s; crashing inputs are uploaded as an artifact |
 
 All of these jobs are required checks in the `main` ruleset. If you rename a job or change the matrix, update the ruleset's required checks in the same MR, or pull requests will wait forever for a check that no longer exists.
 
 ### Adding a unit test
 
 Tests use [Unity](https://github.com/ThrowTheSwitch/Unity) ([ADR 0003](docs/adr/0003-unit-test-framework.md)). Create `core/tests/test_<module>.c` with `setUp`/`tearDown` and a `main()` that calls `RUN_TEST` for each test, then add `xcat_add_test(test_<module>)` to [core/tests/CMakeLists.txt](core/tests/CMakeLists.txt). [test_version.c](core/tests/test_version.c) is the minimal example.
+
+### Fuzzing
+
+Every parser of external input has a libFuzzer target next to its tests (HANDOFF §7.3). Today that's `core/tests/fuzz_xdvdfs.c`; its header comment describes the input layout.
+
+- **Every build** compiles each target as `<name>_replay` and CTest runs it over the seeds (`fuzz_<name>_seeds`). This keeps the harness compiling on every compiler and turns past crashes into regression tests.
+- **Real fuzzing** needs clang on Linux or macOS (on Ubuntu, also `libclang-rt-18-dev` or your clang version's equivalent):
+
+  ```sh
+  cmake --preset fuzz && cmake --build --preset fuzz
+  mkdir -p build/fuzz/corpus
+  ./build/fuzz/core/tests/fuzz_xdvdfs -max_len=65536 build/fuzz/corpus build/fuzz/fuzz-seeds
+  ```
+
+- **Seeds** are made from the fixtures by `tools/fixtures/fuzz_seeds.py` at build time.
+- **When the fuzzer finds a crash**, fix the bug and add a unit test that reproduces it in the same MR. If the input is a useful regression case, commit it under `core/tests/fuzz-regressions/<target>/` and add it to the replay test's seeds.
+- **New parsers** (`http`, `map`, `catalog`, JSON, `credentials`) come with a fuzz target and an `xcat_add_fuzzer()` line in the MR that adds the parser.
 
 ### Test fixtures
 
