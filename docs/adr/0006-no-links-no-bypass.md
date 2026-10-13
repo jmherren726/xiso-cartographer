@@ -1,6 +1,6 @@
 # 0006. No links, no bypasses, good-guest networking
 
-- **Status:** Accepted
+- **Status:** Accepted; amended by [ADR 0007](0007-scoped-user-credentials.md) (logging in with the user's own, scoped credentials is allowed)
 - **Date:** 2026-10-13
 
 ## Context

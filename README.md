@@ -53,6 +53,7 @@ See [docs/build-xbox.md](docs/build-xbox.md) for building without `make`, the Wi
 |---|---|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Layers, modules, interfaces, install flow, memory budget |
 | [docs/formats/map.md](docs/formats/map.md) | The map file format (where your images are) |
+| [docs/formats/credentials.md](docs/formats/credentials.md) | Logins for sources that need them: host-scoped tokens, kept out of maps (design) |
 | [docs/HANDOFF.md](docs/HANDOFF.md) | Goals, design decisions, roadmap and standards |
 | [docs/build-xbox.md](docs/build-xbox.md) | Building the XBE and running it in xemu or on hardware |
 | [docs/testing.md](docs/testing.md) | Test ladder, hardware bench and results log |

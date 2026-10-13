@@ -87,7 +87,7 @@ variant    = 1*16( ALPHA / DIGIT / "-" / "_" )   ; case-insensitive, normalised 
 - The URL is the rest of the line after the `=`, trimmed. It **must** start with `http://` or `https://` (scheme case-insensitive). Other schemes are invalid in v1.
 - Spaces inside the URL are allowed (`Halo (Europe).xiso.iso`). The reader percent-encodes spaces and non-ASCII characters when it sends the request. Existing `%XX` escapes are kept as they are.
 - The URL **must not** contain a literal `#` (fragment) or any control character. Write `%23` for a `#` in a file name.
-- The URL **must not** contain user credentials (`user:pass@host`). Such entries are invalid: credentials would sit in plain text on the HDD and in logs.
+- The URL **must not** contain user credentials (`user:pass@host`). Such entries are invalid: credentials would sit in plain text on the HDD and in logs. Sources that need a login get it from the separate, host-scoped [credentials file](credentials.md), never from the map.
 - The URL **should** point to an uncompressed image, either a trimmed `.xiso.iso` or a full-disc `.iso` dump ([xdvdfs.md §1](xdvdfs.md#1-image-layouts)), on a server that supports HTTP `Range` requests. The layout is detected from the content, not the file name. That is checked at install time, not at load time.
 
 ### 4.3 Duplicate keys
