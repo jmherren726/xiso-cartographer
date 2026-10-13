@@ -56,7 +56,7 @@ No authoritative list of FATX naming rules exists, and a game's files can't be r
 | Date | Where | Kernel | Name length (file/dir) | Rejected bytes | Case | Longest path (dir/file) | Entries | Report |
 |---|---|---|---|---|---|---|---|---|
 | 2026-10-13 | xemu v0.8.136 | 1.0.4627.1 | ≤ 42 / ≤ 42 (43 rejected) | 83 of 254: see below | lookup insensitive; other-case duplicate rejected | dir 250; file: see note | 4,096 (then rejected) | on-screen summary (probe v2, `ddc3b53`) |
-| _pending_ | Hardware | | | | | | | |
+| 2026-10-13 | Hardware (main console) | not recorded | same as xemu | same as xemu | same as xemu | same as xemu | same as xemu | reported by the owner as identical to the xemu run; report file not captured |
 
 **Rejected bytes (xemu run):**
 
