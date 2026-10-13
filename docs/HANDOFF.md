@@ -211,10 +211,10 @@ xiso-cartographer/
 | MR | Title | Contents | Done when |
 |---|---|---|---|
 | **MR-1** | Repository scaffold | `README.md` (purpose, status, legal stance, build quick start), `LICENSE`, `CONTRIBUTING.md`, `CHANGELOG.md` ("Unreleased"), `CLAUDE.md`, `.gitignore`, `.editorconfig`, `.gitattributes` (LF; binary rules), `docs/HANDOFF.md`, `docs/adr/0001-record-architecture-decisions.md`, MR template, `CODEOWNERS` | Merged; docs render on the hosting site |
-| **MR-2** | Host build + test harness | `CMakeLists.txt`, empty `core/` with one trivial function and a test (Unity, greatest or cmocka, recorded in an ADR), `.clang-format`, `.clang-tidy`, warnings-as-errors, ASan/UBSan preset | `cmake --preset host-debug && ctest` passes locally |
+| **MR-2** | Host build + test harness | `CMakeLists.txt`, empty `core/` with one trivial function and a test (Unity, chosen in [ADR 0003](./adr/0003-unit-test-framework.md)), `.clang-format`, `.clang-tidy`, warnings-as-errors, ASan/UBSan preset | `cmake --preset host-debug && ctest` passes locally |
 | **MR-3** | CI: host | Workflow: format check, clang-tidy, build and test on Linux (gcc and clang) plus Windows (MSVC or clang-cl), with sanitizers | CI green on the MR |
 | **MR-4** | nxdk toolchain + hello XBE | `third_party/nxdk` submodule (pinned), `docker/nxdk.Dockerfile` (or the nxdk project's published image, pinned by digest), `app/` hello world, `Makefile`, CI job that uploads `default.xbe` | Artifact boots in xemu and on hardware (record in MR) — **M0 done** |
-| **MR-5** | Formats as docs first | `docs/formats/map.md`, `docs/ARCHITECTURE.md` (from §3), ADRs 0003 (streaming install), 0004 (BearSSL), 0005 (no bypass / no links policy) | Reviewed and merged before any parser code |
+| **MR-5** | Formats as docs first | `docs/formats/map.md`, `docs/ARCHITECTURE.md` (from §3), ADRs 0004 (streaming install), 0005 (BearSSL), 0006 (no bypass / no links policy) | Reviewed and merged before any parser code |
 | **MR-6** | Fixture generator | `tools/fixtures/`: build small, deep-tree, over-4 GB sparse and Redump-layout xiso images from dummy content; checksum manifest | Deterministic output; used by the M1 tests |
 | **MR-7+** | M1: `xdvdfs` reader | Parser + tests + fuzz target | Per the M1 exit test |
 
@@ -223,7 +223,7 @@ xiso-cartographer/
 ```markdown
 # xiso-cartographer: agent guide
 - Read docs/ARCHITECTURE.md and docs/HANDOFF.md first.
-- Build/test (host): cmake --preset host-debug && ctest --preset host-debug
+- Build/test (host): cmake --preset host-debug && cmake --build --preset host-debug && ctest --preset host-debug
 - Format: clang-format -i on changed files; CI fails on diffs.
 - Parsers live in core/, never in app/. core/ must not include nxdk headers.
 - Every MR updates docs/CHANGELOG as described in CONTRIBUTING.md.
@@ -327,7 +327,7 @@ xiso images, HTTP responses, JSON metadata and map files all come from outside, 
 
 1. **PC speed baseline:** run `curl.exe -sS -o NUL -r 0-104857599 -w "%{speed_download} bytes/sec\n" <archive.org storage URL>` and record the result in `docs/testing.md`.
 2. ~~**Final name and licence**~~: `xiso-cartographer`, MIT ([ADR 0002](./adr/0002-license.md)).
-3. **Test framework choice** (ADR in MR-2).
+3. ~~**Test framework choice**~~: Unity ([ADR 0003](./adr/0003-unit-test-framework.md)).
 4. **UI approach:** SDL2 software rendering vs pbkit, and whether to use an immediate-mode UI library (ADR before M8).
 5. **Catalog sources and licences** (before M7).
 6. **Hardware test bench:** which consoles/revisions, HDD sizes and dashboards are available for M0/M5/M9.

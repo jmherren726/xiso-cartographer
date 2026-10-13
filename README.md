@@ -24,7 +24,17 @@ xiso-cartographer is a tool for installing **backups you are entitled to use**.
 
 ## Building
 
-There is nothing to build yet. The host build (CMake + CTest) arrives in MR-2 and the nxdk XBE build in MR-4. This section will then hold the quick start.
+So far only the portable core library and its unit tests build on a PC. The Xbox (nxdk) build arrives in MR-4.
+
+```sh
+git clone --recursive https://github.com/jmherren726/xiso-cartographer.git
+cd xiso-cartographer
+cmake --preset host-debug
+cmake --build --preset host-debug
+ctest --preset host-debug
+```
+
+You need CMake 3.25+, Ninja and a C11 compiler: gcc or clang on Linux/macOS, or MSVC/clang-cl on Windows. See [CONTRIBUTING.md](CONTRIBUTING.md#setup) for details.
 
 ## Documentation
 
