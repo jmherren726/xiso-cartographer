@@ -29,6 +29,18 @@ Newest first. "Build" is the commit or CI artifact tested.
 | 2026-10-13 | M0 | `e4c26ab` (local Docker build) | Hardware: main console (see bench) | ✅ Pass | `app/bin/default.xbe` copied with FileZilla (FTP) and launched from the dashboard. Same three lines as in xemu. |
 | 2026-10-13 | M0 | `e4c26ab` (local Docker build) | xemu v0.8.136 (Windows 11) | ✅ Pass | `app/xiso-cartographer.iso` via Load Disc. Shows `xiso-cartographer 0.0.0`, `libxcat version number: 0x000000`, `Hello from nxdk. Toolchain OK.` |
 
+## M2: on-box install from the hard disk
+
+**Exit test:** an image already on the HDD installs to `E:\Games\<title>` in xemu and on hardware, and every installed file matches the image (checked on the console itself; see [build-xbox.md](build-xbox.md#what-the-app-does-m2)).
+
+| Step | Image | Where | How |
+|---|---|---|---|
+| 1 | Bundled `small.iso` (synthetic) | xemu | Load Disc → `app/xiso-cartographer.iso`; the app copies the sample to `E:\xcat\isos\` and installs it |
+| 2 | Bundled `small.iso` | Hardware | FTP `app/bin/` (XBE + `samples/`) to `E:\Apps\xiso-cartographer\` and launch |
+| 3 | One of your own games as a trimmed xiso under 4 GiB | Hardware | FTP it to `E:\xcat\isos\`, launch; then launch the installed game from the dashboard |
+
+A run passes when the screen ends with "Done: N of N image(s) installed and verified." Record the summary lines (files, KB/s) in the results log above.
+
 ## FATX probe (M2)
 
 No authoritative list of FATX naming rules exists, and a game's files can't be renamed on install, because the game opens them by name. So the rules in `core/src/fatx.c` ([fatx-names.md](formats/fatx-names.md)) come from the console's own kernel, measured by `app/fatx-probe`.

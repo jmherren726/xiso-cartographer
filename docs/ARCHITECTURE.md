@@ -32,8 +32,8 @@ The user picks a game from the **catalog**, the **map** says where the user's im
 | Layer | Path | Contains | Depends on |
 |---|---|---|---|
 | Core (`libxcat`) | `core/` | All parsing and logic. Portable C11, no platform headers. | C standard library only, plus BearSSL from M5 |
-| Platform | `platform/` | Thin adapters that implement the core's interfaces (§4): `nxdk/` for the Xbox (M2), `host/` for POSIX/Windows (tests, CLI; exists: file source and directory sink). | Core interfaces; nxdk or the host OS |
-| App | `app/` | The XBE: UI, screens, job orchestration. No parsing. | Core, platform/nxdk |
+| Platform | `platform/` | Thin adapters that implement the core's interfaces (§4). `nxdk/` for the Xbox: file source, FATX directory sink, free space, drive mounting ([`xcat/nxdk.h`](../platform/nxdk/include/xcat/nxdk.h)). `host/` for POSIX/Windows: file source and directory sink, for tests and the CLI. | Core interfaces; nxdk or the host OS |
+| App | `app/` | The XBE: UI, screens, job orchestration. No parsing. Currently (M2) it installs the images in `E:\xcat\isos\` and verifies them ([build-xbox.md](build-xbox.md#what-the-app-does-m2)). | Core, platform/nxdk |
 | Tools | `tools/` | `xcat-cli` (runs the core on a PC), the fixture generator ([`tools/fixtures/`](../tools/fixtures/README.md), Python), catalog pipeline. | Core, platform/host (the fixture generator is standalone Python) |
 
 **Rules** (enforced in review):
