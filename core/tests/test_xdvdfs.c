@@ -349,6 +349,61 @@ static void test_invalid_arguments(void)
     TEST_ASSERT_EQUAL_INT(XC_ERR_INVALID_ARG, xc_xdvdfs_open(NULL, &vol));
     TEST_ASSERT_EQUAL_INT(XC_ERR_INVALID_ARG, xc_xdvdfs_list(NULL, &vol, NULL, &l));
     xc_xdvdfs_listing_free(NULL);
+    xc_xdvdfs_order o;
+    TEST_ASSERT_EQUAL_INT(XC_ERR_INVALID_ARG, xc_xdvdfs_stream_order(NULL, &l, &o));
+}
+
+/* --- stream order (§8) ------------------------------------------------------- */
+
+/* Lists `img` and computes its stream order. */
+static void order_of_img(xc_xdvdfs_order *o)
+{
+    xc_mem_source mem;
+    xc_source src;
+    xc_source_memory(&src, &mem, img, sizeof img);
+    xc_xdvdfs_volume vol;
+    xc_xdvdfs_listing l;
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_xdvdfs_open(&src, &vol));
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_xdvdfs_list(&src, &vol, NULL, &l));
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_xdvdfs_stream_order(&vol, &l, o));
+    xc_xdvdfs_listing_free(&l);
+}
+
+static void test_stream_order_tables_first(void)
+{
+    img_reset(ROOT_SECTOR, SECTOR);
+    /* root: "b" file (data at 35), left "a" (dir, table at 34) */
+    put_entry(ROOT_SECTOR, 0, 16 / 4, 0, DATA_SECTOR, 10, 0x20, "b");
+    put_entry(ROOT_SECTOR, 16, 0, 0, SUB_SECTOR, SECTOR, 0x10, "a");
+    put_entry(SUB_SECTOR, 0, 0, 0, DATA_SECTOR + 1, 20, 0x20, "c");
+    xc_xdvdfs_order o;
+    order_of_img(&o);
+    TEST_ASSERT_EQUAL_size_t(2, o.tables);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)ROOT_SECTOR * SECTOR, o.tables_start);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)DATA_SECTOR * SECTOR, o.tables_end);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)DATA_SECTOR * SECTOR, o.data_start);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)(DATA_SECTOR + 1) * SECTOR + 20, o.data_end);
+    TEST_ASSERT_EQUAL_size_t(0, o.late_files);
+    TEST_ASSERT_EQUAL_UINT64(UINT64_MAX, o.first_late);
+}
+
+static void test_stream_order_table_after_its_file(void)
+{
+    enum { LATE_SECTOR = 38 };
+    img_reset(ROOT_SECTOR, SECTOR);
+    memset(sector_ptr(LATE_SECTOR), 0xFF, SECTOR);
+    /* root: "early" (file at 36), right "late" (dir whose table is at 38, after its file) */
+    size_t next = put_entry(ROOT_SECTOR, 0, 0, 0, DATA_SECTOR + 1, 10, 0x20, "early");
+    put16(sector_ptr(ROOT_SECTOR) + 2, (uint16_t)(next / 4)); /* right child -> "late" */
+    put_entry(ROOT_SECTOR, next, 0, 0, LATE_SECTOR, SECTOR, 0x10, "late");
+    put_entry(LATE_SECTOR, 0, 0, 0, DATA_SECTOR, 100, 0x20, "x"); /* data at 35 < 38 */
+    xc_xdvdfs_order o;
+    order_of_img(&o);
+    TEST_ASSERT_EQUAL_size_t(1, o.late_files); /* "late/x"; "early" is after the root table */
+    TEST_ASSERT_EQUAL_UINT64(100, o.late_bytes);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)DATA_SECTOR * SECTOR, o.first_late);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)(LATE_SECTOR + 1) * SECTOR, o.last_table_end_needed);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)(LATE_SECTOR + 1) * SECTOR, o.tables_end);
 }
 
 /* --- fixtures ---------------------------------------------------------------- */
@@ -469,6 +524,13 @@ static void test_fixture(void)
     TEST_ASSERT_EQUAL_size_t(l.file_count, nf);
     TEST_ASSERT_EQUAL_size_t(l.dir_count, nd);
     TEST_ASSERT_EQUAL_UINT64(total, l.total_file_bytes);
+
+    /* The generator writes every table before any file data (tools/fixtures/README.md). */
+    xc_xdvdfs_order o;
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_xdvdfs_stream_order(&vol, &l, &o));
+    TEST_ASSERT_EQUAL_size_t(0, o.late_files);
+    TEST_ASSERT_EQUAL_size_t(l.dir_count + 1, o.tables);
+    TEST_ASSERT_TRUE(o.tables_end <= o.data_start);
     free(dirs);
     xc_xdvdfs_listing_free(&l);
 }
@@ -499,6 +561,8 @@ int main(int argc, char **argv)
     RUN_TEST(test_path_limit);
     RUN_TEST(test_read_errors_propagate);
     RUN_TEST(test_invalid_arguments);
+    RUN_TEST(test_stream_order_tables_first);
+    RUN_TEST(test_stream_order_table_after_its_file);
 
     if (argc > 1) {
         fixtures_dir = argv[1];

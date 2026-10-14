@@ -96,6 +96,13 @@ foreach(_name IN LISTS XCAT_FIXTURES)
 endforeach()
 set_tests_properties(check_deep PROPERTIES WILL_FAIL TRUE)
 
+# `xcat-cli layout` runs on every fixture (all have their tables first; test_xdvdfs checks the numbers).
+foreach(_name IN LISTS XCAT_FIXTURES)
+  add_test(NAME layout_${_name} COMMAND xcat-cli layout ${XCAT_FIXTURES_DIR}/${_name}.iso)
+  set_tests_properties(layout_${_name} PROPERTIES PASS_REGULAR_EXPRESSION "one sequential pass can install it")
+  xcat_test_env(layout_${_name})
+endforeach()
+
 # End to end: xcat-cli extracts every fixture, and the result must match its manifest (and so
 # extract-xiso's output: tools/fixtures/verify.sh checks the manifests against extract-xiso).
 foreach(_name IN LISTS XCAT_FIXTURES)

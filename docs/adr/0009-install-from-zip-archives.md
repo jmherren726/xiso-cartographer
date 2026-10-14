@@ -38,6 +38,12 @@ So it can't be resumed, verified or used for a streaming install, which requires
 7. **Library:** miniz (MIT; already planned in [ADR 0002](0002-license.md)), behind a small `core/zip` module with its own fuzz target, like every parser (HANDOFF §7.3).
 8. **Maps:** `…zip/<member>` URLs (archive.org's on-the-fly extraction) are rejected when a map is loaded, with a message that points to the zip URL. The map spec gains this rule in the MR that adds zip support.
 
+## Open question: are directory tables before the file data?
+
+Point 5 assumes that, in the decompressed stream, every directory table comes before the files it describes. Otherwise a file's bytes pass by before the installer knows which file they belong to, and a Deflate stream can't seek back. Trimmed xisos from extract-xiso (and our fixtures) put all tables first. **Retail full-disc dumps haven't been measured yet.**
+
+`xcat-cli layout <image>` ([xdvdfs.md §8](../formats/xdvdfs.md#8-stream-order)) answers this for any image on a PC. If some real images have late tables, the fallback is to save decompressor checkpoints (about 43 KiB each) during the first pass and, once all tables are known, re-download only from the checkpoint before the first late file. The report shows how far back that is. The results for the owner's images go here before this ADR is accepted.
+
 ## Consequences
 
 - The owner's sources become installable directly on the Xbox, with no PC step and no 1 GB stop.

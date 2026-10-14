@@ -4,6 +4,7 @@
  *   xcat-cli list <image>               print the layout and every file (offset order)
  *   xcat-cli extract <image> <out-dir>  extract the image into out-dir
  *   xcat-cli check <image> [title]      can it be installed on the Xbox HDD? (ADR 0008)
+ *   xcat-cli layout <image>             where directory tables sit vs. file data (ADR 0009)
  *
  * Exit status: 0 success, 1 failure, 2 usage error, 3 not installable (check).
  */
@@ -27,7 +28,8 @@ static int usage(void)
                   "xcat-cli %s\n"
                   "usage: xcat-cli list <image>\n"
                   "       xcat-cli extract <image> <out-dir>\n"
-                  "       xcat-cli check <image> [title]\n",
+                  "       xcat-cli check <image> [title]\n"
+                  "       xcat-cli layout <image>\n",
                   xc_version_string());
     return 2;
 }
@@ -242,8 +244,69 @@ static int cmd_check(const char *image, const char *title)
     return 0;
 }
 
+/* Bytes as MiB with one decimal, for reading. */
+static double mib(uint64_t bytes)
+{
+    return (double)bytes / (1024.0 * 1024.0);
+}
+
+static int cmd_layout(const char *image)
+{
+    xc_source src;
+    xc_host_file hf = {NULL};
+    xc_xdvdfs_volume vol;
+    xc_xdvdfs_listing l;
+    int rc = load(image, &src, &hf, &vol, &l);
+    if (rc != 0) {
+        return rc;
+    }
+    xc_xdvdfs_order o;
+    xc_err err = xc_xdvdfs_stream_order(&vol, &l, &o);
+    if (err != XC_OK) {
+        xc_xdvdfs_listing_free(&l);
+        xc_host_file_close(&hf);
+        return fail(image, err);
+    }
+    (void)printf("layout %s, partition at %" PRIu64 " (%.1f MiB), image %" PRIu64 " bytes\n",
+                 layout_name(vol.layout), vol.partition_offset, mib(vol.partition_offset),
+                 src.size);
+    if (o.tables > 0) {
+        (void)printf("directory tables: %zu (incl. root), from %" PRIu64 " to %" PRIu64
+                     " (%.1f to %.1f MiB)\n",
+                     o.tables, o.tables_start, o.tables_end, mib(o.tables_start),
+                     mib(o.tables_end));
+    }
+    if (o.data_start != UINT64_MAX) {
+        (void)printf("file data: %zu files, %.1f MiB, from %" PRIu64 " to %" PRIu64
+                     " (%.1f to %.1f MiB)\n",
+                     l.file_count, mib(l.total_file_bytes), o.data_start, o.data_end,
+                     mib(o.data_start), mib(o.data_end));
+    }
+    if (o.late_files == 0) {
+        (void)printf("order: every directory table comes before the files it describes;\n"
+                     "       one sequential pass can install it (e.g. from a Deflate zip)\n");
+    } else {
+        (void)printf("order: %zu files (%.1f MiB) start before a directory table on their path "
+                     "has been read\n",
+                     o.late_files, mib(o.late_bytes));
+        (void)printf("       earliest at %" PRIu64 " (%.1f MiB); the last table they wait for "
+                     "ends at %" PRIu64 " (%.1f MiB)\n",
+                     o.first_late, mib(o.first_late), o.last_table_end_needed,
+                     mib(o.last_table_end_needed));
+        (void)printf("       one sequential pass is not enough: a stream would have to be re-read "
+                     "from %.1f MiB\n",
+                     mib(o.first_late));
+    }
+    xc_xdvdfs_listing_free(&l);
+    xc_host_file_close(&hf);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
+    if (argc == 3 && strcmp(argv[1], "layout") == 0) {
+        return cmd_layout(argv[2]);
+    }
     if ((argc == 3 || argc == 4) && strcmp(argv[1], "check") == 0) {
         return cmd_check(argv[2], argc == 4 ? argv[3] : NULL);
     }

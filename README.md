@@ -44,6 +44,7 @@ The host build also produces **`xcat-cli`**, which runs the core on a PC. It wor
 build/host-debug/tools/xcat-cli/xcat-cli list <image>               # layout + every file, in disc order
 build/host-debug/tools/xcat-cli/xcat-cli extract <image> <out-dir>  # same output as extract-xiso -x
 build/host-debug/tools/xcat-cli/xcat-cli check <image> [title]      # can the Xbox HDD store it?
+build/host-debug/tools/xcat-cli/xcat-cli layout <image>             # can it be installed in one pass?
 ```
 
 **Xbox app** (needs Docker):
