@@ -31,7 +31,7 @@ Newest first. "Build" is the commit or CI artifact tested.
 
 ## FATX probe (M2)
 
-No authoritative list of FATX naming rules exists, and a game's files can't be renamed on install, because the game opens them by name. So the rules in `core/fatxname` come from the console's own kernel, measured by `app/fatx-probe`.
+No authoritative list of FATX naming rules exists, and a game's files can't be renamed on install, because the game opens them by name. So the rules in `core/src/fatx.c` ([fatx-names.md](formats/fatx-names.md)) come from the console's own kernel, measured by `app/fatx-probe`.
 
 **What it tests**, under `E:\xcat-fatx-probe` (deleted before and after the run):
 

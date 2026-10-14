@@ -2,6 +2,7 @@
 add_library(xcat
   src/error.c
   src/extract.c
+  src/fatx.c
   src/source.c
   src/version.c
   src/xdvdfs.c

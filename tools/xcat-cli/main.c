@@ -3,15 +3,18 @@
  *
  *   xcat-cli list <image>               print the layout and every file (offset order)
  *   xcat-cli extract <image> <out-dir>  extract the image into out-dir
+ *   xcat-cli check <image> [title]      can it be installed on the Xbox HDD? (ADR 0008)
  *
- * Exit status: 0 success, 1 failure, 2 usage error.
+ * Exit status: 0 success, 1 failure, 2 usage error, 3 not installable (check).
  */
+#include <ctype.h>
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "xcat/extract.h"
+#include "xcat/fatx.h"
 #include "xcat/host.h"
 #include "xcat/version.h"
 #include "xcat/xdvdfs.h"
@@ -23,7 +26,8 @@ static int usage(void)
     (void)fprintf(stderr,
                   "xcat-cli %s\n"
                   "usage: xcat-cli list <image>\n"
-                  "       xcat-cli extract <image> <out-dir>\n",
+                  "       xcat-cli extract <image> <out-dir>\n"
+                  "       xcat-cli check <image> [title]\n",
                   xc_version_string());
     return 2;
 }
@@ -123,8 +127,126 @@ static int cmd_extract(const char *image, const char *out)
     return 0;
 }
 
+static bool ends_with_ci(const char *s, size_t len, const char *suffix)
+{
+    size_t n = strlen(suffix);
+    if (len < n) {
+        return false;
+    }
+    for (size_t i = 0; i < n; i++) {
+        if (tolower((unsigned char)s[len - n + i]) != tolower((unsigned char)suffix[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* "dir/Halo (USA).xiso.iso" -> "Halo (USA)" (at most `size` - 1 bytes). */
+static void title_from_path(const char *path, char *out, size_t size)
+{
+    const char *base = path;
+    for (const char *p = path; *p != '\0'; p++) {
+        if (*p == '/' || *p == '\\') {
+            base = p + 1;
+        }
+    }
+    size_t len = strlen(base);
+    if (ends_with_ci(base, len, ".iso")) {
+        len -= 4;
+    }
+    if (ends_with_ci(base, len, ".xiso")) {
+        len -= 5;
+    }
+    if (len >= size) {
+        len = size - 1;
+    }
+    memcpy(out, base, len);
+    out[len] = '\0';
+}
+
+static const char *name_problem(xc_fatx_name_check c)
+{
+    switch (c) {
+    case XC_FATX_NAME_EMPTY:
+        return "empty name";
+    case XC_FATX_NAME_TOO_LONG:
+        return "name longer than 42 characters";
+    case XC_FATX_NAME_BAD_BYTE:
+        return "character not allowed on FATX";
+    case XC_FATX_NAME_DOTS:
+        return "name is . or ..";
+    case XC_FATX_NAME_OK:
+        break;
+    }
+    return "invalid name";
+}
+
+#define MAX_REPORTED 20
+
+static int cmd_check(const char *image, const char *title)
+{
+    xc_source src;
+    xc_host_file hf = {NULL};
+    xc_xdvdfs_volume vol;
+    xc_xdvdfs_listing l;
+    int rc = load(image, &src, &hf, &vol, &l);
+    if (rc != 0) {
+        return rc;
+    }
+    char from_path[256];
+    if (title == NULL) {
+        title_from_path(image, from_path, sizeof from_path);
+        title = from_path;
+    }
+    char folder[XC_FATX_MAX_NAME + 1];
+    size_t folder_len = xc_fatx_title_name(title, folder, XC_FATX_MAX_NAME);
+    size_t install_dir_len = strlen("\\Games\\") + folder_len;
+    xc_fatx_problem problems[MAX_REPORTED];
+    size_t count = 0;
+    xc_err err = xc_fatx_check_listing(&l, install_dir_len, problems, MAX_REPORTED, &count);
+    if (err != XC_OK) {
+        xc_xdvdfs_listing_free(&l);
+        xc_host_file_close(&hf);
+        return fail(image, err);
+    }
+    (void)printf("install folder: E:\\Games\\%s\n", folder);
+    for (size_t i = 0; i < count && i < MAX_REPORTED; i++) {
+        const xc_fatx_problem *p = &problems[i];
+        switch (p->kind) {
+        case XC_FATX_PROBLEM_NAME:
+            (void)printf("  %s: %s\n", p->path, name_problem(p->name));
+            break;
+        case XC_FATX_PROBLEM_PATH_TOO_LONG:
+            (void)printf("  %s: path would be %zu characters (limit %d)\n", p->path, p->value,
+                         XC_FATX_MAX_PATH);
+            break;
+        case XC_FATX_PROBLEM_TOO_MANY_ENTRIES:
+            (void)printf("  %s/: %zu entries in one folder (limit %d)\n",
+                         p->path[0] != '\0' ? p->path : ".", p->value, XC_FATX_MAX_DIR_ENTRIES);
+            break;
+        }
+    }
+    if (count > MAX_REPORTED) {
+        (void)printf("  ... and %zu more\n", count - MAX_REPORTED);
+    }
+    size_t files = l.file_count;
+    uint64_t bytes = l.total_file_bytes;
+    xc_xdvdfs_listing_free(&l);
+    xc_host_file_close(&hf);
+    if (count > 0) {
+        (void)printf("not installable: %s (%zu problem%s)\n", xc_err_str(XC_ERR_NOT_INSTALLABLE),
+                     count, count == 1 ? "" : "s");
+        return 3;
+    }
+    (void)printf("installable: %zu files, %" PRIu64 " bytes\n", files, bytes);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
+    if ((argc == 3 || argc == 4) && strcmp(argv[1], "check") == 0) {
+        return cmd_check(argv[2], argc == 4 ? argv[3] : NULL);
+    }
     if (argc == 3 && strcmp(argv[1], "list") == 0) {
         return cmd_list(argv[2]);
     }
