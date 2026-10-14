@@ -46,6 +46,8 @@ A homebrew app (XBE) for **soft- or hard-modded original Xbox consoles**. It pre
 | `archive.org/metadata/<item>` lists files with size, MD5 and SHA-1 | Public API | Automatic mapping, size check before download, hash verification after install |
 | Target images are uncompressed: trimmed `.xiso.iso` and full-disc `.iso` dumps | User's sources | Single-pass install for both; full-disc installs skip the video partition (ADR 0004). Compressed CCI/CSO: open question. Zip support is optional (M9b). |
 | Test item: `halo-combat-evolved-usa-rev-2.xiso`, 3,728,867,328 bytes | curl tests | First real-hardware acceptance test (M5) |
+| archive.org "file inside a zip" URLs (`…zip/<member>`) redirect to `view_archive.php`, which extracts on the fly: `200` chunked, no `Content-Length`, **`Range` ignored**, stops at ~1 GB; access-controlled items need the user's login | curl tests, 2026-10-14 | Unusable for installs; maps must use the zip URL ([ADR 0009](adr/0009-install-from-zip-archives.md)) |
+| archive.org zip files answer `206` to `Range` (also with login, across the storage-host redirect); the owner's sources are **Zip64, Deflate** zips (5.74 GB for one ~7.8 GB full-disc ISO) | curl tests, 2026-10-14 | Stream-decompress the member; CRC-32 verifies every byte; proposed to build zip support after M5 ([ADR 0009](adr/0009-install-from-zip-archives.md)) |
 | **Still unknown:** download speed (PC baseline and Xbox) | – | M5 is the go/no-go for the Xbox-only design |
 
 ---
@@ -188,7 +190,7 @@ xiso-cartographer/
 | M7 | Catalog pipeline | Deterministic rebuild; schema tests; licences reviewed and credited |
 | M8 | UI: browse, search, detail, install, progress, settings | Scripted xemu walkthrough; every error path has a user-visible message |
 | M9 | Beta | Hardware matrix: revisions, stock and upgraded HDD, 64/128 MB, dashboards |
-| M9b | (optional) `.zip` support | A zip item installs |
+| M9b | (optional; [ADR 0009](adr/0009-install-from-zip-archives.md) proposes doing it right after M5) `.zip` support: Zip64, stored + Deflate, streamed | A zip item installs, verified by the member's CRC-32 |
 | M10 | (optional) PC helper: `.7z`, aria2/torrents, watched folder | Helper ↔ app end to end |
 | M11 | (stretch) On-box BitTorrent | Single-file download from a test torrent |
 
