@@ -48,6 +48,7 @@ A homebrew app (XBE) for **soft- or hard-modded original Xbox consoles**. It pre
 | Test item: `halo-combat-evolved-usa-rev-2.xiso`, 3,728,867,328 bytes | curl tests | First real-hardware acceptance test (M5) |
 | archive.org "file inside a zip" URLs (`…zip/<member>`) redirect to `view_archive.php`, which extracts on the fly: `200` chunked, no `Content-Length`, **`Range` ignored**, stops at ~1 GB; access-controlled items need the user's login | curl tests, 2026-10-14 | Unusable for installs; maps must use the zip URL ([ADR 0009](adr/0009-install-from-zip-archives.md)) |
 | archive.org zip files answer `206` to `Range` (also with login, across the storage-host redirect); the owner's sources are **Zip64, Deflate** zips (5.74 GB for one ~7.8 GB full-disc ISO) | curl tests, 2026-10-14 | Stream-decompress the member; CRC-32 verifies every byte; proposed to build zip support after M5 ([ADR 0009](adr/0009-install-from-zip-archives.md)) |
+| A retail full-disc dump puts its directory tables mid-disc (1.17–4.04 GiB): 8 of 517 files (616 MiB) come before their tables | `xcat-cli layout`, 2026-10-14 | A Deflate stream needs a targeted second pass for those files (~10% extra download), using checkpoints ([ADR 0009](adr/0009-install-from-zip-archives.md)) |
 | **Still unknown:** download speed (PC baseline and Xbox) | – | M5 is the go/no-go for the Xbox-only design |
 
 ---
