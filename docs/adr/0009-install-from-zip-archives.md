@@ -1,6 +1,6 @@
 # 0009. Install from zip archives by streaming the zip itself
 
-- **Status:** Proposed. Zip support is milestone M9b, listed as optional. This ADR proposes building it right after M5 (HTTPS); the owner decides the timing.
+- **Status:** Accepted (2026-10-14, by the owner). Zip support was optional milestone M9b; it becomes **M5b**, built right after M5 (HTTPS).
 - **Date:** 2026-10-14
 
 ## Context
@@ -21,7 +21,7 @@ So it can't be resumed, verified or used for a streaming install, which requires
 - It answers `302` to a storage host (`dnNNNNNN.ca.archive.org`), then **`206 Partial Content`** with `Content-Range: bytes 0-1023/5739306907`. The login cookie travels across the redirect because it's scoped to `.archive.org`.
 - Its local file header shows **method 8 (Deflate)**, flags `0x2` (maximum compression; no trailing data descriptor), and both sizes `0xFFFFFFFF`, so the real sizes are in a **Zip64** extra field. A ~7.8 GB full-disc ISO is stored in a 5.74 GB zip.
 
-## Decision (proposed)
+## Decision
 
 1. **The installer reads zip archives through HTTP `Range`**, like images:
    - read the end of the zip to find the central directory (including the Zip64 end records);
