@@ -46,6 +46,7 @@ The first image build compiles nxdk's tools and libraries. Docker caches it afte
 |---|---|
 | `app/bin/default.xbe` | The program. Copy it to the console. |
 | `app/xiso-cartographer.iso` | Disc image containing the XBE. Boots directly in xemu. |
+| `app/fatx-probe/bin/default.xbe`, `app/fatx-probe/xcat-fatx-probe.iso` | The FATX probe: a test tool that measures what file names and paths the console's FATX driver accepts. See [testing.md](testing.md#fatx-probe-m2). |
 
 Every CI run also uploads both files as the `xiso-cartographer-xbe-<sha>` artifact (`xbe` job).
 
