@@ -45,7 +45,8 @@ The first image build compiles nxdk's tools and libraries. Docker caches it afte
 | File | Use |
 |---|---|
 | `app/bin/default.xbe` | The program. Copy it to the console. |
-| `app/xiso-cartographer.iso` | Disc image containing the XBE. Boots directly in xemu. |
+| `app/bin/samples/small.iso` | Bundled synthetic test image (the `small` fixture: dummy data, never a game). The app installs it when `E:\xcat\isos\` is empty. |
+| `app/xiso-cartographer.iso` | Disc image containing `app/bin/` (the XBE and `samples/`). Boots directly in xemu. |
 | `app/fatx-probe/bin/default.xbe`, `app/fatx-probe/xcat-fatx-probe.iso` | The FATX probe: a test tool that measures what file names and paths the console's FATX driver accepts. See [testing.md](testing.md#fatx-probe-m2). |
 
 Every CI run also uploads both files as the `xiso-cartographer-xbe-<sha>` artifact (`xbe` job).
@@ -55,13 +56,23 @@ Every CI run also uploads both files as the `xiso-cartographer-xbe-<sha>` artifa
 1. Set up xemu with your own BIOS, MCPX boot ROM and HDD image. These are never part of this repo; see the [xemu docs](https://xemu.app/docs/required-files/).
 2. **Machine → Load Disc…** and choose `app/xiso-cartographer.iso`. Then reset the machine (**Machine → Reset**) if it doesn't boot on its own.
 
-The screen should show `xiso-cartographer 0.0.0` and `Hello from nxdk. Toolchain OK.`
+## What the app does (M2)
+
+Until the real UI arrives (M8), the app installs every image it finds in `E:\xcat\isos\`:
+
+1. It creates `E:\xcat\isos\` and `E:\Games\` if they're missing. If `E:\xcat\isos\` has no `.iso` files, it first copies the bundled test image from `D:\samples\`. `D:` is the folder (or disc) the XBE was started from.
+2. For each image, it reads the image, checks that FATX can store every file under `E:\Games\<title>` ([ADR 0008](adr/0008-refuse-games-fatx-cant-store.md)) and that there's enough free space, then extracts it with progress.
+3. It **reads every installed file back and compares it byte for byte with the image**, then writes `E:\Games\<title>\.xcat-installed`.
+4. It ends with a summary: "Done: N of M image(s) installed and verified." A title that's already installed gets a numbered folder (`small (2)`).
+
+Images must be uncompressed xiso or full-disc `.iso` files **under 4 GiB**: FATX can't store a larger file, so full-disc dumps (about 7.8 GB) can't sit on the hard disk. Those will install over the network instead (M4/M5).
 
 ## Run on hardware
 
 1. Start the console's FTP server from your dashboard. On XBMC4Gamers and UnleashX it's normally enabled; the default login is `xbox` / `xbox`.
 2. Connect with an FTP client (e.g. FileZilla) to the console's IP on port 21.
-3. Create `E:\Apps\xiso-cartographer\` and upload `app/bin/default.xbe` into it, in **binary** transfer mode.
-4. Launch it from the dashboard's Applications list, or browse to the folder in the file manager.
+3. Create `E:\Apps\xiso-cartographer\` and upload the contents of `app/bin/` into it: `default.xbe` and the `samples` folder. Use **binary** transfer mode.
+4. Optionally, upload your own images (xiso, under 4 GiB) to `E:\xcat\isos\`.
+5. Launch it from the dashboard's Applications list, or browse to the folder in the file manager.
 
 Record each run in [testing.md](testing.md).

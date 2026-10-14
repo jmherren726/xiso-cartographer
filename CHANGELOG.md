@@ -26,6 +26,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `xcat-cli list` and `xcat-cli extract` for PCs.
 - FATX probe XBE (`app/fatx-probe`): measures which names, paths and directory sizes the console's FATX driver accepts, so the M2 naming rules come from the real kernel.
 - FATX rules measured on the console (docs/formats/fatx-names.md) and `xcat/fatx.h`: games whose files the Xbox hard disk can't store are refused, with every problem listed (ADR 0008); install folder names are generated from titles. `xcat-cli check` runs the same check on a PC.
+- On-box install (M2): the XBE installs the images in `E:\xcat\isos\` to `E:\Games\<title>` with FATX and free-space checks, then reads every file back to verify it. A synthetic test image is bundled. Xbox platform layer (`platform/nxdk`): file source, FATX directory sink, free space, drive mounting.
 - ADR 0009 (proposed): install from zip archives by streaming the zip with HTTP `Range` (Zip64, stored + Deflate, CRC-32 verified), based on archive.org tests showing that "file inside a zip" URLs can't be resumed and stop at ~1 GB.
 
 ### Changed
