@@ -74,6 +74,28 @@ xc_err xc_xdvdfs_list(const xc_source *src, const xc_xdvdfs_volume *vol,
 /* Frees everything in a listing and zeroes it. Safe on a zeroed listing. */
 void xc_xdvdfs_listing_free(xc_xdvdfs_listing *listing);
 
+/*
+ * Where directory tables sit relative to file data (docs/formats/xdvdfs.md §8). A
+ * sequential reader (e.g. decompressing a zip member, ADR 0009) can only write a file as
+ * its bytes pass by if every directory table on the file's path has already been read.
+ * Offsets are absolute in the image; *_start is UINT64_MAX when there is nothing.
+ */
+typedef struct xc_xdvdfs_order {
+    size_t tables;                  /* directory tables, including the root */
+    uint64_t tables_start;          /* first byte of any table */
+    uint64_t tables_end;            /* end of the last table */
+    uint64_t data_start;            /* first byte of non-empty file data */
+    uint64_t data_end;              /* end of the last file data */
+    size_t late_files;              /* files that start before a table on their path ends */
+    uint64_t late_bytes;            /* total size of those files */
+    uint64_t first_late;            /* lowest offset of a late file; a re-read must start here */
+    uint64_t last_table_end_needed; /* the latest table end any late file waits for */
+} xc_xdvdfs_order;
+
+/* Fills `out` for a listing from xc_xdvdfs_list(). XC_ERR_NOMEM, or XC_ERR_INVALID_ARG. */
+xc_err xc_xdvdfs_stream_order(const xc_xdvdfs_volume *vol, const xc_xdvdfs_listing *listing,
+                              xc_xdvdfs_order *out);
+
 #ifdef __cplusplus
 }
 #endif

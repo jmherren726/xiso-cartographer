@@ -96,3 +96,13 @@ A directory whose table points back to an ancestor is caught by the depth limit.
 - **files**, sorted by absolute offset, with ties (zero-length files) broken by path. This is the order the extractor reads them in ([ADR 0004](../adr/0004-streaming-install.md)).
 - **dirs**, parents before children, so they can be created in order. Empty directories are included.
 - the total size of all files.
+
+## 8. Stream order
+
+`xc_xdvdfs_stream_order()` reports where the directory tables sit relative to the file data. Random-access sources (local files, HTTP `Range`) read the tables first and don't care. A **sequential** source, such as a Deflate-compressed zip member ([ADR 0009](../adr/0009-install-from-zip-archives.md)), can only write a file as its bytes pass if every table on the file's path has already been read.
+
+- A directory is **known** once its own table and all its ancestors' tables have been read. The root is known at the end of the root table.
+- A non-empty file is **late** if it starts before its parent directory is known.
+- The report gives the table and data ranges, the number and total size of late files, the lowest late offset (where a second pass would have to start), and the latest table end any late file waits for.
+
+`xcat-cli layout <image>` prints this report for an image on a PC.

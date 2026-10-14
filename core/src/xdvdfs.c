@@ -471,3 +471,136 @@ void xc_xdvdfs_listing_free(xc_xdvdfs_listing *listing)
     free(listing->paths_);
     memset(listing, 0, sizeof *listing);
 }
+
+/* --- stream order (§8) ------------------------------------------------------------ */
+
+typedef struct dir_ref {
+    const char *path;
+    size_t len;
+    size_t index; /* into listing->dirs */
+} dir_ref;
+
+static int dir_ref_cmp(const void *a, const void *b)
+{
+    const dir_ref *x = a;
+    const dir_ref *y = b;
+    size_t n = x->len < y->len ? x->len : y->len;
+    int c = memcmp(x->path, y->path, n);
+    if (c != 0) {
+        return c;
+    }
+    return (x->len > y->len) - (x->len < y->len);
+}
+
+/* Length of the parent directory's path ("a/b" for "a/b/c"), 0 for the root. */
+static size_t parent_len(const char *path)
+{
+    const char *slash = strrchr(path, '/');
+    return slash != NULL ? (size_t)(slash - path) : 0;
+}
+
+/* When the parent of `path` is fully known: the root's, or a directory's from `ready`. */
+static uint64_t parent_ready(const char *path, const dir_ref *refs, size_t n, const uint64_t *ready,
+                             uint64_t root_ready)
+{
+    size_t len = parent_len(path);
+    if (len == 0 || refs == NULL) {
+        return root_ready;
+    }
+    dir_ref key = {path, len, 0};
+    const dir_ref *hit = bsearch(&key, refs, n, sizeof *refs, dir_ref_cmp);
+    return hit != NULL ? ready[hit->index] : root_ready;
+}
+
+static void note_table(xc_xdvdfs_order *o, uint64_t start, uint64_t end)
+{
+    o->tables++;
+    if (start < o->tables_start) {
+        o->tables_start = start;
+    }
+    if (end > o->tables_end) {
+        o->tables_end = end;
+    }
+}
+
+xc_err xc_xdvdfs_stream_order(const xc_xdvdfs_volume *vol, const xc_xdvdfs_listing *listing,
+                              xc_xdvdfs_order *out)
+{
+    if (vol == NULL || listing == NULL || out == NULL) {
+        return XC_ERR_INVALID_ARG;
+    }
+    memset(out, 0, sizeof *out);
+    out->tables_start = UINT64_MAX;
+    out->data_start = UINT64_MAX;
+    out->first_late = UINT64_MAX;
+
+    uint64_t root_ready = 0;
+    if (vol->root_size > 0) {
+        uint64_t start = sector_offset(vol->partition_offset, vol->root_sector);
+        root_ready = start + vol->root_size;
+        note_table(out, start, root_ready);
+    }
+
+    /* A directory is fully known once its own table and every ancestor's table have been
+       read. Directories come parents-first (§7), so each parent is done before its children. */
+    size_t n = listing->dir_count;
+    dir_ref *refs = NULL;
+    uint64_t *ready = NULL;
+    if (n > 0) {
+        if (n > SIZE_MAX / sizeof *refs || n > SIZE_MAX / sizeof *ready) {
+            return XC_ERR_NOMEM;
+        }
+        refs = malloc(n * sizeof *refs);
+        ready = malloc(n * sizeof *ready);
+        if (refs == NULL || ready == NULL) {
+            free(refs);
+            free(ready);
+            return XC_ERR_NOMEM;
+        }
+        for (size_t i = 0; i < n; i++) {
+            refs[i].path = listing->dirs[i].path;
+            refs[i].len = strlen(listing->dirs[i].path);
+            refs[i].index = i;
+        }
+        qsort(refs, n, sizeof *refs, dir_ref_cmp);
+        for (size_t i = 0; i < n; i++) {
+            const xc_xdvdfs_entry *d = &listing->dirs[i];
+            uint64_t known = parent_ready(d->path, refs, n, ready, root_ready);
+            if (d->size > 0) {
+                uint64_t end = d->offset + d->size;
+                note_table(out, d->offset, end);
+                if (end > known) {
+                    known = end;
+                }
+            }
+            ready[i] = known;
+        }
+    }
+
+    for (size_t i = 0; i < listing->file_count; i++) {
+        const xc_xdvdfs_entry *f = &listing->files[i];
+        if (f->size == 0) {
+            continue; /* nothing to read; its sector isn't even checked (§5) */
+        }
+        if (f->offset < out->data_start) {
+            out->data_start = f->offset;
+        }
+        if (f->offset + f->size > out->data_end) {
+            out->data_end = f->offset + f->size;
+        }
+        uint64_t known = parent_ready(f->path, refs, n, ready, root_ready);
+        if (known > f->offset) {
+            out->late_files++;
+            out->late_bytes += f->size;
+            if (f->offset < out->first_late) {
+                out->first_late = f->offset;
+            }
+            if (known > out->last_table_end_needed) {
+                out->last_table_end_needed = known;
+            }
+        }
+    }
+    free(refs);
+    free(ready);
+    return XC_OK;
+}
