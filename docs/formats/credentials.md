@@ -11,7 +11,7 @@ The words **must**, **must not**, **should** and **may** are used as in RFC 2119
 ```
 # xcat-credentials v1
 
-# Session for my own archive.org account (written by tools/xcat-login, or pasted by hand)
+# Session for my own archive.org account (written by the on-box login, tools/xcat-login, or by hand)
 [archive]
 hosts  = archive.org, *.archive.org
 cookie = logged-in-user=<user>; logged-in-sig=<token>
@@ -97,7 +97,7 @@ An HTTP `401` or `403` from a host that had credentials attached is reported as 
 ## 8. Handling secrets
 
 - Logs and on-screen messages may name a section (`[archive]`), never a value.
-- The app never writes this file. `tools/xcat-login` (a PC helper, M6) writes or replaces one section, and never stores a password.
+- The app writes this file only when the user logs in or out on the console ([ADR 0010](../adr/0010-on-box-login-required-for-beta.md), M8): it writes, replaces or removes that service's one section, atomically (temporary file, then rename), and keeps every other section byte for byte. The optional PC helper `tools/xcat-login` (M6) does the same. Neither ever stores a password: it's used once for the login request over HTTPS and wiped from memory.
 - Anyone who can read the console's drive can read this file. Change the dashboard's default FTP password, and revoke a session (log out everywhere, or change the account password) if the console is lost or shared.
 
 ## 9. Changes
@@ -106,3 +106,4 @@ An HTTP `401` or `403` from a host that had credentials attached is reported as 
 |---|---|---|
 | 1.0 | 2026-10-13 | First version (design). |
 | 1.0 | 2026-10-15 | Implemented. The limit of 16 host patterns per section is now stated (§4); nothing else changed. |
+| 1.0 | 2026-10-15 | §8: the app may write a login's section (on-box login, ADR 0010). The file format is unchanged. |

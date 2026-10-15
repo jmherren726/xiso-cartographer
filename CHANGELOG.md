@@ -41,4 +41,5 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Changed
 
 - Roadmap: zip support moves from optional M9b to M5b, right after HTTPS (ADR 0009 accepted).
+- Roadmap: logging in to archive.org on the Xbox, with username and password and no PC helper, is now part of the M8 and M9 (beta) exit tests (ADR 0010, amending ADR 0007). The password is used once and never stored; the app may write the login's token to the credentials file. `tools/xcat-login` becomes optional.
 - Unity test framework updated to v2.7.0.

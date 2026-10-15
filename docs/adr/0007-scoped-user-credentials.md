@@ -1,6 +1,6 @@
 # 0007. Scoped user credentials for sources that need a login
 
-- **Status:** Accepted (design only; implemented with the HTTP client in M3/M5 and the archive.org source in M6)
+- **Status:** Accepted; amended by [ADR 0010](0010-on-box-login-required-for-beta.md) (logging in on the Xbox, with no PC helper, is required for the beta; the app may write a login's token)
 - **Date:** 2026-10-13
 - **Amends:** [ADR 0006](0006-no-links-no-bypass.md)
 
