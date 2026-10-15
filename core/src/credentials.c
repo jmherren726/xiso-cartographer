@@ -10,39 +10,13 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* --- small helpers ------------------------------------------------------------------ */
+#include "text.h"
 
-static bool is_space(char c)
-{
-    return c == ' ' || c == '\t';
-}
+/* --- small helpers ------------------------------------------------------------------ */
 
 static char lower(char c)
 {
     return c >= 'A' && c <= 'Z' ? (char)(c - 'A' + 'a') : c;
-}
-
-static bool eq_ci(const char *a, const char *b)
-{
-    for (; *a != '\0' && *b != '\0'; a++, b++) {
-        if (lower(*a) != lower(*b)) {
-            return false;
-        }
-    }
-    return *a == *b;
-}
-
-/* Trims spaces and tabs at both ends, in place. */
-static char *trim(char *s)
-{
-    while (is_space(*s)) {
-        s++;
-    }
-    size_t n = strlen(s);
-    while (n > 0 && is_space(s[n - 1])) {
-        s[--n] = '\0';
-    }
-    return s;
 }
 
 static bool has_control(const char *s)
@@ -61,55 +35,6 @@ static bool is_tchar(char c)
 {
     return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
            (c != '\0' && strchr("!#$%&'*+-.^_`|~", c) != NULL);
-}
-
-/* Strict UTF-8: no overlong forms, surrogates or code points above U+10FFFF. */
-static bool utf8_ok(const unsigned char *p, size_t len, size_t *bad_at)
-{
-    size_t i = 0;
-    while (i < len) {
-        unsigned char c = p[i];
-        size_t n = 0;
-        uint32_t cp = 0;
-        uint32_t min = 0;
-        if (c < 0x80U) {
-            i++;
-            continue;
-        }
-        if ((c & 0xE0U) == 0xC0U) {
-            n = 1;
-            cp = c & 0x1FU;
-            min = 0x80U;
-        } else if ((c & 0xF0U) == 0xE0U) {
-            n = 2;
-            cp = c & 0x0FU;
-            min = 0x800U;
-        } else if ((c & 0xF8U) == 0xF0U) {
-            n = 3;
-            cp = c & 0x07U;
-            min = 0x10000U;
-        } else {
-            *bad_at = i;
-            return false;
-        }
-        if (len - i <= n) {
-            *bad_at = i;
-            return false;
-        }
-        for (size_t k = 1; k <= n; k++) {
-            if ((p[i + k] & 0xC0U) != 0x80U) {
-                *bad_at = i;
-                return false;
-            }
-            cp = (cp << 6U) | (p[i + k] & 0x3FU);
-        }
-        if (cp < min || cp > 0x10FFFFU || (cp >= 0xD800U && cp <= 0xDFFFU)) {
-            *bad_at = i;
-            return false;
-        }
-        i += n + 1;
-    }
-    return true;
 }
 
 /* `h` is a subdomain of `base` at any depth ("a.b.example.org" of "example.org"). */
@@ -141,68 +66,21 @@ static xc_err fail(parser *p, const char *fmt, ...)
     return XC_ERR_CREDENTIALS;
 }
 
-/* "<digits>" without leading zeros (except "0"); advances *s. */
-static bool version_number(const char **s, unsigned long *v)
-{
-    const char *p = *s;
-    if (*p < '0' || *p > '9' || (p[0] == '0' && p[1] >= '0' && p[1] <= '9')) {
-        return false;
-    }
-    unsigned long n = 0;
-    for (; *p >= '0' && *p <= '9'; p++) {
-        if (n > 100000UL) {
-            return false;
-        }
-        n = n * 10U + (unsigned long)(*p - '0');
-    }
-    *s = p;
-    *v = n;
-    return true;
-}
-
 /* §3.3: "# xcat-credentials v<MAJOR>[.<MINOR>]". */
 static xc_err check_header(parser *p, const char *line)
 {
-    static const char missing[] = "not a credentials file (missing \"# xcat-credentials v1\")";
-    if (line[0] != '#' || !is_space(line[1])) {
-        return fail(p, "%s", missing);
-    }
-    const char *s = line + 1;
-    while (is_space(*s)) {
-        s++;
-    }
-    if (strncmp(s, "xcat-credentials", 16) != 0 || !is_space(s[16])) {
-        return fail(p, "%s", missing);
-    }
-    s += 16;
-    while (is_space(*s)) {
-        s++;
-    }
     unsigned long major = 0;
-    unsigned long minor = 0;
-    if (*s != 'v') {
-        return fail(p, "%s", missing);
-    }
-    s++;
-    if (!version_number(&s, &major)) {
-        return fail(p, "%s", missing);
-    }
-    if (*s == '.') {
-        s++;
-        if (!version_number(&s, &minor)) {
-            return fail(p, "%s", missing);
-        }
-    }
-    if (*s != '\0') {
-        return fail(p, "%s", missing);
-    }
-    if (major > XC_CRED_VERSION_MAJOR) {
+    switch (xc_text_check_header(line, "xcat-credentials", XC_CRED_VERSION_MAJOR, &major)) {
+    case XC_TEXT_HEADER_OK:
+        return XC_OK;
+    case XC_TEXT_HEADER_NEWER:
         return fail(p, "needs a newer xiso-cartographer (credentials format v%lu)", major);
-    }
-    if (major < XC_CRED_VERSION_MAJOR) {
+    case XC_TEXT_HEADER_OLDER:
         return fail(p, "unsupported credentials format v%lu", major);
+    case XC_TEXT_HEADER_MISSING:
+        break;
     }
-    return XC_OK;
+    return fail(p, "not a credentials file (missing \"# xcat-credentials v1\")");
 }
 
 /* §4: a finished section needs hosts and something to send. */
@@ -248,7 +126,7 @@ static xc_err open_section(parser *p, char *line)
     }
     xc_credentials *c = p->c;
     for (size_t i = 0; i < c->section_count; i++) {
-        if (eq_ci(c->sections[i].name, name)) {
+        if (xc_text_eq_ci(c->sections[i].name, name)) {
             return fail(p, "section [%s] appears twice", name);
         }
     }
@@ -323,7 +201,7 @@ static xc_err key_hosts(parser *p, char *value)
         if (comma != NULL) {
             *comma = '\0';
         }
-        char *pat = trim(item);
+        char *pat = xc_text_trim(item);
         if (s->pattern_count == XC_CRED_MAX_PATTERNS) {
             return fail(p, "[%s]: more than %d host patterns", s->name, XC_CRED_MAX_PATTERNS);
         }
@@ -358,17 +236,17 @@ static xc_err key_header(parser *p, char *value)
         }
     }
     for (size_t i = 0; i < sizeof forbidden / sizeof forbidden[0]; i++) {
-        if (eq_ci(value, forbidden[i])) {
+        if (xc_text_eq_ci(value, forbidden[i])) {
             return fail(p, "[%s]: header %s can't be set here", s->name, forbidden[i]);
         }
     }
     for (size_t i = 0; i < s->header_count; i++) {
-        if (eq_ci(s->header_names[i], value)) {
+        if (xc_text_eq_ci(s->header_names[i], value)) {
             return fail(p, "[%s]: header %s given twice", s->name, s->header_names[i]);
         }
     }
     s->header_names[s->header_count] = value;
-    s->header_values[s->header_count] = trim(colon + 1);
+    s->header_values[s->header_count] = xc_text_trim(colon + 1);
     s->header_count++;
     return XC_OK;
 }
@@ -384,8 +262,8 @@ static xc_err key_value(parser *p, char *line)
         return fail(p, "expected \"key = value\"");
     }
     *eq = '\0';
-    char *key = trim(line);
-    char *value = trim(eq + 1);
+    char *key = xc_text_trim(line);
+    char *value = xc_text_trim(eq + 1);
     if (has_control(value)) {
         return fail(p, "[%s]: control character in a value", s->name);
     }
@@ -476,7 +354,7 @@ static xc_err parse_lines(parser *p, char *text)
         if (strlen(line) > XC_CRED_MAX_LINE) {
             return fail(p, "line longer than %d bytes", XC_CRED_MAX_LINE);
         }
-        line = trim(line);
+        line = xc_text_trim(line);
         if (line[0] == '\0') {
             continue;
         }
@@ -522,7 +400,7 @@ xc_err xc_cred_parse(const void *data, size_t len, xc_credentials *out, xc_cred_
     }
     /* The first byte that isn't UTF-8 text, or a NUL, whichever comes first. */
     size_t at = len;
-    (void)utf8_ok(bytes, len, &at);
+    (void)xc_text_utf8(bytes, len, &at);
     const unsigned char *nul = len > 0 ? memchr(bytes, '\0', len) : NULL;
     if (nul != NULL && (size_t)(nul - bytes) < at) {
         at = (size_t)(nul - bytes);
@@ -535,7 +413,7 @@ xc_err xc_cred_parse(const void *data, size_t len, xc_credentials *out, xc_cred_
         return fail(&p, "not UTF-8 text");
     }
     out->text = malloc(len + 1);
-    out->sections = malloc(sizeof *out->sections * XC_CRED_MAX_SECTIONS);
+    out->sections = calloc(XC_CRED_MAX_SECTIONS, sizeof *out->sections);
     if (out->text == NULL || out->sections == NULL) {
         xc_cred_free(out);
         return XC_ERR_NOMEM;

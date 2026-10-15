@@ -85,6 +85,7 @@ xcat_add_test(test_version)
 xcat_add_test(test_bytes)
 xcat_add_test(test_crc32)
 xcat_add_test(test_credentials)
+xcat_add_test(test_map)
 xcat_add_test(test_xdvdfs ARGS ${XCAT_FIXTURES_DIR} ${XCAT_FIXTURES})
 add_dependencies(test_xdvdfs xcat_fixtures)
 xcat_add_test(test_extract)
@@ -132,6 +133,12 @@ foreach(_name IN LISTS _get_scenarios)
   xcat_test_env(get_${_name})
 endforeach()
 
+# `xcat-cli map` end to end: local and HTTP includes, problems and the exit status.
+add_test(NAME map_cli
+  COMMAND ${Python3_EXECUTABLE} -I ${PROJECT_SOURCE_DIR}/tools/testserver/test_map_cli.py
+          --cli $<TARGET_FILE:xcat-cli> --work ${CMAKE_BINARY_DIR}/get-tests)
+xcat_test_env(map_cli)
+
 # Fuzz seeds: the directory tables of the xiso fixtures, in the harness's input layout.
 set(XCAT_FUZZ_SEEDS_DIR ${CMAKE_BINARY_DIR}/fuzz-seeds)
 set(_seed_fixtures small deep)
@@ -160,3 +167,7 @@ xcat_add_fuzzer(fuzz_http SEEDS ${_http_seeds})
 # Credentials file seeds are committed too.
 file(GLOB _cred_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/credentials/*.seed)
 xcat_add_fuzzer(fuzz_credentials SEEDS ${_cred_seeds})
+
+# Map seeds are committed: NUL-separated parts, see fuzz_map.c.
+file(GLOB _map_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/map/*.seed)
+xcat_add_fuzzer(fuzz_map SEEDS ${_map_seeds})

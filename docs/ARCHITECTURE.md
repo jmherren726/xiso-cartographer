@@ -61,7 +61,7 @@ Status: ✅ exists · 🔜 next milestone · ⏳ later.
 | `tls` | BearSSL wrapper: TLS 1.2, SNI, CA bundle, time from `xc_clock` ([ADR 0005](adr/0005-bearssl-for-tls.md)) | M5 | ⏳ |
 | `ntp` | Minimal SNTP client, so certificate checks have a correct clock | M5 | ⏳ |
 | `hash` | MD5/SHA-1 with exportable state (from BearSSL) | M5 | ⏳ |
-| `map` | Parse map files: entries, `@include`, `@archiveorg` ([map.md](formats/map.md)) | M8 (parser can land earlier) | ⏳ |
+| `map` | Parse map files: entries, `@include` (fetched through a caller callback), `@archiveorg` ([map.md](formats/map.md), `xcat/map.h`) | M4 (the console installs from a map); `@archiveorg` in M6 | ✅ |
 | `zip` | Read zip archives over `Range` (Zip64); stream stored and Deflate members (miniz) into the extractor; checkpoints for resume and the second pass over files that precede their directory tables; CRC-32 verification ([ADR 0009](adr/0009-install-from-zip-archives.md)) | M5b | ⏳ |
 | `sources/archiveorg` | Metadata API client (streaming JSON); builds map entries, supplies sizes and hashes | M6 | ⏳ |
 | `catalog` | Load and search `catalog.bin` (versioned binary format) | M7 | ⏳ |

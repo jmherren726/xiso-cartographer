@@ -51,6 +51,8 @@ const char *xc_err_str(xc_err err)
         return "Not supported by this version";
     case XC_ERR_CREDENTIALS:
         return "The credentials file is invalid, so no credentials are used";
+    case XC_ERR_MAP:
+        return "The map file can't be used";
     case XC_ERR_COUNT_:
         break;
     }

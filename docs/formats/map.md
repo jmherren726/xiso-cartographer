@@ -1,6 +1,6 @@
 # Map file format (`xcat-map`), version 1
 
-**Status:** Normative. The `map` parser in `core/` implements this document; parser code links to the section it implements.
+**Status:** Normative. Implemented by `xcat/map.h` (`core/src/map.c`, M4), which links each section it implements; `xcat-cli map` checks a map on a PC. `@archiveorg` is accepted with a "not supported yet" warning until the archive.org source (M6).
 
 A map tells xiso-cartographer where the user's own disc images are. It is a plain-text file the user writes by hand or generates, and it is the only place sources come from: the app ships with no links (see [ADR 0006](../adr/0006-no-links-no-bypass.md)).
 
@@ -134,6 +134,7 @@ These protect the 64 MB console from hostile or broken input. A reader **must** 
 | Total entries after expansion | 10,000 | Loading stops; entries read so far are kept, plus an error |
 | Include depth | 4 | `@include` line invalid |
 | Total files loaded (top-level + includes) | 32 | `@include` line invalid |
+| Problems kept for display (§7) | 256 | Further problems are counted, not stored |
 
 ## 7. Errors and warnings
 
@@ -173,3 +174,4 @@ eol         = LF / CRLF / end-of-file
 | Version | Date | Change |
 |---|---|---|
 | 1.0 | 2026-10-13 | First version. |
+| 1.0 | 2026-10-15 | Implemented. §6 states the cap of 256 stored problems; nothing else changed. |

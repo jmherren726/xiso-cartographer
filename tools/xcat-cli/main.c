@@ -6,8 +6,10 @@
  *   xcat-cli check <image> [title]      can it be installed on the Xbox HDD? (ADR 0008)
  *   xcat-cli layout <image>             where directory tables sit vs. file data (ADR 0009)
  *   xcat-cli get [options] <url> <file> download a file over HTTP with Range (docs/formats/http.md)
+ *   xcat-cli map [options] <map-file>   check a map file and list its entries (docs/formats/map.md)
  *
- * Exit status: 0 success, 1 failure, 2 usage error, 3 not installable (check).
+ * Exit status: 0 success, 1 failure (for map: any error line), 2 usage error, 3 not
+ * installable (check).
  */
 #include <ctype.h>
 #include <inttypes.h>
@@ -21,6 +23,7 @@
 #include "xcat/fatx.h"
 #include "xcat/host.h"
 #include "xcat/http_client.h"
+#include "xcat/map.h"
 #include "xcat/version.h"
 #include "xcat/xdvdfs.h"
 
@@ -35,7 +38,8 @@ static int usage(void)
                   "       xcat-cli check <image> [title]\n"
                   "       xcat-cli layout <image>\n"
                   "       xcat-cli get [--timeout <ms>] [--attempts <n>] [--credentials <file>]\n"
-                  "                    <url> <file>\n",
+                  "                    <url> <file>\n"
+                  "       xcat-cli map [--credentials <file>] <map-file>\n",
                   xc_version_string());
     return 2;
 }
@@ -417,27 +421,99 @@ static int get_fail(const xc_http_client *c, const char *url, xc_err err)
     return fail(url, err);
 }
 
-static int cmd_get(int argc, char **argv)
+/* Options shared by the commands that use the network. */
+typedef struct net_opts {
+    unsigned long timeout_ms;
+    unsigned long attempts;
+    const char *cred_path;
+} net_opts;
+
+/* Parses leading "--name value" options; returns the index of the first other argument or -1. */
+static int parse_net_opts(int argc, char **argv, net_opts *o)
 {
-    unsigned long timeout_ms = 0;
-    unsigned long attempts = 0;
-    const char *cred_path = NULL;
+    memset(o, 0, sizeof *o);
     int i = 0;
     for (; i + 1 < argc && strncmp(argv[i], "--", 2) == 0; i += 2) {
         bool ok = false;
-        if (strcmp(argv[i], "--credentials") == 0 && cred_path == NULL) {
-            cred_path = argv[i + 1];
+        if (strcmp(argv[i], "--credentials") == 0 && o->cred_path == NULL) {
+            o->cred_path = argv[i + 1];
             ok = true;
         } else if (strcmp(argv[i], "--timeout") == 0) {
-            ok = parse_uint(argv[i + 1], 3600000UL, &timeout_ms) && timeout_ms > 0;
+            ok = parse_uint(argv[i + 1], 3600000UL, &o->timeout_ms) && o->timeout_ms > 0;
         } else if (strcmp(argv[i], "--attempts") == 0) {
-            ok = parse_uint(argv[i + 1], 1000UL, &attempts) && attempts > 0;
+            ok = parse_uint(argv[i + 1], 1000UL, &o->attempts) && o->attempts > 0;
         }
         if (!ok) {
-            return usage();
+            return -1;
         }
     }
-    if (argc - i != 2) {
+    return i;
+}
+
+/* Sockets, clock, credentials and an HTTP client, set up together. */
+typedef struct http_env {
+    xc_net net;
+    xc_clock clock;
+    uint8_t *buf;
+    xc_credentials creds;
+    xc_http_auth auth;
+    xc_http_client client;
+    bool net_started;
+} http_env;
+
+static void env_close(http_env *e)
+{
+    xc_http_client_close(&e->client);
+    xc_cred_free(&e->creds);
+    free(e->buf);
+    e->buf = NULL;
+    if (e->net_started) {
+        xc_host_net_cleanup();
+        e->net_started = false;
+    }
+}
+
+static xc_err env_open(http_env *e, const net_opts *o)
+{
+    memset(e, 0, sizeof *e);
+    xc_err err = xc_host_net_startup();
+    if (err != XC_OK) {
+        return err;
+    }
+    e->net_started = true;
+    xc_host_net(&e->net);
+    xc_host_clock(&e->clock);
+    e->buf = malloc(IO_BUFFER_SIZE);
+    if (e->buf == NULL) {
+        env_close(e);
+        return XC_ERR_NOMEM;
+    }
+    xc_http_config cfg;
+    memset(&cfg, 0, sizeof cfg);
+    cfg.net = &e->net;
+    cfg.clock = &e->clock;
+    cfg.buf = e->buf;
+    cfg.buf_size = IO_BUFFER_SIZE;
+    cfg.timeout_ms = (uint32_t)o->timeout_ms;
+    cfg.max_attempts = (unsigned)o->attempts;
+    cfg.seed = (uint32_t)e->clock.now_ms(e->clock.ctx);
+    cfg.on_retry = get_retry;
+    if (o->cred_path != NULL && load_credentials(o->cred_path, &e->creds)) {
+        xc_cred_http_auth(&e->auth, &e->creds);
+        cfg.auth = &e->auth;
+    }
+    err = xc_http_client_init(&e->client, &cfg);
+    if (err != XC_OK) {
+        env_close(e);
+    }
+    return err;
+}
+
+static int cmd_get(int argc, char **argv)
+{
+    net_opts o;
+    int i = parse_net_opts(argc, argv, &o);
+    if (i < 0 || argc - i != 2) {
         return usage();
     }
     const char *url = argv[i];
@@ -448,55 +524,24 @@ static int cmd_get(int argc, char **argv)
     if (err != XC_OK) {
         return fail(url, err);
     }
-    err = xc_host_net_startup();
+    http_env env;
+    err = env_open(&env, &o);
     if (err != XC_OK) {
         return fail("network", err);
     }
-    xc_net net;
-    xc_clock clock;
-    xc_host_net(&net);
-    xc_host_clock(&clock);
-    uint8_t *buf = malloc(IO_BUFFER_SIZE);
-    if (buf == NULL) {
-        xc_host_net_cleanup();
-        return fail(url, XC_ERR_NOMEM);
-    }
-    xc_http_config cfg;
-    memset(&cfg, 0, sizeof cfg);
-    cfg.net = &net;
-    cfg.clock = &clock;
-    cfg.buf = buf;
-    cfg.buf_size = IO_BUFFER_SIZE;
-    cfg.timeout_ms = (uint32_t)timeout_ms;
-    cfg.max_attempts = (unsigned)attempts;
-    cfg.seed = (uint32_t)clock.now_ms(clock.ctx);
-    cfg.on_retry = get_retry;
-    xc_credentials creds;
-    xc_http_auth auth;
-    memset(&creds, 0, sizeof creds);
-    if (cred_path != NULL && load_credentials(cred_path, &creds)) {
-        xc_cred_http_auth(&auth, &creds);
-        cfg.auth = &auth;
-    }
-    xc_http_client client;
-    memset(&client, 0, sizeof client);
-    err = xc_http_client_init(&client, &cfg);
-
     get_ctx g;
     memset(&g, 0, sizeof g);
-    g.clock = &clock;
-    g.start_ms = clock.now_ms(clock.ctx);
+    g.clock = &env.clock;
+    g.start_ms = env.clock.now_ms(env.clock.ctx);
     g.next_report_ms = g.start_ms + 2000U;
-    if (err == XC_OK) {
-        err = xc_http_probe(&client, &res);
-    }
+    err = xc_http_probe(&env.client, &res);
     if (err == XC_OK) {
         g.size = res.size;
         g.f = xc_host_fopen(out, "wb");
         err = g.f != NULL ? XC_OK : XC_ERR_IO;
     }
     if (err == XC_OK) {
-        err = xc_http_read(&client, &res, 0, res.size, get_write, &g);
+        err = xc_http_read(&env.client, &res, 0, res.size, get_write, &g);
         if (fclose(g.f) != 0 && err == XC_OK) {
             err = XC_ERR_IO;
         }
@@ -504,12 +549,9 @@ static int cmd_get(int argc, char **argv)
             (void)xc_host_remove(out); /* no partial files left behind */
         }
     }
-    uint64_t ms = clock.now_ms(clock.ctx) - g.start_ms;
-    int rc = err == XC_OK ? 0 : get_fail(&client, url, err);
-    xc_http_client_close(&client);
-    xc_cred_free(&creds);
-    free(buf);
-    xc_host_net_cleanup();
+    uint64_t ms = env.clock.now_ms(env.clock.ctx) - g.start_ms;
+    int rc = err == XC_OK ? 0 : get_fail(&env.client, url, err);
+    env_close(&env);
     if (rc == 0) {
         (void)printf("downloaded %" PRIu64 " bytes in %.1f s (%.1f MB/s), crc32 %08" PRIx32 "\n",
                      g.done, (double)ms / 1000.0, mb_per_s(g.done, ms), g.crc);
@@ -517,10 +559,150 @@ static int cmd_get(int argc, char **argv)
     return rc;
 }
 
+/* --- map ------------------------------------------------------------------------------- */
+
+/* Reads at most max_len + 1 bytes of a local file (one more than allowed, to detect "too big"). */
+static xc_err read_local(const char *path, size_t max_len, char **data, size_t *len)
+{
+    FILE *f = xc_host_fopen(path, "rb");
+    if (f == NULL) {
+        return XC_ERR_IO;
+    }
+    char *buf = malloc(max_len + 1);
+    size_t n = buf != NULL ? fread(buf, 1, max_len + 1, f) : 0;
+    bool ok = buf != NULL && ferror(f) == 0;
+    (void)fclose(f);
+    if (!ok) {
+        free(buf);
+        return buf == NULL ? XC_ERR_NOMEM : XC_ERR_IO;
+    }
+    if (n > max_len) {
+        free(buf);
+        return XC_ERR_LIMIT;
+    }
+    *data = buf;
+    *len = n;
+    return XC_OK;
+}
+
+typedef struct mem_ctx {
+    char *buf;
+} mem_ctx;
+
+static xc_err to_mem(void *ctx, uint64_t offset, const uint8_t *data, size_t len)
+{
+    mem_ctx *m = ctx;
+    memcpy(m->buf + (size_t)offset, data, len);
+    return XC_OK;
+}
+
+typedef struct map_fetch_ctx {
+    const net_opts *opts;
+    http_env env;
+    bool env_ready;
+} map_fetch_ctx;
+
+/* xc_map_fetch_fn: local files directly, http(s) includes with the HTTP client. */
+static xc_err map_fetch(void *ctx, const char *location, bool is_url, size_t max_len, char **data,
+                        size_t *len)
+{
+    map_fetch_ctx *fc = ctx;
+    if (!is_url) {
+        return read_local(location, max_len, data, len);
+    }
+    if (!fc->env_ready) {
+        xc_err err = env_open(&fc->env, fc->opts);
+        if (err != XC_OK) {
+            return err;
+        }
+        fc->env_ready = true;
+    }
+    static xc_http_resource res; /* large; one fetch at a time */
+    xc_err err = xc_http_resource_init(&res, location, strlen(location));
+    if (err == XC_OK) {
+        err = xc_http_probe(&fc->env.client, &res);
+    }
+    if (err == XC_OK && res.size > max_len) {
+        err = XC_ERR_LIMIT;
+    }
+    mem_ctx m = {NULL};
+    if (err == XC_OK) {
+        m.buf = malloc((size_t)res.size + 1);
+        err = m.buf != NULL ? XC_OK : XC_ERR_NOMEM;
+    }
+    if (err == XC_OK) {
+        err = xc_http_read(&fc->env.client, &res, 0, res.size, to_mem, &m);
+    }
+    if (err != XC_OK) {
+        free(m.buf);
+        return err;
+    }
+    *data = m.buf;
+    *len = (size_t)res.size;
+    return XC_OK;
+}
+
+static int cmd_map(int argc, char **argv)
+{
+    net_opts o;
+    int i = parse_net_opts(argc, argv, &o);
+    if (i < 0 || argc - i != 1) {
+        return usage();
+    }
+    const char *path = argv[i];
+    char *data = NULL;
+    size_t len = 0;
+    xc_err err = read_local(path, XC_MAP_MAX_FILE, &data, &len);
+    if (err == XC_ERR_LIMIT) {
+        (void)fprintf(stderr, "%s:0: error: file larger than 1 MiB\n", path); /* map.md §6 */
+        return 1;
+    }
+    if (err != XC_OK) {
+        return fail(path, err);
+    }
+    map_fetch_ctx fc;
+    memset(&fc, 0, sizeof fc);
+    fc.opts = &o;
+    xc_map_loader loader = {map_fetch, &fc};
+    xc_map map;
+    err = xc_map_load(data != NULL ? data : "", data != NULL ? len : 0, path, &loader, &map);
+    free(data);
+    if (fc.env_ready) {
+        env_close(&fc.env);
+    }
+    if (err == XC_ERR_NOMEM) {
+        xc_map_free(&map);
+        return fail(path, err);
+    }
+    for (size_t k = 0; k < map.entry_count; k++) {
+        const xc_map_entry *e = &map.entries[k];
+        (void)printf("%08" PRIX32 "%s%-17s %s  (%s:%zu)\n", e->title_id,
+                     e->variant[0] != '\0' ? "@" : " ", e->variant, e->url, map.sources[e->source],
+                     e->line);
+    }
+    for (size_t k = 0; k < map.problem_count; k++) {
+        const xc_map_problem *p = &map.problems[k];
+        (void)fprintf(stderr, "%s:%zu: %s: %s\n", map.sources[p->source], p->line,
+                      p->severity == XC_MAP_ERROR ? "error" : "warning", p->message);
+    }
+    if (map.problems_dropped > 0) {
+        (void)fprintf(stderr, "... and %zu more problems\n", map.problems_dropped);
+    }
+    (void)printf("%zu entries from %zu file%s, %zu error%s\n", map.entry_count, map.source_count,
+                 map.source_count == 1 ? "" : "s", map.error_count,
+                 map.error_count == 1 ? "" : "s");
+    int rc = map.error_count == 0 ? 0 : 1;
+    xc_map_free(&map);
+    return rc;
+}
+
 int main(int argc, char **argv)
 {
     if (argc >= 2 && strcmp(argv[1], "get") == 0) {
         return cmd_get(argc - 2, argv + 2);
+    }
+    if (argc >= 2 && strcmp(argv[1], "map") == 0) {
+        return cmd_map(argc - 2, argv + 2);
     }
     if (argc == 3 && strcmp(argv[1], "layout") == 0) {
         return cmd_layout(argv[2]);
