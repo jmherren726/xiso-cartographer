@@ -17,6 +17,8 @@ typedef enum xc_err {
     XC_ERR_LIMIT,           /* the data exceeds a configured safety limit */
     XC_ERR_CANCELLED,       /* the caller asked to stop (e.g. a progress callback) */
     XC_ERR_NOT_INSTALLABLE, /* the game's files can't be stored on FATX (ADR 0008) */
+    XC_ERR_URL,             /* not an accepted http(s) URL (docs/formats/http.md §2) */
+    XC_ERR_HTTP_PROTOCOL,   /* the server's response breaks docs/formats/http.md */
     XC_ERR_COUNT_           /* number of codes; not an error */
 } xc_err;
 

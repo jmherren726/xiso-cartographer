@@ -87,6 +87,8 @@ xcat_add_test(test_xdvdfs ARGS ${XCAT_FIXTURES_DIR} ${XCAT_FIXTURES})
 add_dependencies(test_xdvdfs xcat_fixtures)
 xcat_add_test(test_extract)
 xcat_add_test(test_fatx)
+xcat_add_test(test_url)
+xcat_add_test(test_http)
 
 # FATX installability (ADR 0008): every fixture can be installed except "deep", whose names
 # of 43 and 255 characters can't be stored on FATX; `xcat-cli check` must refuse it (exit 3).
@@ -133,3 +135,7 @@ add_custom_target(xcat_fuzz_seeds ALL DEPENDS ${_seed_outputs})
 
 xcat_add_fuzzer(fuzz_xdvdfs SEEDS ${_seed_outputs})
 add_dependencies(fuzz_xdvdfs_replay xcat_fuzz_seeds)
+
+# HTTP parser and URL seeds are committed (exact bytes; see .gitattributes).
+file(GLOB _http_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/http/*.seed)
+xcat_add_fuzzer(fuzz_http SEEDS ${_http_seeds})

@@ -24,3 +24,6 @@
 *.gz     binary
 *.ttf    binary
 *.otf    binary
+
+# Fuzz seeds are exact bytes (CRLF matters).
+*.seed   binary

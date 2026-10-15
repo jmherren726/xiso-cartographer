@@ -28,6 +28,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - FATX rules measured on the console (docs/formats/fatx-names.md) and `xcat/fatx.h`: games whose files the Xbox hard disk can't store are refused, with every problem listed (ADR 0008); install folder names are generated from titles. `xcat-cli check` runs the same check on a PC.
 - On-box install (M2): the XBE installs the images in `E:\xcat\isos\` to `E:\Games\<title>` with FATX and free-space checks, then reads every file back to verify it. A synthetic test image is bundled. Xbox platform layer (`platform/nxdk`): file source, FATX directory sink, free space, drive mounting.
 - ADR 0009 (accepted): install from zip archives by streaming the zip with HTTP `Range` (Zip64, stored + Deflate, CRC-32 verified), based on archive.org tests showing that "file inside a zip" URLs can't be resumed and stop at ~1 GB.
+- HTTP client profile (docs/formats/http.md): the strict HTTP/1.1 subset the console speaks, with limits, status handling, retries, resume and per-hop credentials.
+- URL parser (`xcat/url.h`) and HTTP response parser (`xcat/http.h`): `http`/`https` URLs with percent-encoding and redirect resolution; response heads, `Content-Range` and chunked bodies, rejecting anything ambiguous. Both are fuzzed in CI.
 - Stream-order report (`xc_xdvdfs_stream_order`, `xcat-cli layout`): shows whether every directory table precedes the files it describes, i.e. whether an image can be installed from a sequential (Deflate) stream in one pass (ADR 0009 open question).
 
 ### Changed
