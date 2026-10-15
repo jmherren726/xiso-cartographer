@@ -120,9 +120,11 @@ jobs:
         run: |
           ls -l app/bin/default.xbe app/xiso-cartographer.iso
           ls -l app/fatx-probe/bin/default.xbe app/fatx-probe/xcat-fatx-probe.iso
+          ls -l app/net-test/bin/default.xbe app/net-test/xcat-net-test.iso
           # Every XBE starts with the "XBEH" magic.
           test "$(head -c 4 app/bin/default.xbe)" = "XBEH"
           test "$(head -c 4 app/fatx-probe/bin/default.xbe)" = "XBEH"
+          test "$(head -c 4 app/net-test/bin/default.xbe)" = "XBEH"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: xiso-cartographer-xbe-${{ github.sha }}
@@ -131,6 +133,8 @@ jobs:
             app/xiso-cartographer.iso
             app/fatx-probe/bin/default.xbe
             app/fatx-probe/xcat-fatx-probe.iso
+            app/net-test/bin/default.xbe
+            app/net-test/xcat-net-test.iso
           if-no-files-found: error
           retention-days: 30
 

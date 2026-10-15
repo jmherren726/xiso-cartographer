@@ -7,7 +7,7 @@ Every change climbs as far up this ladder as it affects (see [HANDOFF.md §4](HA
 1. **Host unit tests:** `ctest --preset host-debug`. Run by CI on Linux and Windows for every pull request.
    - Parser and extractor tests use the synthetic xiso fixtures from [tools/fixtures/](../tools/fixtures/README.md) (small, deep, XGD1/XGD2/XGD3 full-disc, and >4 GiB with `-DXCAT_LARGE_FIXTURES=ON`; CMake generates them at build time). CI checks the fixtures themselves against extract-xiso.
    - Every parser also has a libFuzzer target. CTest replays its seeds on every build, and CI fuzzes each parser for 60 s per run ([CONTRIBUTING.md#fuzzing](../CONTRIBUTING.md#fuzzing)).
-2. **Host integration tests:** `xcat-cli` against the fake HTTP/HTTPS server and fixture images. Arrives with M1/M3.
+2. **Host integration tests:** `xcat-cli` against the fixture images (`extract_*`, `check_*`, `layout_*`) and against the Range test server with scripted faults (`get_*`, [tools/testserver/](../tools/testserver/README.md)). Also run by CTest; HTTPS joins in M5.
 3. **xemu:** manual for now. Needs your own BIOS/MCPX/HDD files, which can't go in CI. See [build-xbox.md](build-xbox.md#run-in-xemu).
 4. **Real hardware:** manual. See [build-xbox.md](build-xbox.md#run-on-hardware).
 
@@ -43,6 +43,35 @@ Newest first. "Build" is the commit or CI artifact tested.
 | 3 | One of your own games as a trimmed xiso under 4 GiB | Hardware | FTP it to `E:\xcat\isos\`, launch; then launch the installed game from the dashboard |
 
 A run passes when the screen ends with "Done: N of N image(s) installed and verified." Record the summary lines (files, KB/s) in the results log above.
+
+## M3: network download test
+
+**Exit test** ([HANDOFF.md §5](HANDOFF.md)): a 1 GB download over the LAN whose CRC-32 matches, with MB/s recorded, that survives a pulled cable. `app/net-test` downloads one file with the core HTTP client (the same code `xcat-cli get` uses) over the console's own network stack (lwIP, `platform/nxdk/src/nx_net.c`), and reports progress, every retry, the average MB/s and the CRC-32.
+
+**On the PC:**
+
+1. Make the test file (pseudo-random test data, never a game): `python3 tools/testserver/make_test_file.py --out C:\xcat-net --size 1G`. It prints `url=`, `size=` and `crc32=` lines.
+2. Serve it to the LAN: `python3 tools/testserver/rangeserver.py --root C:\xcat-net --bind 0.0.0.0`. Allow Python through the Windows firewall (private networks) when asked. Optional check from the PC: `xcat-cli get http://127.0.0.1:8080/xcat-test-1073741824.bin <file>` prints the same CRC-32.
+3. Write `net-test.txt` from the printed lines, with `<pc-ip>` replaced by the PC's LAN address (`ipconfig`):
+
+   ```
+   url=http://192.168.1.10:8080/xcat-test-1073741824.bin
+   size=1073741824
+   crc32=<printed by make_test_file.py>
+   ```
+
+   Optional lines: `save=yes` also writes the file to `E:\xcat\net-test.bin` (network and disk together, like a real install; delete the file afterwards), and `attempts=N` (default 40, about half an hour of outage) sets how many consecutive failures end the test.
+
+**On the console:**
+
+| Step | Where | How |
+|---|---|---|
+| 1 | xemu (optional) | Enable networking (**Settings → Network**, NAT). The PC is then usually `10.0.2.2`. Put `net-test.txt` on the E: partition of the HDD image, then **Load Disc →** `app/net-test/xcat-net-test.iso`. A small `--size 100M` file is enough here. |
+| 2 | Hardware | FTP `net-test.txt` to `E:\xcat\` and `app/net-test/bin/default.xbe` to e.g. `E:\Apps\xcat-net-test\`. Launch it. Let it run to the end once without touching anything. |
+| 3 | Hardware | Launch it again. After about 30 s, **pull the network cable** for 30–60 s, then plug it back in. The screen should show retries ("The server stopped responding" or "network connection failed"), then progress resuming from where it stopped, never from 0. |
+| 4 | Hardware (optional) | Once more with `save=yes`, for the speed with the disk writes included. |
+
+A run passes when the screen ends with "CRC-32 … matches, PASS". The same text is in `E:\xcat\net-test.log`; fetch it over FTP and record in the results log: the average MB/s, the retries and the longest pause (step 3), and the disk-write line (step 4). The MB/s figure also sizes the install buffers ([ARCHITECTURE.md §6](ARCHITECTURE.md)).
 
 ## FATX probe (M2)
 

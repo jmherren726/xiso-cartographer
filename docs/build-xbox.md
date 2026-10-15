@@ -48,8 +48,9 @@ The first image build compiles nxdk's tools and libraries. Docker caches it afte
 | `app/bin/samples/small.iso` | Bundled synthetic test image (the `small` fixture: dummy data, never a game). The app installs it when `E:\xcat\isos\` is empty. |
 | `app/xiso-cartographer.iso` | Disc image containing `app/bin/` (the XBE and `samples/`). Boots directly in xemu. |
 | `app/fatx-probe/bin/default.xbe`, `app/fatx-probe/xcat-fatx-probe.iso` | The FATX probe: a test tool that measures what file names and paths the console's FATX driver accepts. See [testing.md](testing.md#fatx-probe-m2). |
+| `app/net-test/bin/default.xbe`, `app/net-test/xcat-net-test.iso` | The network test: downloads a test file from a PC over HTTP and reports MB/s, retries and the CRC-32. See [testing.md](testing.md#m3-network-download-test). |
 
-Every CI run also uploads both files as the `xiso-cartographer-xbe-<sha>` artifact (`xbe` job).
+Every CI run also uploads all of these files as the `xiso-cartographer-xbe-<sha>` artifact (`xbe` job).
 
 ## Run in xemu
 

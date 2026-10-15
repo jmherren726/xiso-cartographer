@@ -51,6 +51,7 @@ Status: ✅ exists · 🔜 next milestone · ⏳ later.
 | `version` | Library version (`xc_version_string`, `xc_version_number`) | M0 | ✅ |
 | `error` | `xc_err` result codes and user-readable messages (`xcat/error.h`) | M1 | ✅ |
 | `source` | `xc_source` random-access byte source + in-memory source (`xcat/source.h`) | M1 | ✅ |
+| `crc32` | CRC-32 (zip/zlib variant) for checking downloads and, in M5b, zip members (`xcat/crc32.h`) | M3 | ✅ |
 | `xdvdfs` | Find the game partition (xiso, XGD1/2/3) and walk the directory trees; produce an offset-sorted file list ([xdvdfs.md](formats/xdvdfs.md), `xcat/xdvdfs.h`) | M1 | ✅ |
 | `extract` | Pull byte ranges from a `ByteSource` and write them to a `Sink`, coalescing small gaps into one span (`xcat/extract.h`). Output matches extract-xiso byte for byte. Journal/resume and hash verification follow with the network install | M1 ✅ (local), M4 (resume), M5 (hashes) | ✅ local |
 | `fatx` | FATX rules measured on the console: check that a game's files can be stored (names ≤ 42 bytes, allowed bytes, paths ≤ 250, ≤ 4,096 entries per directory) and refuse it otherwise; generate valid install folder names ([fatx-names.md](formats/fatx-names.md), [ADR 0008](adr/0008-refuse-games-fatx-cant-store.md), `xcat/fatx.h`) | M2 | ✅ |
@@ -74,8 +75,8 @@ The core reaches the outside world only through small structs of function pointe
 | Interface | Provides | Implemented by |
 |---|---|---|
 | `xc_io` | open/read/write/seek/close files, create directories, free space | nxdk (FATX), host (stdio/POSIX) |
-| [`xc_net`](../core/include/xcat/net.h) | TCP connect/send/recv/close with timeouts, DNS | host ([`xc_host_net`](../platform/host/include/xcat/host.h): Winsock/BSD sockets) ✅; nxdk (lwIP) in M3 |
-| [`xc_clock`](../core/include/xcat/net.h) | a monotonic clock and sleep (for timeouts and backoff); wall-clock time for TLS is added in M5 | nxdk (kernel time + NTP), host |
+| [`xc_net`](../core/include/xcat/net.h) | TCP connect/send/recv/close with timeouts, DNS | host ([`xc_host_net`](../platform/host/include/xcat/host.h): Winsock/BSD sockets) ✅; nxdk ([`xc_nx_net`](../platform/nxdk/include/xcat/nxdk.h): lwIP) ✅, on hardware in the M3 network test |
+| [`xc_clock`](../core/include/xcat/net.h) | a monotonic clock and sleep (for timeouts and backoff); wall-clock time for TLS is added in M5 | nxdk (`xc_nx_clock`: CPU performance counter; NTP for wall-clock time in M5), host (`xc_host_clock`) |
 | `xc_log` | levelled logging | nxdk (`E:\Apps\xcat\xcat.log`, rotated), host (stderr) |
 
 The streaming abstractions used by `extract`:

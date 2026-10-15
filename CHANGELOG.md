@@ -34,6 +34,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - HTTP client (`xcat/http_client.h`) over the new `xc_net`/`xc_clock` platform interfaces (`xcat/net.h`): `Range` requests for one remote file, up to 5 redirects with per-hop credentials, keep-alive, timeouts, retries with jittered backoff and `Retry-After`, and resume after a dropped connection without delivering any byte twice. Detects servers that ignore `Range` and files that change mid-download. `xc_http_source` exposes a remote file as an `xc_source`. New error codes for network and HTTP failures.
 - `xcat-cli get <url> <file>`: downloads a file over plain HTTP with the core client, on host sockets (`xc_host_net`, Winsock or BSD) and a monotonic clock (`xc_host_clock`). Shows retries, progress and MB/s; `--timeout` and `--attempts` tune the retry behaviour.
 - Range test server (tools/testserver/rangeserver.py) with scripted faults: redirects, error statuses with `Retry-After`, dropped and stalled connections, `200` instead of `206`, chunked bodies, a file that changes mid-download. 24 end-to-end `get_*` tests run `xcat-cli get` against it in CI.
+- Network test XBE (`app/net-test`, M3): downloads a test file from a PC over the LAN with the core HTTP client and reports progress, every retry (e.g. while the cable is pulled), average MB/s and the CRC-32, on screen and in `E:\xcat\net-test.log`. Xbox networking (`xc_nx_net`, lwIP) and clock (`xc_nx_clock`) in `platform/nxdk`. `tools/testserver/make_test_file.py` makes the deterministic test file and prints its size and CRC-32.
+- CRC-32 (`xcat/crc32.h`), the zip/zlib variant. `xcat-cli get` now prints the CRC-32 of the download.
 
 ### Changed
 
