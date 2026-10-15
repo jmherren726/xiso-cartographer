@@ -14,6 +14,7 @@ PLATFORM_DIR := $(ROOT_DIR)/platform/nxdk
 # libxcat is compiled straight into the XBE: core/ is portable C with no
 # platform dependencies, so it needs no separate library build here.
 SRCS = $(CURDIR)/main.c \
+       $(CORE_DIR)/src/crc32.c \
        $(CORE_DIR)/src/error.c \
        $(CORE_DIR)/src/extract.c \
        $(CORE_DIR)/src/fatx.c \

@@ -9,6 +9,7 @@
 #if defined(_WIN32)
 
 #include <direct.h>
+#include <io.h>
 #include <wchar.h>
 #include <windows.h>
 
@@ -98,9 +99,52 @@ bool xc_host_remove(const char *path)
     return ok;
 }
 
+bool xc_host_exists(const char *path)
+{
+    wchar_t *w = long_wide_path(path);
+    if (w == NULL) {
+        return false;
+    }
+    bool ok = GetFileAttributesW(w) != INVALID_FILE_ATTRIBUTES;
+    free(w);
+    return ok;
+}
+
+bool xc_host_dir_free_space(const char *path, uint64_t *bytes)
+{
+    wchar_t *w = long_wide_path(path);
+    if (w == NULL) {
+        return false;
+    }
+    /* Walk up to a folder that exists (the games folder may not have been made yet). */
+    ULARGE_INTEGER avail;
+    bool ok = false;
+    for (;;) {
+        if (GetDiskFreeSpaceExW(w, &avail, NULL, NULL)) {
+            *bytes = avail.QuadPart;
+            ok = true;
+            break;
+        }
+        wchar_t *cut = wcsrchr(w, L'\\');
+        if (cut == NULL || cut <= w + 6) { /* stop at the drive: "\\?\C:\" */
+            break;
+        }
+        *cut = L'\0';
+    }
+    free(w);
+    return ok;
+}
+
+bool xc_host_sync(FILE *f)
+{
+    return fflush(f) == 0 && _commit(_fileno(f)) == 0;
+}
+
 #else
 
 #include <sys/stat.h>
+#include <sys/statvfs.h>
+#include <unistd.h>
 
 FILE *xc_host_fopen(const char *path, const char *mode)
 {
@@ -115,6 +159,53 @@ bool xc_host_mkdir(const char *path)
 bool xc_host_remove(const char *path)
 {
     return remove(path) == 0;
+}
+
+bool xc_host_exists(const char *path)
+{
+    struct stat st;
+    return stat(path, &st) == 0;
+}
+
+bool xc_host_dir_free_space(const char *path, uint64_t *bytes)
+{
+    size_t n = strlen(path);
+    char *p = malloc(n + 1);
+    if (p == NULL) {
+        return false;
+    }
+    memcpy(p, path, n + 1);
+    /* Walk up to a folder that exists (the games folder may not have been made yet). */
+    bool ok = false;
+    for (;;) {
+        struct statvfs vs;
+        if (statvfs(p[0] != '\0' ? p : ".", &vs) == 0) {
+            *bytes = (uint64_t)vs.f_bavail * (uint64_t)vs.f_frsize;
+            ok = true;
+            break;
+        }
+        char *cut = strrchr(p, '/');
+        if (cut == NULL) {
+            p[0] = '\0'; /* a relative path: try the current folder */
+            continue;
+        }
+        if (cut == p) {
+            cut[1] = '\0'; /* "/" */
+            if (statvfs(p, &vs) == 0) {
+                *bytes = (uint64_t)vs.f_bavail * (uint64_t)vs.f_frsize;
+                ok = true;
+            }
+            break;
+        }
+        *cut = '\0';
+    }
+    free(p);
+    return ok;
+}
+
+bool xc_host_sync(FILE *f)
+{
+    return fflush(f) == 0 && fsync(fileno(f)) == 0;
 }
 
 #endif

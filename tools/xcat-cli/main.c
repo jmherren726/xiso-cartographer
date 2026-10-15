@@ -7,6 +7,9 @@
  *   xcat-cli layout <image>             where directory tables sit vs. file data (ADR 0009)
  *   xcat-cli get [options] <url> <file> download a file over HTTP with Range (docs/formats/http.md)
  *   xcat-cli map [options] <map-file>   check a map file and list its entries (docs/formats/map.md)
+ *   xcat-cli install [options] <url|image> <games-dir> [title]
+ *                                       install like the console: resumable, verified
+ * (xcat/install.h)
  *
  * Exit status: 0 success, 1 failure (for map: any error line), 2 usage error, 3 not
  * installable (check).
@@ -23,6 +26,7 @@
 #include "xcat/fatx.h"
 #include "xcat/host.h"
 #include "xcat/http_client.h"
+#include "xcat/install.h"
 #include "xcat/map.h"
 #include "xcat/version.h"
 #include "xcat/xdvdfs.h"
@@ -31,16 +35,19 @@
 
 static int usage(void)
 {
-    (void)fprintf(stderr,
-                  "xcat-cli %s\n"
-                  "usage: xcat-cli list <image>\n"
-                  "       xcat-cli extract <image> <out-dir>\n"
-                  "       xcat-cli check <image> [title]\n"
-                  "       xcat-cli layout <image>\n"
-                  "       xcat-cli get [--timeout <ms>] [--attempts <n>] [--credentials <file>]\n"
-                  "                    <url> <file>\n"
-                  "       xcat-cli map [--credentials <file>] <map-file>\n",
-                  xc_version_string());
+    (void)fprintf(
+        stderr,
+        "xcat-cli %s\n"
+        "usage: xcat-cli list <image>\n"
+        "       xcat-cli extract <image> <out-dir>\n"
+        "       xcat-cli check <image> [title]\n"
+        "       xcat-cli layout <image>\n"
+        "       xcat-cli get [--timeout <ms>] [--attempts <n>] [--credentials <file>]\n"
+        "                    <url> <file>\n"
+        "       xcat-cli map [--credentials <file>] <map-file>\n"
+        "       xcat-cli install [--timeout <ms>] [--attempts <n>] [--credentials <file>]\n"
+        "                        <url|image> <games-dir> [title]\n",
+        xc_version_string());
     return 2;
 }
 
@@ -123,7 +130,8 @@ static int cmd_extract(const char *image, const char *out)
     xc_extract_stats st;
     memset(&st, 0, sizeof st);
     if (err == XC_OK) {
-        xc_extract_opts opts = {buf, IO_BUFFER_SIZE, XC_EXTRACT_DEFAULT_GAP, NULL, NULL};
+        xc_extract_opts opts = {buf, IO_BUFFER_SIZE, XC_EXTRACT_DEFAULT_GAP, NULL, NULL, NULL, NULL,
+                                NULL};
         err = xc_extract(&src, &l, &sink, &opts, &st);
         xc_host_dir_sink_close(&ds);
     }
@@ -696,10 +704,221 @@ static int cmd_map(int argc, char **argv)
     return rc;
 }
 
+/* --- install --------------------------------------------------------------------------- */
+
+static int hexval(char c)
+{
+    if (c >= '0' && c <= '9') {
+        return c - '0';
+    }
+    if (c >= 'a' && c <= 'f') {
+        return c - 'a' + 10;
+    }
+    if (c >= 'A' && c <= 'F') {
+        return c - 'A' + 10;
+    }
+    return -1;
+}
+
+/* A title from a URL's file name: "http://h/x/Game%20(E).xiso.iso?a" -> "Game (E)". */
+static void title_from_url(const char *url, char *out, size_t size)
+{
+    char name[512] = "";
+    const char *end = url + strcspn(url, "?#");
+    const char *p = end;
+    while (p > url && p[-1] != '/') {
+        p--;
+    }
+    char *o = name;
+    while (p < end && o < name + sizeof name - 1) {
+        int hi = p[0] == '%' && end - p >= 3 ? hexval(p[1]) : -1;
+        int lo = hi >= 0 ? hexval(p[2]) : -1;
+        if (lo >= 0) {
+            *o++ = (char)(hi * 16 + lo);
+            p += 3;
+        } else {
+            /* p < end, and end = url + strcspn(url, ...) never passes the terminator; the
+               analyzer only sees that the offset came from argv. */
+            *o++ = *p++; /* NOLINT(clang-analyzer-security.ArrayBound) */
+        }
+    }
+    *o = '\0';
+    title_from_path(name, out, size);
+}
+
+typedef struct install_ui {
+    const xc_clock *clock;
+    uint64_t start_ms;
+    uint64_t next_ms;
+    int phase; /* the last xc_install_phase shown, -1 before the first */
+} install_ui;
+
+static bool install_progress(void *ctx, const xc_install_progress *p)
+{
+    install_ui *ui = ctx;
+    uint64_t now = ui->clock->now_ms(ui->clock->ctx);
+    if ((int)p->phase != ui->phase) {
+        ui->phase = (int)p->phase;
+        ui->next_ms = 0;
+        (void)fprintf(stderr, "%s\n",
+                      p->phase == XC_INSTALL_WRITING     ? "  writing files"
+                      : p->phase == XC_INSTALL_VERIFYING ? "  verifying (read-back)"
+                                                         : "  reading tables");
+    }
+    if (now >= ui->next_ms && p->bytes_total > 0) {
+        ui->next_ms = now + 2000U;
+        (void)fprintf(stderr, "  %.1f of %.1f MiB, file %zu of %zu\n", mib(p->bytes_done),
+                      mib(p->bytes_total), p->files_done, p->file_count);
+    }
+    return true;
+}
+
+static int install_fail(const xc_install_result *r, const http_env *env, const char *what,
+                        xc_err err)
+{
+    switch (err) {
+    case XC_ERR_NOT_INSTALLABLE:
+        (void)printf("not installable: %s (%zu problem%s)\n", xc_err_str(err), r->problem_count,
+                     r->problem_count == 1 ? "" : "s");
+        for (size_t i = 0; i < r->problem_count && i < XC_INSTALL_MAX_PROBLEMS; i++) {
+            const xc_fatx_problem *p = &r->problems[i];
+            (void)printf("  %s: %s\n", p->path,
+                         p->kind == XC_FATX_PROBLEM_NAME            ? name_problem(p->name)
+                         : p->kind == XC_FATX_PROBLEM_PATH_TOO_LONG ? "path too long"
+                                                                    : "too many entries");
+        }
+        return 3;
+    case XC_ERR_NO_SPACE:
+        (void)fprintf(stderr, "xcat-cli: %s: needs %.1f MiB, %.1f MiB free\n", r->folder,
+                      mib(r->space_needed), mib(r->space_free));
+        return 1;
+    case XC_ERR_VERIFY:
+        (void)fprintf(stderr,
+                      "xcat-cli: %s: %s; it was removed, so running the install again "
+                      "rewrites it\n",
+                      r->bad_file, xc_err_str(err));
+        return 1;
+    default:
+        break;
+    }
+    if (env != NULL) {
+        return get_fail(&env->client, what, err);
+    }
+    return fail(what, err);
+}
+
+static bool is_url(const char *s)
+{
+    return strncmp(s, "http://", 7) == 0 || strncmp(s, "https://", 8) == 0 ||
+           strncmp(s, "HTTP://", 7) == 0 || strncmp(s, "HTTPS://", 8) == 0;
+}
+
+static int cmd_install(int argc, char **argv)
+{
+    net_opts o;
+    int i = parse_net_opts(argc, argv, &o);
+    if (i < 0 || (argc - i != 2 && argc - i != 3)) {
+        return usage();
+    }
+    const char *image = argv[i];
+    const char *games = argv[i + 1];
+    char title[256];
+    if (argc - i == 3) {
+        (void)snprintf(title, sizeof title, "%s", argv[i + 2]);
+    } else if (is_url(image)) {
+        title_from_url(image, title, sizeof title);
+    } else {
+        title_from_path(image, title, sizeof title);
+    }
+
+    static http_env env; /* large; one install per run */
+    static xc_http_resource res;
+    static xc_http_source hs;
+    xc_host_file hf = {NULL};
+    xc_source src;
+    xc_clock clock;
+    xc_host_clock(&clock);
+    bool remote = is_url(image);
+    xc_err err = XC_OK;
+    if (remote) {
+        err = xc_http_resource_init(&res, image, strlen(image));
+        if (err != XC_OK) {
+            return fail(image, err);
+        }
+        err = env_open(&env, &o);
+        if (err != XC_OK) {
+            return fail("network", err);
+        }
+        err = xc_http_source_open(&src, &hs, &env.client, &res);
+        if (err != XC_OK) {
+            int rc = get_fail(&env.client, image, err);
+            env_close(&env);
+            return rc;
+        }
+    } else {
+        err = xc_host_file_open(&src, &hf, image);
+        if (err != XC_OK) {
+            return fail(image, err);
+        }
+    }
+
+    xc_install_io io;
+    xc_host_install_io(&io);
+    uint8_t *buf = malloc(IO_BUFFER_SIZE);
+    install_ui ui = {&clock, clock.now_ms(clock.ctx), 0, -1};
+    xc_install_req req;
+    memset(&req, 0, sizeof req);
+    req.src = &src;
+    req.etag = remote && res.etag[0] != '\0' ? res.etag : NULL;
+    req.last_modified = remote && res.last_modified[0] != '\0' ? res.last_modified : NULL;
+    req.source_name = image;
+    req.games_dir = games;
+    req.title = title;
+    req.io = &io;
+    req.buf = buf;
+    req.buf_size = IO_BUFFER_SIZE;
+    req.cluster_size = 16384U; /* a retail E: partition, like the console's estimate */
+    req.progress = install_progress;
+    req.progress_ctx = &ui;
+    static xc_install_result r;
+    err = buf != NULL ? xc_install(&req, &r) : XC_ERR_NOMEM;
+    uint64_t ms = clock.now_ms(clock.ctx) - ui.start_ms;
+    int rc = 0;
+    if (r.other_folder_reason != NULL) {
+        (void)fprintf(stderr, "  not using the existing folder for \"%s\": %s\n", title,
+                      r.other_folder_reason);
+    }
+    if (err == XC_OK) {
+        (void)printf("installed %zu files into %s (%zu written, %zu kept from an earlier attempt%s)"
+                     "\n%" PRIu64 " bytes written, %" PRIu64 " read in %.1f s (%.1f MB/s), "
+                     "verified\n",
+                     r.file_count, r.folder, r.files_written, r.files_skipped,
+                     r.resumed ? ", resumed" : "", r.bytes_written, r.bytes_read,
+                     (double)ms / 1000.0, mb_per_s(r.bytes_read, ms));
+    } else {
+        if (r.resumed || r.files_written > 0) {
+            (void)fprintf(stderr,
+                          "  %zu files are done in %s; running the same install again resumes\n",
+                          r.files_written + r.files_skipped, r.folder);
+        }
+        rc = install_fail(&r, remote ? &env : NULL, image, err);
+    }
+    free(buf);
+    if (remote) {
+        env_close(&env);
+    } else {
+        xc_host_file_close(&hf);
+    }
+    return rc;
+}
+
 int main(int argc, char **argv)
 {
     if (argc >= 2 && strcmp(argv[1], "get") == 0) {
         return cmd_get(argc - 2, argv + 2);
+    }
+    if (argc >= 2 && strcmp(argv[1], "install") == 0) {
+        return cmd_install(argc - 2, argv + 2);
     }
     if (argc >= 2 && strcmp(argv[1], "map") == 0) {
         return cmd_map(argc - 2, argv + 2);

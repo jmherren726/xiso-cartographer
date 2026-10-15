@@ -41,6 +41,7 @@ xc_err xc_host_file_open(xc_source *src, xc_host_file *hf, const char *path)
         return XC_ERR_IO;
     }
     src->read_at = file_read_at;
+    src->read_stream = NULL;
     src->ctx = hf;
     src->size = (uint64_t)end;
     return XC_OK;

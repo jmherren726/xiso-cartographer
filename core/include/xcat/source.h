@@ -10,6 +10,9 @@
 extern "C" {
 #endif
 
+/* Receives streamed bytes; `offset` is the source offset of data[0]. Non-OK stops the stream. */
+typedef xc_err (*xc_source_data_fn)(void *ctx, uint64_t offset, const uint8_t *data, size_t len);
+
 /*
  * A random-access, read-only byte source: a local file, an HTTP Range
  * endpoint, or memory (docs/ARCHITECTURE.md §4). The core never knows which.
@@ -23,6 +26,14 @@ typedef struct xc_source {
     xc_err (*read_at)(void *ctx, uint64_t offset, void *buf, size_t len);
     void *ctx;
     uint64_t size; /* total size in bytes */
+    /*
+     * Optional (NULL if the source has none): streams [offset, offset + len) to
+     * `fn` in order, each byte exactly once, in pieces of any size. An HTTP
+     * source serves a whole span with one Range request this way (ADR 0004 §3),
+     * instead of one request per read_at. The range must lie inside [0, size).
+     */
+    xc_err (*read_stream)(void *ctx, uint64_t offset, uint64_t len, xc_source_data_fn fn,
+                          void *fn_ctx);
 } xc_source;
 
 /* Reads through a source after checking the range against its size. */

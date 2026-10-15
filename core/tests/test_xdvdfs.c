@@ -337,7 +337,7 @@ static xc_err failing_read(void *ctx, uint64_t offset, void *buf, size_t len)
 
 static void test_read_errors_propagate(void)
 {
-    xc_source src = {failing_read, NULL, sizeof img};
+    xc_source src = {failing_read, NULL, sizeof img, NULL};
     xc_xdvdfs_volume vol;
     TEST_ASSERT_EQUAL_INT(XC_ERR_IO, xc_xdvdfs_open(&src, &vol));
 }

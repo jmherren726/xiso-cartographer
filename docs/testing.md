@@ -7,7 +7,7 @@ Every change climbs as far up this ladder as it affects (see [HANDOFF.md §4](HA
 1. **Host unit tests:** `ctest --preset host-debug`. Run by CI on Linux and Windows for every pull request.
    - Parser and extractor tests use the synthetic xiso fixtures from [tools/fixtures/](../tools/fixtures/README.md) (small, deep, XGD1/XGD2/XGD3 full-disc, and >4 GiB with `-DXCAT_LARGE_FIXTURES=ON`; CMake generates them at build time). CI checks the fixtures themselves against extract-xiso.
    - Every parser also has a libFuzzer target. CTest replays its seeds on every build, and CI fuzzes each parser for 60 s per run ([CONTRIBUTING.md#fuzzing](../CONTRIBUTING.md#fuzzing)).
-2. **Host integration tests:** `xcat-cli` against the fixture images (`extract_*`, `check_*`, `layout_*`) and against the Range test server with scripted faults (`get_*`, [tools/testserver/](../tools/testserver/README.md)). Also run by CTest; HTTPS joins in M5.
+2. **Host integration tests:** `xcat-cli` against the fixture images (`extract_*`, `check_*`, `layout_*`) and against the Range test server with scripted faults (`get_*`, `install_*` including installs killed mid-way and resumed, `map_cli`; [tools/testserver/](../tools/testserver/README.md)). Also run by CTest; HTTPS joins in M5.
 3. **xemu:** manual for now. Needs your own BIOS/MCPX/HDD files, which can't go in CI. See [build-xbox.md](build-xbox.md#run-in-xemu).
 4. **Real hardware:** manual. See [build-xbox.md](build-xbox.md#run-on-hardware).
 

@@ -73,7 +73,10 @@ static xc_err sink_end_file(void *ctx, bool complete)
     if (ds->f == NULL) {
         return XC_ERR_INVALID_ARG;
     }
-    bool ok = fclose(ds->f) == 0;
+    /* A completed file is flushed to the device before end_file returns: the install journal
+       records it next (docs/formats/journal.md §2.3). */
+    bool synced = !complete || xc_host_sync(ds->f);
+    bool ok = fclose(ds->f) == 0 && synced;
     ds->f = NULL;
     ok = ok && complete && ds->written == ds->expected;
     if (!ok) {

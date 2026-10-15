@@ -571,6 +571,14 @@ static xc_err source_read_at(void *ctx, uint64_t offset, void *buf, size_t len)
     return xc_http_read(hs->client, hs->res, offset, len, copy_out, &cc);
 }
 
+/* A whole span in one request (xc_source.read_stream). */
+static xc_err source_read_stream(void *ctx, uint64_t offset, uint64_t len, xc_source_data_fn fn,
+                                 void *fn_ctx)
+{
+    xc_http_source *hs = ctx;
+    return xc_http_read(hs->client, hs->res, offset, len, fn, fn_ctx);
+}
+
 xc_err xc_http_source_open(xc_source *src, xc_http_source *hs, xc_http_client *c,
                            xc_http_resource *r)
 {
@@ -584,6 +592,7 @@ xc_err xc_http_source_open(xc_source *src, xc_http_source *hs, xc_http_client *c
     hs->client = c;
     hs->res = r;
     src->read_at = source_read_at;
+    src->read_stream = source_read_stream;
     src->ctx = hs;
     src->size = r->size;
     return XC_OK;

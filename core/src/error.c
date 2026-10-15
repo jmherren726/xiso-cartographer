@@ -53,6 +53,12 @@ const char *xc_err_str(xc_err err)
         return "The credentials file is invalid, so no credentials are used";
     case XC_ERR_MAP:
         return "The map file can't be used";
+    case XC_ERR_NO_SPACE:
+        return "Not enough free space on the drive";
+    case XC_ERR_VERIFY:
+        return "An installed file doesn't match what was downloaded";
+    case XC_ERR_FOLDER:
+        return "No free install folder name left for this title";
     case XC_ERR_COUNT_:
         break;
     }

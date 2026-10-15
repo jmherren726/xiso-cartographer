@@ -262,7 +262,8 @@ static bool install(const char *file)
     DWORD start = GetTickCount();
     if (err == XC_OK) {
         progress pr = {-1};
-        xc_extract_opts opts = {io_buf, IO_BUF_SIZE, XC_EXTRACT_DEFAULT_GAP, on_progress, &pr};
+        xc_extract_opts opts = {io_buf, IO_BUF_SIZE, XC_EXTRACT_DEFAULT_GAP, on_progress, &pr, NULL,
+                                NULL,   NULL};
         err = xc_extract(&src, &l, &sink, &opts, &st);
         xc_nx_dir_sink_close(&ds);
     }

@@ -32,6 +32,9 @@ typedef enum xc_err {
     XC_ERR_UNSUPPORTED,     /* not supported by this version (e.g. https before M5) */
     XC_ERR_CREDENTIALS,     /* the credentials file is invalid (credentials.md §7) */
     XC_ERR_MAP,             /* the map file itself is rejected (map.md §7) */
+    XC_ERR_NO_SPACE,        /* not enough free space for the install */
+    XC_ERR_VERIFY,          /* an installed file doesn't match what was received */
+    XC_ERR_FOLDER,          /* no free install folder name (ADR 0008 numbering ran out) */
     XC_ERR_COUNT_           /* number of codes; not an error */
 } xc_err;
 

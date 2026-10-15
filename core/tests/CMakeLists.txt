@@ -87,6 +87,8 @@ xcat_add_test(test_crc32)
 xcat_add_test(test_credentials)
 xcat_add_test(test_map)
 xcat_add_test(test_journal)
+xcat_add_test(test_install ARGS ${XCAT_FIXTURES_DIR})
+add_dependencies(test_install xcat_fixtures)
 xcat_add_test(test_xdvdfs ARGS ${XCAT_FIXTURES_DIR} ${XCAT_FIXTURES})
 add_dependencies(test_xdvdfs xcat_fixtures)
 xcat_add_test(test_extract)
@@ -132,6 +134,21 @@ foreach(_name IN LISTS _get_scenarios)
     COMMAND ${Python3_EXECUTABLE} -I ${PROJECT_SOURCE_DIR}/tools/testserver/test_get.py
             --cli $<TARGET_FILE:xcat-cli> --work ${CMAKE_BINARY_DIR}/get-tests ${_name})
   xcat_test_env(get_${_name})
+endforeach()
+
+# `xcat-cli install` end to end: fixtures over HTTP, resume after a kill, verification
+# (tools/testserver/test_install.py).
+execute_process(
+  COMMAND ${Python3_EXECUTABLE} -I ${PROJECT_SOURCE_DIR}/tools/testserver/test_install.py --list
+  OUTPUT_VARIABLE _install_scenarios OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ERROR_IS_FATAL ANY)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  ${PROJECT_SOURCE_DIR}/tools/testserver/test_install.py)
+foreach(_name IN LISTS _install_scenarios)
+  add_test(NAME install_${_name}
+    COMMAND ${Python3_EXECUTABLE} -I ${PROJECT_SOURCE_DIR}/tools/testserver/test_install.py
+            --cli $<TARGET_FILE:xcat-cli> --fixtures ${XCAT_FIXTURES_DIR}
+            --work ${CMAKE_BINARY_DIR}/install-tests ${_name})
+  xcat_test_env(install_${_name})
 endforeach()
 
 # `xcat-cli map` end to end: local and HTTP includes, problems and the exit status.

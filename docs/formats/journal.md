@@ -1,6 +1,6 @@
 # Install journal format (`xcat-journal`), version 1
 
-**Status:** Normative. Implemented by `xcat/journal.h` (M4). The reasons behind it are in [ADR 0004](../adr/0004-streaming-install.md) §4: installs must survive cable pulls and power cuts, and resume without downloading finished files again.
+**Status:** Normative. Implemented by `xcat/journal.h` (format, reading) and `xcat/install.h` (the life cycle of §2, §6 and §7), M4. The reasons behind it are in [ADR 0004](../adr/0004-streaming-install.md) §4: installs must survive cable pulls and power cuts, and resume without downloading finished files again.
 
 The journal is a small text file in the install folder. It says which image the install comes from and which files are already complete. The installer appends one line per finished file and deletes the journal when the install is complete and verified. No user ever edits it.
 
