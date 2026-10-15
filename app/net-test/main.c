@@ -11,7 +11,9 @@
  *   attempts=40         consecutive failures before giving up (default 40, about 30 minutes)
  *
  * The file is served from a PC with tools/testserver/rangeserver.py. Results go on screen
- * and into E:\xcat\net-test.log. See docs/testing.md ("M3 network test").
+ * and are appended to E:\xcat\net-test.log. Resume works within a run (lost connection);
+ * a power cut starts over, since nothing is journaled to disk until M4. See docs/testing.md
+ * ("M3 network test").
  */
 #include <hal/debug.h>
 #include <hal/video.h>
@@ -33,6 +35,7 @@
 #define WRITE_BUF_SIZE ((size_t)1024 * 1024) /* large writes: FATX is slow with small ones */
 #define DEFAULT_ATTEMPTS 40U
 #define REPORT_EVERY_MS 5000U
+#define LOG_MAX_BYTES (1024U * 1024U) /* the log is appended to; past this it starts over */
 
 static HANDLE log_file = INVALID_HANDLE_VALUE;
 
@@ -256,8 +259,19 @@ int main(void)
         debugPrint("Can't use the E: drive\n");
         halt();
     }
-    log_file = CreateFileA(LOG, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    out("xiso-cartographer %s network test\n", xc_version_string());
+    /* Each run is appended, so a run after a reboot doesn't erase the one before it. */
+    log_file = CreateFileA(LOG, GENERIC_WRITE, 0, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (log_file != INVALID_HANDLE_VALUE) {
+        DWORD end = SetFilePointer(log_file, 0, NULL, FILE_END);
+        if (end == INVALID_SET_FILE_POINTER || end > LOG_MAX_BYTES) {
+            SetFilePointer(log_file, 0, NULL, FILE_BEGIN); /* too big or unreadable: start over */
+            SetEndOfFile(log_file);
+        } else if (end > 0) {
+            DWORD put = 0;
+            (void)WriteFile(log_file, "\n", 1, &put, NULL);
+        }
+    }
+    out("==== xiso-cartographer %s network test ====\n", xc_version_string());
     static config cfg;
     if (!read_config(&cfg)) {
         halt();
@@ -323,7 +337,9 @@ int main(void)
         }
     }
     if (err == XC_OK) {
-        out("Downloading (pull the cable any time; it should resume)...\n");
+        /* Progress lives in memory only: resuming after a power cut or reboot is M4's journal. */
+        out("Downloading. Pull the network cable any time: it should resume where it stopped.\n"
+            "(A power cut or reboot starts the test over; resuming across those comes in M4.)\n");
         r.start_ms = now_ms(&r);
         r.next_report_ms = r.start_ms + REPORT_EVERY_MS;
         err = xc_http_read(&client, &res, 0, res.size, on_data, &r);

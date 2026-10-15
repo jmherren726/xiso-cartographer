@@ -25,6 +25,7 @@ Newest first. "Build" is the commit or CI artifact tested.
 
 | Date | Milestone | Build | Where | Result | Notes |
 |---|---|---|---|---|---|
+| 2026-10-15 | M3 (step 2) | #35 CI artifact (`c208e95`) | Hardware: main console (see bench), LAN to a Windows PC running `rangeserver.py` | ✅ Pass | 1 GiB test file (`make_test_file.py --size 1G`) downloaded twice: **1,073,741,824 bytes in 90 s, 11.8 MB/s average** (steady 11.8 MB/s throughout), 0 retries, CRC-32 `6775e853` matches both times. About the same as the console's FTP upload (~11.7 MB/s), so the HTTP client isn't the bottleneck. A power cut mid-download restarted the test from 0 on the next boot, as expected: the test keeps progress in memory only (resume across power cuts is M4). **Cable pull (step 3) still to do.** |
 | 2026-10-14 | M2 (step 3) | `main` after #25 (local Docker build) | Hardware: main console (see bench) | ✅ Pass | One of the owner's retail games, full-disc dump trimmed with `extract-xiso -r` to a 3,112,328,144-byte xiso, copied by FTP to `E:\xcat\isos\` (~11.7 MB/s), installed: **21 files in 211,952 ms (~14,340 KB/s, ~14.7 MB/s)**. Read-back verify: all 21 files match. **The installed game launches and plays from the dashboard.** M2 exit test met. |
 | 2026-10-14 | M2 (step 2) | `main` after #25 (local Docker build) | Hardware: main console (see bench) | ✅ Pass | `app/bin/` (XBE + `samples/`) copied by FTP. Bundled `small.iso` installed to `E:\Games\small`: 9 files in 19 ms (10,141 KB/s; tiny image, so not a throughput figure). Read-back verify: all 9 files match. |
 | 2026-10-14 | M2 (step 1) | `feat/onbox-extract` (local Docker build) | xemu v0.8.136, kernel 1.0.4627.1 | ✅ Pass | Bundled `small.iso` copied to `E:\xcat\isos\`, installed to `E:\Games\small`: 9 files, 3 folders, 192 KB in 62 ms (3,107 KB/s, emulated disk). Read-back verify: all 9 files match the image. "Done: 1 of 1 image(s) installed and verified." |
@@ -71,7 +72,9 @@ A run passes when the screen ends with "Done: N of N image(s) installed and veri
 | 3 | Hardware | Launch it again. After about 30 s, **pull the network cable** for 30–60 s, then plug it back in. The screen should show retries ("The server stopped responding" or "network connection failed"), then progress resuming from where it stopped, never from 0. |
 | 4 | Hardware (optional) | Once more with `save=yes`, for the speed with the disk writes included. |
 
-A run passes when the screen ends with "CRC-32 … matches, PASS". The same text is in `E:\xcat\net-test.log`; fetch it over FTP and record in the results log: the average MB/s, the retries and the longest pause (step 3), and the disk-write line (step 4). The MB/s figure also sizes the install buffers ([ARCHITECTURE.md §6](ARCHITECTURE.md)).
+The cable pull tests a lost connection within one run. A power cut or reboot can't be resumed by this test: it keeps its progress in memory only, so the next launch starts from 0. Resuming an install after a power cut is M4's exit test (a journal on disk).
+
+A run passes when the screen ends with "CRC-32 … matches, PASS". Each run is appended to `E:\xcat\net-test.log` (it starts over past 1 MiB); fetch it over FTP and record in the results log: the average MB/s, the retries and the longest pause (step 3), and the disk-write line (step 4). The MB/s figure also sizes the install buffers ([ARCHITECTURE.md §6](ARCHITECTURE.md)).
 
 ## FATX probe (M2)
 
