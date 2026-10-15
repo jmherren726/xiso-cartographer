@@ -2,22 +2,30 @@
 #define XCAT_HOST_H
 
 /*
- * Host (PC) platform adapters for tests and xcat-cli: a file-backed xc_source
- * and a directory xc_sink. Never built for the Xbox (docs/ARCHITECTURE.md §2).
+ * Host (PC) platform adapters for tests and xcat-cli: a file-backed xc_source,
+ * a directory xc_sink, and sockets and a clock for the HTTP client. Never built
+ * for the Xbox (docs/ARCHITECTURE.md §2).
  *
  * Paths are UTF-8. On Windows they are converted to UTF-16 and given the
  * "\\?\" long-path prefix, so paths over MAX_PATH (e.g. 255-character XDVDFS
  * names) work without the LongPathsEnabled policy.
  */
 
+#include <stdbool.h>
 #include <stdio.h>
 
+#include "xcat/net.h"
 #include "xcat/sink.h"
 #include "xcat/source.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/* fopen with a UTF-8 path; long paths work on Windows. */
+FILE *xc_host_fopen(const char *path, const char *mode);
+/* Deletes a file (UTF-8 path); returns true on success. */
+bool xc_host_remove(const char *path);
 
 typedef struct xc_host_file {
     FILE *f;
@@ -41,6 +49,19 @@ typedef struct xc_host_dir_sink {
  */
 xc_err xc_host_dir_sink_open(xc_sink *sink, xc_host_dir_sink *ds, const char *root);
 void xc_host_dir_sink_close(xc_host_dir_sink *ds);
+
+/*
+ * Networking (xcat/net.h) over the OS sockets API: Winsock on Windows, BSD
+ * sockets elsewhere. Call xc_host_net_startup() once before using `net` and
+ * xc_host_net_cleanup() at the end. Name lookup uses getaddrinfo(), which can't
+ * be cancelled, so the connect timeout starts after it returns.
+ */
+xc_err xc_host_net_startup(void);
+void xc_host_net_cleanup(void);
+void xc_host_net(xc_net *net);
+
+/* Monotonic milliseconds and sleep (xcat/net.h). */
+void xc_host_clock(xc_clock *clock);
 
 #ifdef __cplusplus
 }

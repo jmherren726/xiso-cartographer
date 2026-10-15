@@ -45,7 +45,10 @@ build/host-debug/tools/xcat-cli/xcat-cli list <image>               # layout + e
 build/host-debug/tools/xcat-cli/xcat-cli extract <image> <out-dir>  # same output as extract-xiso -x
 build/host-debug/tools/xcat-cli/xcat-cli check <image> [title]      # can the Xbox HDD store it?
 build/host-debug/tools/xcat-cli/xcat-cli layout <image>             # can it be installed in one pass?
+build/host-debug/tools/xcat-cli/xcat-cli get <url> <file>           # download over HTTP with Range and resume
 ```
+
+`get` speaks plain `http://` only for now (HTTPS arrives in M5) and reports retries and MB/s on the way. [tools/testserver](tools/testserver/README.md) has a local Range server, with optional faults, to try it against.
 
 **Xbox app** (needs Docker):
 
