@@ -1,0 +1,96 @@
+#ifndef XCAT_MAP_H
+#define XCAT_MAP_H
+
+/*
+ * Map files (docs/formats/map.md): which URL holds the user's image of each
+ * title. Loading never stops at one bad line (§7): invalid lines are skipped and
+ * reported, and every valid entry is kept. `@include` targets are fetched through
+ * a caller-provided callback, so core never touches files or sockets itself.
+ */
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#include "xcat/error.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define XC_MAP_MAX_FILE ((size_t)1024 * 1024) /* §6, bytes per file */
+#define XC_MAP_MAX_LINE 2048                  /* §6, bytes without the line ending */
+#define XC_MAP_MAX_ENTRIES 10000              /* §6, after expansion */
+#define XC_MAP_MAX_DEPTH 4                    /* §6, include nesting */
+#define XC_MAP_MAX_FILES 32                   /* §6, top-level map plus includes */
+#define XC_MAP_MAX_PROBLEMS 256               /* §7, stored; more are only counted */
+#define XC_MAP_MAX_VARIANT 16                 /* §4.1 */
+#define XC_MAP_VERSION_MAJOR 1
+
+typedef struct xc_map_entry {
+    uint32_t title_id;
+    char variant[XC_MAP_MAX_VARIANT + 1]; /* upper case; "" for the title's default entry */
+    char *url;                            /* as written (trimmed); owned */
+    size_t source;                        /* index into xc_map.sources */
+    size_t line;
+} xc_map_entry;
+
+typedef enum xc_map_severity {
+    XC_MAP_ERROR,   /* the line (or file) was skipped */
+    XC_MAP_WARNING, /* nothing was skipped */
+} xc_map_severity;
+
+typedef struct xc_map_problem {
+    xc_map_severity severity;
+    size_t source; /* index into xc_map.sources */
+    size_t line;   /* 1-based; 0 for the file as a whole */
+    char message[200];
+} xc_map_problem;
+
+typedef struct xc_map {
+    xc_map_entry *entries;
+    size_t entry_count;
+    xc_map_problem *problems;
+    size_t problem_count;    /* stored, at most XC_MAP_MAX_PROBLEMS */
+    size_t problems_dropped; /* reported beyond that */
+    size_t error_count;      /* all errors, stored or not */
+    char **sources;          /* locations of the files loaded; [0] is the top-level map */
+    size_t source_count;
+    /* internal */
+    size_t entry_cap;
+} xc_map;
+
+/*
+ * Fetches an included map. `location` is resolved already: an http(s) URL when
+ * `is_url`, otherwise a local path (relative paths are joined to the including
+ * map's directory with its separator). On success *data is a malloc'd buffer the
+ * map takes ownership of; return XC_ERR_LIMIT if the file is larger than
+ * `max_len` bytes, or another error if it can't be read.
+ */
+typedef xc_err (*xc_map_fetch_fn)(void *ctx, const char *location, bool is_url, size_t max_len,
+                                  char **data, size_t *len);
+
+typedef struct xc_map_loader {
+    xc_map_fetch_fn fetch; /* NULL: every @include fails with "includes not available" */
+    void *ctx;
+} xc_map_loader;
+
+/*
+ * Loads the top-level map from data[0, len); `location` names it in messages and
+ * is the base for relative includes. Returns XC_OK even when lines were skipped
+ * (see map->error_count); XC_ERR_MAP when the top-level file itself is rejected
+ * (too large, bad header: map->problems says why, and there are no entries);
+ * XC_ERR_NOMEM. Free the map with xc_map_free in every case.
+ */
+xc_err xc_map_load(const char *data, size_t len, const char *location, const xc_map_loader *loader,
+                   xc_map *map);
+void xc_map_free(xc_map *map);
+
+/* The entry for a title and variant ("" or NULL for none), falling back to the default (§4.1). */
+const xc_map_entry *xc_map_find(const xc_map *map, uint32_t title_id, const char *variant);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* XCAT_MAP_H */

@@ -1,0 +1,10 @@
+# xcat-map v1
+0000000B http://h.lan/x
+0000000 = http://h.lan/x
+0000000B = ftp://h.lan/x
+0000000B = http://u:p@h.lan/x
+0000000B = http://h.lan/x#y
+@
+@Include x
+@include
+0000000B = http://h.lan/cafÃ©.iso

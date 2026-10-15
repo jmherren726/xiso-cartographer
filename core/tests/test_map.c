@@ -1,0 +1,441 @@
+/* Tests for the map loader (core/src/map.c, docs/formats/map.md). */
+#include "unity.h"
+#include "xcat/map.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define HDR "# xcat-map v1\n"
+#define U1 "http://192.168.1.20:8080/a.iso"
+
+static xc_map map;
+
+/* --- a fake file system for @include ------------------------------------------------------ */
+
+typedef struct ffile {
+    const char *location;
+    const char *text;
+} ffile;
+
+static const ffile *files;
+static size_t nfiles;
+static int fetches;
+static char fetched[64][256];
+
+static xc_err fake_fetch(void *ctx, const char *location, bool is_url, size_t max_len, char **data,
+                         size_t *len)
+{
+    (void)ctx;
+    (void)is_url;
+    TEST_ASSERT_EQUAL_size_t(XC_MAP_MAX_FILE, max_len);
+    if (fetches < 64) {
+        (void)snprintf(fetched[fetches], sizeof fetched[0], "%s", location);
+    }
+    fetches++;
+    for (size_t i = 0; i < nfiles; i++) {
+        if (strcmp(files[i].location, location) == 0) {
+            size_t n = strlen(files[i].text);
+            if (n > max_len) {
+                return XC_ERR_LIMIT;
+            }
+            *data = malloc(n == 0 ? 1 : n); /* exactly the size: the loader must not assume more */
+            TEST_ASSERT_NOT_NULL(*data);
+            memcpy(*data, files[i].text, n);
+            *len = n;
+            return XC_OK;
+        }
+    }
+    return XC_ERR_IO;
+}
+
+static const xc_map_loader loader = {fake_fetch, NULL};
+
+static void set_files(const ffile *f, size_t n)
+{
+    files = f;
+    nfiles = n;
+    fetches = 0;
+}
+
+void setUp(void)
+{
+    memset(&map, 0, sizeof map);
+    set_files(NULL, 0);
+}
+
+void tearDown(void)
+{
+    xc_map_free(&map);
+}
+
+static xc_err load_at(const char *text, const char *location)
+{
+    xc_map_free(&map);
+    return xc_map_load(text, strlen(text), location, &loader, &map);
+}
+
+static xc_err load(const char *text)
+{
+    return load_at(text, "E:\\xcat\\map.txt");
+}
+
+/* Some problem has this severity, line and message fragment. */
+static void expect_problem(xc_map_severity sev, size_t line, const char *what)
+{
+    for (size_t i = 0; i < map.problem_count; i++) {
+        const xc_map_problem *p = &map.problems[i];
+        if (p->severity == sev && p->line == line && strstr(p->message, what) != NULL) {
+            return;
+        }
+    }
+    char msg[512];
+    int n = snprintf(msg, sizeof msg, "no %s on line %zu with \"%s\"; have:",
+                     sev == XC_MAP_ERROR ? "error" : "warning", line, what);
+    for (size_t i = 0; i < map.problem_count && n > 0 && (size_t)n < sizeof msg; i++) {
+        n += snprintf(msg + n, sizeof msg - (size_t)n, " [%zu: %s]", map.problems[i].line,
+                      map.problems[i].message);
+    }
+    TEST_FAIL_MESSAGE(msg);
+}
+
+static const char *url_of(uint32_t id, const char *variant)
+{
+    const xc_map_entry *e = xc_map_find(&map, id, variant);
+    return e != NULL ? e->url : "-";
+}
+
+/* --- §1-§4 ---------------------------------------------------------------------------------- */
+
+static void test_spec_example(void)
+{
+    static const ffile inc[] = {
+        {"E:\\xcat\\more.txt", HDR "4D530064 = http://192.168.1.20:8080/xbox/Halo 2.iso\n"},
+    };
+    set_files(inc, 1);
+    TEST_ASSERT_EQUAL_INT(
+        XC_OK, load("# xcat-map v1\n# Lines starting with # are comments.\n\n"
+                    "4D530004       = https://archive.org/download/item/file.xiso.iso\n"
+                    "4d530004@pal   = http://192.168.1.20:8080/xbox/Halo (Europe).xiso.iso\n"
+                    "@include more.txt\n"
+                    "@archiveorg some-item_1.0\n"));
+    TEST_ASSERT_EQUAL_size_t(3, map.entry_count);
+    TEST_ASSERT_EQUAL_size_t(0, map.error_count);
+    TEST_ASSERT_EQUAL_STRING("https://archive.org/download/item/file.xiso.iso",
+                             url_of(0x4D530004U, NULL));
+    TEST_ASSERT_EQUAL_STRING("http://192.168.1.20:8080/xbox/Halo (Europe).xiso.iso",
+                             url_of(0x4D530004U, "pal"));
+    TEST_ASSERT_EQUAL_STRING("PAL", map.entries[1].variant);
+    TEST_ASSERT_EQUAL_size_t(5, map.entries[1].line);
+    TEST_ASSERT_EQUAL_STRING("http://192.168.1.20:8080/xbox/Halo 2.iso", url_of(0x4D530064U, ""));
+    TEST_ASSERT_EQUAL_size_t(2, map.source_count);
+    TEST_ASSERT_EQUAL_STRING("E:\\xcat\\more.txt", map.sources[1]);
+    TEST_ASSERT_EQUAL_size_t(1, map.entries[2].source);
+    expect_problem(XC_MAP_WARNING, 7, "not supported yet");
+    /* A variant without its own entry falls back to the default; another title has none. */
+    TEST_ASSERT_EQUAL_STRING("https://archive.org/download/item/file.xiso.iso",
+                             url_of(0x4D530004U, "NTSC-J"));
+    TEST_ASSERT_EQUAL_STRING("-", url_of(0x12345678U, NULL));
+    TEST_ASSERT_EQUAL_STRING("-", url_of(0x4D530064U - 1U, "PAL"));
+}
+
+static void test_lines_and_header(void)
+{
+    /* BOM, CRLF, leading blank lines, tabs, a minor version, '#' and '=' later in a URL. */
+    TEST_ASSERT_EQUAL_INT(XC_OK, load("\xEF\xBB\xBF\r\n \t\r\n\t#\txcat-map  v1.4 \r\n"
+                                      "\t0000ABCD=http://h.lan/x%23y.iso?a=b \r\n"
+                                      "00000001 = http://h.lan/last-line-no-newline.iso"));
+    TEST_ASSERT_EQUAL_size_t(2, map.entry_count);
+    TEST_ASSERT_EQUAL_STRING("http://h.lan/x%23y.iso?a=b", url_of(0xABCDU, NULL));
+    TEST_ASSERT_EQUAL_size_t(4, map.entries[0].line);
+    TEST_ASSERT_EQUAL_STRING("http://h.lan/last-line-no-newline.iso", url_of(1U, NULL));
+    /* File errors reject everything (§7). */
+    static const char *const bad_headers[] = {
+        "",
+        "\n\n",
+        "0000ABCD = http://192.168.1.20:8080/a.iso\n",
+        "# xcat-credentials v1\n",
+        "#xcat-map v1\n",
+        "# xcat-map 1\n",
+        "# xcat-map v01\n",
+        "# xcat-map v1.\n",
+        "# xcat-map v1 x\n",
+        "# XCAT-MAP v1\n",
+    };
+    for (size_t i = 0; i < sizeof bad_headers / sizeof bad_headers[0]; i++) {
+        TEST_ASSERT_EQUAL_INT(XC_ERR_MAP, load(bad_headers[i]));
+        TEST_ASSERT_EQUAL_size_t(0, map.entry_count);
+        TEST_ASSERT_EQUAL_size_t(1, map.error_count);
+        expect_problem(XC_MAP_ERROR, 0, "missing \"# xcat-map v1\" header");
+    }
+    TEST_ASSERT_EQUAL_INT(XC_ERR_MAP, load("# xcat-map v2\n0000ABCD = " U1 "\n"));
+    expect_problem(XC_MAP_ERROR, 0, "needs a newer xiso-cartographer (map format v2)");
+    TEST_ASSERT_EQUAL_INT(XC_ERR_MAP, load("# xcat-map v0.3\n"));
+    expect_problem(XC_MAP_ERROR, 0, "unsupported map format v0");
+}
+
+static void test_line_errors_keep_loading(void)
+{
+    TEST_ASSERT_EQUAL_INT(XC_OK, load(HDR "0000000A = " U1 "\n"                        /* 2 */
+                                          "0000000B " U1 "\n"                          /* 3 */
+                                          "0000000 = " U1 "\n"                         /* 4 */
+                                          "0000000G = " U1 "\n"                        /* 5 */
+                                          "0000000B@ = " U1 "\n"                       /* 6 */
+                                          "0000000B@ABCDEFGHIJKLMNOPQ = " U1 "\n"      /* 7 */
+                                          "0000000B@P.L = " U1 "\n"                    /* 8 */
+                                          "0000000B = ftp://h.lan/a.iso\n"             /* 9 */
+                                          "0000000B = http://user:pass@h.lan/a.iso\n"  /* 10 */
+                                          "0000000B = http://h.lan/a.iso#frag\n"       /* 11 */
+                                          "0000000B = http://h.lan/a\x01.iso\n"        /* 12 */
+                                          "0000000B = http://h..lan/a.iso\n"           /* 13 */
+                                          "0000000B = \n"                              /* 14 */
+                                          "0000000B = http://h.lan/caf\xC3.iso\n"      /* 15 */
+                                          "@\n"                                        /* 16 */
+                                          "@Include x\n"                               /* 17 */
+                                          "@include\n"                                 /* 18 */
+                                          "@archiveorg bad/id\n"                       /* 19 */
+                                          "@frobnicate 1\n"                            /* 20 */
+                                          "0000000C@ab_-9 = HTTPS://h.lan/ok.iso\n")); /* 21 */
+    TEST_ASSERT_EQUAL_size_t(2, map.entry_count);
+    TEST_ASSERT_EQUAL_STRING(U1, url_of(0xAU, NULL));
+    TEST_ASSERT_EQUAL_STRING("HTTPS://h.lan/ok.iso", url_of(0xCU, "AB_-9"));
+    expect_problem(XC_MAP_ERROR, 3, "expected \"<title-id> = <url>\"");
+    for (size_t line = 4; line <= 8; line++) {
+        expect_problem(XC_MAP_ERROR, line, "malformed key");
+    }
+    expect_problem(XC_MAP_ERROR, 9, "must start with http:// or https://");
+    expect_problem(XC_MAP_ERROR, 10, "user credentials");
+    expect_problem(XC_MAP_ERROR, 11, "'#'");
+    expect_problem(XC_MAP_ERROR, 12, "invalid URL");
+    expect_problem(XC_MAP_ERROR, 13, "invalid URL");
+    expect_problem(XC_MAP_ERROR, 14, "must start with http");
+    expect_problem(XC_MAP_ERROR, 15, "not valid UTF-8");
+    expect_problem(XC_MAP_ERROR, 16, "malformed directive");
+    expect_problem(XC_MAP_ERROR, 17, "malformed directive");
+    expect_problem(XC_MAP_ERROR, 18, "@include needs an argument");
+    expect_problem(XC_MAP_ERROR, 19, "invalid archive.org identifier");
+    expect_problem(XC_MAP_WARNING, 20, "unknown directive @frobnicate");
+    TEST_ASSERT_EQUAL_size_t(17, map.error_count);
+    /* Credentials in a URL never reach a message. */
+    for (size_t i = 0; i < map.problem_count; i++) {
+        TEST_ASSERT_NULL(strstr(map.problems[i].message, "pass"));
+    }
+}
+
+static void test_duplicates(void)
+{
+    TEST_ASSERT_EQUAL_INT(XC_OK, load(HDR "0000000A = http://h.lan/1.iso\n"
+                                          "0000000a@x = http://h.lan/x.iso\n"
+                                          "0000000A = http://h.lan/2.iso\n"
+                                          "0000000A@X = http://h.lan/x2.iso\n"));
+    TEST_ASSERT_EQUAL_size_t(2, map.entry_count);
+    TEST_ASSERT_EQUAL_STRING("http://h.lan/2.iso", url_of(0xAU, NULL));
+    TEST_ASSERT_EQUAL_STRING("http://h.lan/x2.iso", url_of(0xAU, "x"));
+    TEST_ASSERT_EQUAL_size_t(4, map.entries[0].line);
+    expect_problem(XC_MAP_WARNING, 4, "0000000A also defined at E:\\xcat\\map.txt:2");
+    expect_problem(XC_MAP_WARNING, 5, "0000000A@X also defined at E:\\xcat\\map.txt:3");
+    TEST_ASSERT_EQUAL_size_t(0, map.error_count);
+}
+
+static void test_lines_too_long_and_files_too_big(void)
+{
+    char *big = malloc(XC_MAP_MAX_FILE + 2);
+    TEST_ASSERT_NOT_NULL(big);
+    /* A 2048-byte entry line is fine; 2049 isn't, and only that line is lost. */
+    size_t n = (size_t)snprintf(big, XC_MAP_MAX_FILE, HDR "0000000A = http://h.lan/");
+    size_t pad = XC_MAP_MAX_LINE - (n - strlen(HDR));
+    memset(big + n, 'a', pad);
+    memcpy(big + n + pad, "\r\n0000000B = http://h.lan/", 27); /* the NUL is overwritten next */
+    size_t m = n + pad + 26;
+    memset(big + m, 'b', pad + 1);
+    memcpy(big + m + pad + 1, "\n", 2);
+    TEST_ASSERT_EQUAL_INT(XC_OK, load(big));
+    TEST_ASSERT_EQUAL_size_t(1, map.entry_count);
+    TEST_ASSERT_EQUAL_size_t(XC_MAP_MAX_LINE - 11, strlen(map.entries[0].url));
+    expect_problem(XC_MAP_ERROR, 3, "longer than 2048");
+    /* 1 MiB of comments is fine; one byte more rejects the file. */
+    memset(big, '#', XC_MAP_MAX_FILE + 1);
+    memcpy(big, HDR, sizeof HDR - 1);
+    for (size_t i = sizeof HDR + 99; i < XC_MAP_MAX_FILE; i += 100) {
+        big[i] = '\n';
+    }
+    xc_map_free(&map);
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_map_load(big, XC_MAP_MAX_FILE, "m", &loader, &map));
+    xc_map_free(&map);
+    TEST_ASSERT_EQUAL_INT(XC_ERR_MAP, xc_map_load(big, XC_MAP_MAX_FILE + 1, "m", &loader, &map));
+    expect_problem(XC_MAP_ERROR, 0, "larger than 1 MiB");
+    free(big);
+}
+
+static void test_entry_limit(void)
+{
+    size_t cap = (size_t)(XC_MAP_MAX_ENTRIES + 10) * 40U + 64U;
+    char *text = malloc(cap);
+    TEST_ASSERT_NOT_NULL(text);
+    size_t n = (size_t)snprintf(text, cap, HDR);
+    for (unsigned i = 0; i < XC_MAP_MAX_ENTRIES + 5U; i++) {
+        n += (size_t)snprintf(text + n, cap - n, "%08X = http://h.lan/%u.iso\n", i, i);
+    }
+    TEST_ASSERT_EQUAL_INT(XC_OK, load(text));
+    TEST_ASSERT_EQUAL_size_t(XC_MAP_MAX_ENTRIES, map.entry_count);
+    expect_problem(XC_MAP_ERROR, XC_MAP_MAX_ENTRIES + 2U, "more than 10000 entries");
+    TEST_ASSERT_EQUAL_size_t(1, map.error_count); /* loading stopped: no further problems */
+    free(text);
+}
+
+static void test_problem_cap(void)
+{
+    size_t cap = (size_t)(XC_MAP_MAX_PROBLEMS + 50) * 8U + 64U;
+    char *text = malloc(cap);
+    TEST_ASSERT_NOT_NULL(text);
+    size_t n = (size_t)snprintf(text, cap, HDR);
+    for (int i = 0; i < XC_MAP_MAX_PROBLEMS + 50; i++) {
+        n += (size_t)snprintf(text + n, cap - n, "bad\n");
+    }
+    TEST_ASSERT_EQUAL_INT(XC_OK, load(text));
+    TEST_ASSERT_EQUAL_size_t(XC_MAP_MAX_PROBLEMS, map.problem_count);
+    TEST_ASSERT_EQUAL_size_t(50, map.problems_dropped);
+    TEST_ASSERT_EQUAL_size_t(XC_MAP_MAX_PROBLEMS + 50U, map.error_count);
+    free(text);
+}
+
+/* --- §5.1: includes --------------------------------------------------------------------- */
+
+static void test_include_paths(void)
+{
+    static const ffile fs[] = {
+        {"E:\\xcat\\sub\\a.txt", HDR "00000001 = http://h.lan/1.iso\n@include b.txt\n"},
+        {"E:\\xcat\\sub\\b.txt", HDR "00000002 = http://h.lan/2.iso\n"},
+        {"E:\\xcat\\c.txt", HDR "00000003 = http://h.lan/3.iso\n"},
+        {"http://nas.lan:8080/maps/remote.txt", HDR "00000004 = http://h.lan/4.iso\n"
+                                                    "@include ../up.txt\n"
+                                                    "@include rel/r.txt\n"
+                                                    "@include /abs.txt\n"},
+        {"http://nas.lan:8080/maps/rel/r.txt", HDR "00000005 = http://h.lan/5.iso\n"},
+        {"http://nas.lan:8080/abs.txt", HDR "00000006 = http://h.lan/6.iso\n"},
+    };
+    set_files(fs, sizeof fs / sizeof fs[0]);
+    TEST_ASSERT_EQUAL_INT(XC_OK,
+                          load(HDR "@include sub/a.txt\n"                                /* 2 */
+                                   "@include c.txt\n"                                    /* 3 */
+                                   "@include HTTP://NAS.lan:8080/maps/x/../remote.txt\n" /* 4 */
+                                   "@include ..\\up.txt\n"                               /* 5 */
+                                   "@include sub/../c.txt\n"                             /* 6 */
+                                   "@include \\abs.txt\n"                                /* 7 */
+                                   "@include /abs.txt\n"                                 /* 8 */
+                                   "@include E:\\abs.txt\n"                              /* 9 */
+                                   "@include ftp://nas.lan/m.txt\n"                      /* 10 */
+                                   "@include missing.txt\n"));                           /* 11 */
+    TEST_ASSERT_EQUAL_STRING("http://h.lan/1.iso", url_of(1U, NULL));
+    TEST_ASSERT_EQUAL_STRING("http://h.lan/2.iso", url_of(2U, NULL));
+    TEST_ASSERT_EQUAL_STRING("http://h.lan/3.iso", url_of(3U, NULL));
+    TEST_ASSERT_EQUAL_STRING("http://h.lan/4.iso", url_of(4U, NULL));
+    TEST_ASSERT_EQUAL_STRING("http://h.lan/5.iso", url_of(5U, NULL));
+    TEST_ASSERT_EQUAL_STRING("-", url_of(6U, NULL)); /* "/abs.txt" is absolute, even remotely */
+    expect_problem(XC_MAP_ERROR, 5, "must not contain \"..\"");
+    expect_problem(XC_MAP_ERROR, 6, "must not contain \"..\"");
+    for (size_t line = 7; line <= 10; line++) {
+        expect_problem(XC_MAP_ERROR, line, "relative");
+    }
+    expect_problem(XC_MAP_ERROR, 11, "@include E:\\xcat\\missing.txt: Read or write failed");
+    /* Errors inside an include are reported against that file. */
+    size_t remote = 0;
+    for (size_t i = 0; i < map.source_count; i++) {
+        if (strcmp(map.sources[i], "http://nas.lan:8080/maps/remote.txt") == 0) {
+            remote = i;
+        }
+    }
+    TEST_ASSERT_TRUE(remote > 0);
+    bool found = false;
+    for (size_t i = 0; i < map.problem_count; i++) {
+        if (map.problems[i].source == remote && map.problems[i].line == 3) {
+            found = true;
+        }
+    }
+    TEST_ASSERT_TRUE_MESSAGE(found, "../up.txt in the remote map is reported there");
+}
+
+static void test_include_failures(void)
+{
+    static const ffile fs[] = {
+        {"m/self.txt", HDR "@include self.txt\n"},
+        {"m/a.txt", HDR "@include b.txt\n"},
+        {"m/b.txt", HDR "@include a.txt\n00000001 = http://h.lan/1.iso\n"},
+        {"m/noheader.txt", "00000002 = http://h.lan/2.iso\n"},
+        {"m/newer.txt", "# xcat-map v9\n00000002 = http://h.lan/2.iso\n"},
+        {"m/d1.txt", HDR "@include d2.txt\n"},
+        {"m/d2.txt", HDR "@include d3.txt\n"},
+        {"m/d3.txt", HDR "@include d4.txt\n"},
+        {"m/d4.txt", HDR "@include d5.txt\n00000004 = http://h.lan/4.iso\n"},
+        {"m/d5.txt", HDR "00000005 = http://h.lan/5.iso\n"},
+    };
+    set_files(fs, sizeof fs / sizeof fs[0]);
+    TEST_ASSERT_EQUAL_INT(XC_OK, load_at(HDR "@include self.txt\n"     /* 2 */
+                                             "@include a.txt\n"        /* 3 */
+                                             "@include noheader.txt\n" /* 4 */
+                                             "@include newer.txt\n"    /* 5 */
+                                             "@include d1.txt\n",      /* 6 */
+                                         "m/top.txt"));
+    TEST_ASSERT_EQUAL_STRING("http://h.lan/1.iso", url_of(1U, NULL)); /* b.txt's own line */
+    TEST_ASSERT_EQUAL_STRING("-", url_of(2U, NULL));
+    TEST_ASSERT_EQUAL_STRING("http://h.lan/4.iso", url_of(4U, NULL)); /* depth 4 is allowed */
+    TEST_ASSERT_EQUAL_STRING("-", url_of(5U, NULL));                  /* depth 5 isn't */
+    expect_problem(XC_MAP_ERROR, 2, "a cycle"); /* reported in self.txt, line 2 */
+    expect_problem(XC_MAP_ERROR, 4, "@include m/noheader.txt: not an xcat-map file");
+    expect_problem(XC_MAP_ERROR, 5, "@include m/newer.txt: this map needs a newer");
+    expect_problem(XC_MAP_ERROR, 2, "nests deeper than 4 levels");
+    /* Without a fetch callback, includes fail but everything else loads. */
+    xc_map_free(&map);
+    const char *t = HDR "@include a.txt\n00000001 = http://h.lan/1.iso\n";
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_map_load(t, strlen(t), "m/top.txt", NULL, &map));
+    expect_problem(XC_MAP_ERROR, 2, "isn't available here");
+    TEST_ASSERT_EQUAL_size_t(1, map.entry_count);
+}
+
+static void test_file_limit(void)
+{
+    static ffile fs[40];
+    static char names[40][16];
+    for (int i = 0; i < 40; i++) {
+        (void)snprintf(names[i], sizeof names[i], "f%d.txt", i);
+        fs[i].location = names[i];
+        fs[i].text = HDR;
+    }
+    set_files(fs, 40);
+    char text[1024];
+    size_t n = (size_t)snprintf(text, sizeof text, HDR);
+    for (int i = 0; i < 40; i++) {
+        n += (size_t)snprintf(text + n, sizeof text - n, "@include f%d.txt\n", i);
+    }
+    TEST_ASSERT_EQUAL_INT(XC_OK, load_at(text, "top.txt"));
+    TEST_ASSERT_EQUAL_size_t(XC_MAP_MAX_FILES, map.source_count);
+    TEST_ASSERT_EQUAL_INT(XC_MAP_MAX_FILES - 1, fetches);
+    expect_problem(XC_MAP_ERROR, 33, "more than 32 map files");
+    TEST_ASSERT_EQUAL_size_t(40 - (XC_MAP_MAX_FILES - 1), map.error_count);
+}
+
+static void test_find(void)
+{
+    TEST_ASSERT_EQUAL_INT(XC_OK, load(HDR "0000000A@PAL = http://h.lan/pal.iso\n"));
+    TEST_ASSERT_EQUAL_STRING("http://h.lan/pal.iso", url_of(0xAU, "pal"));
+    TEST_ASSERT_EQUAL_STRING("-", url_of(0xAU, NULL)); /* no default entry to fall back to */
+    TEST_ASSERT_EQUAL_STRING("-", url_of(0xAU, "ABCDEFGHIJKLMNOPQ"));
+    TEST_ASSERT_NULL(xc_map_find(NULL, 0xAU, NULL));
+}
+
+int main(void)
+{
+    UNITY_BEGIN();
+    RUN_TEST(test_spec_example);
+    RUN_TEST(test_lines_and_header);
+    RUN_TEST(test_line_errors_keep_loading);
+    RUN_TEST(test_duplicates);
+    RUN_TEST(test_lines_too_long_and_files_too_big);
+    RUN_TEST(test_entry_limit);
+    RUN_TEST(test_problem_cap);
+    RUN_TEST(test_include_paths);
+    RUN_TEST(test_include_failures);
+    RUN_TEST(test_file_limit);
+    RUN_TEST(test_find);
+    return UNITY_END();
+}

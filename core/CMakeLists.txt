@@ -7,7 +7,9 @@ add_library(xcat
   src/fatx.c
   src/http.c
   src/http_client.c
+  src/map.c
   src/source.c
+  src/text.c
   src/url.c
   src/version.c
   src/xdvdfs.c

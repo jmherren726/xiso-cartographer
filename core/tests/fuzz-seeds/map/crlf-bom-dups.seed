@@ -1,0 +1,5 @@
+﻿# xcat-map v1.2
+0000ABCD = http://h.lan/a%20b.iso?x=1
+0000abcd = http://h.lan/2.iso
+0000ABCD@j-1_x = HTTPS://h.lan:8443/c.iso
+@unknown arg
