@@ -31,6 +31,7 @@ We record every hard-to-reverse decision as an Architecture Decision Record (ADR
 | 0004 | Streaming install | MR-5 (accepted) |
 | 0005 | BearSSL for TLS | MR-5 (accepted) |
 | 0006 | No links, no bypasses, good-guest networking | MR-5 (accepted; amended by 0007) |
-| 0007 | Scoped user credentials for sources that need a login | Docs PR before MR-8 (accepted; implemented in M3–M6) |
+| 0007 | Scoped user credentials for sources that need a login | Docs PR before MR-8 (accepted; implemented in M3–M6; amended by 0010) |
 | 0008 | Refuse games whose files FATX can't store; choose the install folder name | M2 (accepted) |
 | 0009 | Install from zip archives by streaming the zip itself | Accepted; implemented in M5b |
+| 0010 | Logging in on the Xbox is required for the beta | Accepted; built in M8, verified in M9 |
