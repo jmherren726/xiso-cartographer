@@ -73,9 +73,14 @@ def deep_tree(fx: str) -> list:
 
 
 def large_tree(fx: str) -> list:
-    """>4 GiB image: a 32-bit-max-ish file, then files whose offsets exceed 2^32."""
+    """>4 GiB image: the largest file FATX can store, then files whose offsets exceed 2^32.
+
+    a_huge.bin is 4 GiB - 16 KiB, the most the console's FATX lets a file grow to on E:
+    (measured with app/fatx-probe v4; docs/formats/fatx-names.md §4b). It was 0xFFFFF800
+    until a hardware install showed that 14 KiB more can't be written.
+    """
     return [
-        file("a_huge.bin", 0xFFFFF800, Content("sparse", f"{fx}/a_huge.bin")),
+        file("a_huge.bin", 0xFFFFC000, Content("sparse", f"{fx}/a_huge.bin")),
         pat(fx, "b_after_4gib.bin", 1_048_576),
         pat(fx, "c_tail.bin", 3),
     ]

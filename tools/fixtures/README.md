@@ -20,7 +20,7 @@ Output is git-ignored, deterministic (byte-identical on every run and platform) 
 | `redump-xgd1` | Full disc, partition at `0x18300000` | 7.8 GB (sparse) | Partition detection and partition-relative sectors (XGD1); same tree as `small` |
 | `redump-xgd2` | Full disc, partition at `0x0FD90000` | 7.8 GB (sparse) | The same for XGD2 |
 | `redump-xgd3` | Full disc, partition at `0x02080000` | 8.7 GB (sparse) | The same for XGD3 |
-| `large` (`--large`) | xiso | 4.3 GB (sparse) | A file of 4,294,965,248 bytes (near the 32-bit size limit), then files whose offsets are past 4 GiB; 64-bit offset arithmetic |
+| `large` (`--large`) | xiso | 4.3 GB (sparse) | A file of 4,294,950,912 bytes (4 GiB − 16 KiB: the largest FATX stores, [fatx-names.md §4b](../../docs/formats/fatx-names.md)), then files whose offsets are past 4 GiB; 64-bit offset arithmetic |
 
 Negative cases (corrupt or hostile images) belong to the M1 parser tests and fuzzing, not this generator. The generator refuses to write invalid images.
 

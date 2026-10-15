@@ -98,6 +98,10 @@ static void check_entry(problems *pr, const xc_xdvdfs_entry *e, size_t install_d
     if (full > XC_FATX_MAX_PATH) {
         add(pr, XC_FATX_PROBLEM_PATH_TOO_LONG, XC_FATX_NAME_OK, e->path, full);
     }
+    /* §4b: only files have a size here (a directory's is its table, never near the limit). */
+    if ((e->attributes & 0x10U) == 0 && e->size > XC_FATX_MAX_FILE_SIZE) {
+        add(pr, XC_FATX_PROBLEM_FILE_TOO_BIG, XC_FATX_NAME_OK, e->path, e->size);
+    }
 }
 
 /* The listing path of directory `p` (len bytes), or "" for the install root. */

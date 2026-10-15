@@ -402,6 +402,8 @@ static const char *problem_text(const xc_fatx_problem *p)
         return "path over 250 characters";
     case XC_FATX_PROBLEM_TOO_MANY_ENTRIES:
         return "over 4096 entries in one folder";
+    case XC_FATX_PROBLEM_FILE_TOO_BIG:
+        return "file over 4 GiB - 16 KiB (FATX can't grow a file further)";
     }
     return "problem";
 }

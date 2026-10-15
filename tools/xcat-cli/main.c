@@ -247,6 +247,10 @@ static int cmd_check(const char *image, const char *title)
             (void)printf("  %s/: %zu entries in one folder (limit %d)\n",
                          p->path[0] != '\0' ? p->path : ".", p->value, XC_FATX_MAX_DIR_ENTRIES);
             break;
+        case XC_FATX_PROBLEM_FILE_TOO_BIG:
+            (void)printf("  %s: %zu bytes; FATX stores at most %u per file\n", p->path, p->value,
+                         XC_FATX_MAX_FILE_SIZE);
+            break;
         }
     }
     if (count > MAX_REPORTED) {
@@ -791,6 +795,7 @@ static int install_fail(const xc_install_result *r, const http_env *env, const c
             (void)printf("  %s: %s\n", p->path,
                          p->kind == XC_FATX_PROBLEM_NAME            ? name_problem(p->name)
                          : p->kind == XC_FATX_PROBLEM_PATH_TOO_LONG ? "path too long"
+                         : p->kind == XC_FATX_PROBLEM_FILE_TOO_BIG  ? "file too big for FATX"
                                                                     : "too many entries");
         }
         return 3;

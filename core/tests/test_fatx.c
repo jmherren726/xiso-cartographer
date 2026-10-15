@@ -83,6 +83,27 @@ static void test_valid_listing_has_no_problems(void)
     TEST_ASSERT_EQUAL_size_t(0, count);
 }
 
+/* §4b: measured on hardware (probe v4): 4 GiB - 16 KiB grows fine, one byte more doesn't. */
+static void test_file_size_limit(void)
+{
+    xc_xdvdfs_entry files[] = {entry("max.bin", 0x20), entry("over.bin", 0x20),
+                               entry("way-over.bin", 0x20)};
+    files[0].size = 4294950912U; /* 4 GiB - 16 KiB */
+    files[1].size = 4294950913U;
+    files[2].size = 0xFFFFFFFFU;
+    xc_xdvdfs_entry dirs[] = {entry("d", 0x10)};
+    dirs[0].size = 0xFFFFFFFFU; /* a directory's size is its table: never checked here */
+    xc_xdvdfs_listing l = {files, 3, dirs, 1, 0, NULL};
+    xc_fatx_problem p[4];
+    size_t count = 0;
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_fatx_check_listing(&l, 11, p, 4, &count));
+    TEST_ASSERT_EQUAL_size_t(2, count);
+    TEST_ASSERT_EQUAL_INT(XC_FATX_PROBLEM_FILE_TOO_BIG, p[0].kind);
+    TEST_ASSERT_EQUAL_STRING("over.bin", p[0].path);
+    TEST_ASSERT_EQUAL_size_t(4294950913U, p[0].value);
+    TEST_ASSERT_EQUAL_STRING("way-over.bin", p[1].path);
+}
+
 static void test_bad_names_are_reported(void)
 {
     char long_name[44];
@@ -247,5 +268,6 @@ int main(void)
     RUN_TEST(test_title_names);
     RUN_TEST(test_random_titles_always_valid);
     RUN_TEST(test_numbered_names);
+    RUN_TEST(test_file_size_limit);
     return UNITY_END();
 }
