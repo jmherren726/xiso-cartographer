@@ -449,6 +449,15 @@ static bool install(const xc_source *src, const char *name, const char *etag,
         return true;
     }
     out("  NOT INSTALLED: %s\n", xc_err_str(err));
+    if (result.current_file[0] != '\0') {
+        out("   at %s\n", result.current_file);
+    }
+    const char *op = NULL;
+    unsigned long code = 0;
+    xc_nx_last_io_error(&op, &code);
+    if (err == XC_ERR_IO && op != NULL) {
+        out("   the disk %s failed (error 0x%08lX)\n", op, code);
+    }
     if (err == XC_ERR_NOT_INSTALLABLE) {
         for (size_t i = 0; i < result.problem_count && i < XC_INSTALL_MAX_PROBLEMS; i++) {
             out("   %.48s: %s\n", result.problems[i].path, problem_text(&result.problems[i]));

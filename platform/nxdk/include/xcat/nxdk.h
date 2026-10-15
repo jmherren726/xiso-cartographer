@@ -40,6 +40,13 @@ typedef struct xc_nx_dir_sink {
 xc_err xc_nx_dir_sink_open(xc_sink *sink, xc_nx_dir_sink *ds, const char *root);
 void xc_nx_dir_sink_close(xc_nx_dir_sink *ds);
 
+/*
+ * The last file operation of the directory sink that failed, for messages: which call
+ * ("create", "write", "flush", "close") and its error (GetLastError() or NTSTATUS).
+ * *op is NULL if nothing has failed.
+ */
+void xc_nx_last_io_error(const char **op, unsigned long *code);
+
 /* Mounts E: (HDD partition 1) if needed. */
 bool xc_nx_mount_e(void);
 

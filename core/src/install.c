@@ -423,6 +423,9 @@ xc_err xc_install(const xc_install_req *req, xc_install_result *res)
     j->src.size = req->src->size;
     xc_err err = run_install(j);
     res->bytes_read = j->count.bytes;
+    if (err != XC_OK && j->p.current != NULL) {
+        (void)snprintf(res->current_file, sizeof res->current_file, "%s", j->p.current);
+    }
     xc_journal_state_free(&j->journal);
     xc_xdvdfs_listing_free(&j->listing);
     free(j->done);

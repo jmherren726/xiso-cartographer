@@ -67,6 +67,21 @@ void xc_nx_file_close(xc_nx_file *f)
 
 /* --- sink ---------------------------------------------------------------------- */
 
+static const char *last_op;
+static unsigned long last_code;
+
+static void io_failed(const char *op, unsigned long code)
+{
+    last_op = op;
+    last_code = code;
+}
+
+void xc_nx_last_io_error(const char **op, unsigned long *code)
+{
+    *op = last_op;
+    *code = last_code;
+}
+
 /* root + "\" + rel (with '/' -> '\'); false if it doesn't fit. */
 static bool join(char *out, const char *root, const char *rel)
 {
@@ -107,6 +122,7 @@ static xc_err sink_begin_file(void *ctx, const char *path, uint32_t size)
     HANDLE h = CreateFileA(ds->open_path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
                            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, NULL);
     if (h == INVALID_HANDLE_VALUE) {
+        io_failed("create", (unsigned long)GetLastError());
         return XC_ERR_IO;
     }
     ds->handle = h;
@@ -126,6 +142,7 @@ static xc_err sink_write(void *ctx, const void *buf, size_t len)
         DWORD chunk = len > 0x40000000U ? 0x40000000U : (DWORD)len;
         DWORD put = 0;
         if (!WriteFile(ds->handle, p, chunk, &put, NULL) || put != chunk) {
+            io_failed("write", (unsigned long)GetLastError());
             return XC_ERR_IO; /* e.g. disk full */
         }
         p += put;
@@ -144,8 +161,16 @@ static xc_err sink_end_file(void *ctx, bool complete)
     /* A completed file is on the disk before end_file returns: the install journal records it
        next (docs/formats/journal.md §2.3). */
     IO_STATUS_BLOCK io;
-    bool synced = !complete || NT_SUCCESS(NtFlushBuffersFile(ds->handle, &io));
-    bool ok = CloseHandle(ds->handle) != 0 && synced;
+    NTSTATUS flushed = complete ? NtFlushBuffersFile(ds->handle, &io) : STATUS_SUCCESS;
+    bool synced = NT_SUCCESS(flushed);
+    if (!synced) {
+        io_failed("flush", (unsigned long)flushed);
+    }
+    bool closed = CloseHandle(ds->handle) != 0;
+    if (!closed && synced) {
+        io_failed("close", (unsigned long)GetLastError());
+    }
+    bool ok = closed && synced;
     ds->handle = NULL;
     ok = ok && complete && ds->written == ds->expected;
     if (!ok) {

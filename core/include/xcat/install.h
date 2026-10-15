@@ -107,7 +107,8 @@ typedef struct xc_install_result {
     uint64_t bytes_read;   /* from the source, including directory tables and gaps */
     uint64_t space_needed; /* when XC_ERR_NO_SPACE */
     uint64_t space_free;
-    char bad_file[256]; /* XC_ERR_VERIFY: the first file that didn't match */
+    char bad_file[256];     /* XC_ERR_VERIFY: the first file that didn't match */
+    char current_file[256]; /* on any failure: the file being written or checked */
     /* XC_ERR_NOT_INSTALLABLE: problems[i].path points into problem_paths[i] (the listing is
        gone by the time xc_install returns), so read them through this struct, not a copy. */
     xc_fatx_problem problems[XC_INSTALL_MAX_PROBLEMS];

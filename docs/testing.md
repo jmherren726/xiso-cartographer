@@ -119,12 +119,13 @@ No authoritative list of FATX naming rules exists, and a game's files can't be r
 | Case | Is lookup case-insensitive; can `CASEPROBE` be created next to `CaseProbe`? |
 | Path length | Longest directory path and file path, excluding the drive |
 | Entries | Files in one directory, up to 5,000 |
+| File size (v4) | The largest file FATX stores: 4 GiB minus 2 clusters, minus 1 cluster, minus 1 cluster + 1 byte, minus 2 KiB, minus 1 byte. Each is set directly and also grown across the end by writing its last 1 MiB. Needs about 4.1 GB free on E: (skipped otherwise). Added after a 4,294,965,248-byte file failed at its end in the M4 test. |
 
 **How to run it:**
 
 1. `make docker-xbe` (or download the CI artifact) builds `app/fatx-probe/xcat-fatx-probe.iso` and `app/fatx-probe/bin/default.xbe`.
 2. **xemu:** Machine → Load Disc → the ISO. It needs an HDD image with a formatted E: partition. **Hardware:** FTP `default.xbe` to e.g. `E:\Apps\xcat-fatx-probe\` and launch it.
-3. Wait for "Done" (the entries test takes the longest), and note or photograph the summary.
+3. Wait for "Done" (the entries and file-size tests take the longest), and note or photograph the summary.
 4. Fetch `E:\xcat-fatx-probe.txt` over FTP (hardware). In xemu, the on-screen summary is enough unless something looks unexpected.
 
 ### Probe results
