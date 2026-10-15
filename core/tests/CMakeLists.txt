@@ -116,6 +116,20 @@ foreach(_name IN LISTS XCAT_FIXTURES)
   xcat_test_env(extract_${_name})
 endforeach()
 
+# End to end over the network: `xcat-cli get` against the Range test server, one test per
+# scenario (normal downloads, redirects, drops, stalls, error statuses; tools/testserver/).
+execute_process(
+  COMMAND ${Python3_EXECUTABLE} -I ${PROJECT_SOURCE_DIR}/tools/testserver/test_get.py --list
+  OUTPUT_VARIABLE _get_scenarios OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ERROR_IS_FATAL ANY)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  ${PROJECT_SOURCE_DIR}/tools/testserver/test_get.py)
+foreach(_name IN LISTS _get_scenarios)
+  add_test(NAME get_${_name}
+    COMMAND ${Python3_EXECUTABLE} -I ${PROJECT_SOURCE_DIR}/tools/testserver/test_get.py
+            --cli $<TARGET_FILE:xcat-cli> --work ${CMAKE_BINARY_DIR}/get-tests ${_name})
+  xcat_test_env(get_${_name})
+endforeach()
+
 # Fuzz seeds: the directory tables of the xiso fixtures, in the harness's input layout.
 set(XCAT_FUZZ_SEEDS_DIR ${CMAKE_BINARY_DIR}/fuzz-seeds)
 set(_seed_fixtures small deep)

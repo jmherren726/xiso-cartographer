@@ -5,6 +5,7 @@
  *   xcat-cli extract <image> <out-dir>  extract the image into out-dir
  *   xcat-cli check <image> [title]      can it be installed on the Xbox HDD? (ADR 0008)
  *   xcat-cli layout <image>             where directory tables sit vs. file data (ADR 0009)
+ *   xcat-cli get [options] <url> <file> download a file over HTTP with Range (docs/formats/http.md)
  *
  * Exit status: 0 success, 1 failure, 2 usage error, 3 not installable (check).
  */
@@ -17,6 +18,7 @@
 #include "xcat/extract.h"
 #include "xcat/fatx.h"
 #include "xcat/host.h"
+#include "xcat/http_client.h"
 #include "xcat/version.h"
 #include "xcat/xdvdfs.h"
 
@@ -29,7 +31,8 @@ static int usage(void)
                   "usage: xcat-cli list <image>\n"
                   "       xcat-cli extract <image> <out-dir>\n"
                   "       xcat-cli check <image> [title]\n"
-                  "       xcat-cli layout <image>\n",
+                  "       xcat-cli layout <image>\n"
+                  "       xcat-cli get [--timeout <ms>] [--attempts <n>] <url> <file>\n",
                   xc_version_string());
     return 2;
 }
@@ -302,8 +305,169 @@ static int cmd_layout(const char *image)
     return 0;
 }
 
+/* --- get ------------------------------------------------------------------------------- */
+
+typedef struct get_ctx {
+    FILE *f;
+    const xc_clock *clock;
+    uint64_t size;
+    uint64_t done;
+    uint64_t start_ms;
+    uint64_t next_report_ms;
+} get_ctx;
+
+/* Decimal megabytes per second, the unit docs/testing.md records. */
+static double mb_per_s(uint64_t bytes, uint64_t ms)
+{
+    return ms > 0 ? (double)bytes / 1000.0 / (double)ms : 0.0;
+}
+
+static xc_err get_write(void *ctx, uint64_t offset, const uint8_t *data, size_t len)
+{
+    get_ctx *g = ctx;
+    (void)offset; /* always g->done: the client delivers bytes in order, each once */
+    if (fwrite(data, 1, len, g->f) != len) {
+        return XC_ERR_IO;
+    }
+    g->done += len;
+    uint64_t now = g->clock->now_ms(g->clock->ctx);
+    if (now >= g->next_report_ms) {
+        g->next_report_ms = now + 2000U;
+        (void)fprintf(stderr, "  %.1f of %.1f MiB, %.1f MB/s\n", mib(g->done), mib(g->size),
+                      mb_per_s(g->done, now - g->start_ms));
+    }
+    return XC_OK;
+}
+
+static bool get_retry(void *ctx, const xc_http_retry *r)
+{
+    (void)ctx;
+    if (r->status != 0) {
+        (void)fprintf(stderr, "  HTTP %d, ", r->status);
+    } else {
+        (void)fprintf(stderr, "  %s, ", xc_err_str(r->err));
+    }
+    (void)fprintf(stderr, "retrying in %.1f s (failure %u of %u)\n", (double)r->delay_ms / 1000.0,
+                  r->failures, r->max_attempts);
+    return true;
+}
+
+static bool parse_uint(const char *s, unsigned long max, unsigned long *out)
+{
+    char *end = NULL;
+    if (s[0] < '0' || s[0] > '9') {
+        return false;
+    }
+    unsigned long v = strtoul(s, &end, 10);
+    if (*end != '\0' || v > max) {
+        return false;
+    }
+    *out = v;
+    return true;
+}
+
+static int get_fail(const xc_http_client *c, const char *url, xc_err err)
+{
+    if (err == XC_ERR_HTTP_STATUS || err == XC_ERR_HTTP_DENIED || err == XC_ERR_HTTP_NOT_FOUND) {
+        (void)fprintf(stderr, "xcat-cli: %s: %s (HTTP %d)\n", url, xc_err_str(err), c->last_status);
+        return 1;
+    }
+    return fail(url, err);
+}
+
+static int cmd_get(int argc, char **argv)
+{
+    unsigned long timeout_ms = 0;
+    unsigned long attempts = 0;
+    int i = 0;
+    for (; i + 1 < argc && strncmp(argv[i], "--", 2) == 0; i += 2) {
+        bool ok = false;
+        if (strcmp(argv[i], "--timeout") == 0) {
+            ok = parse_uint(argv[i + 1], 3600000UL, &timeout_ms) && timeout_ms > 0;
+        } else if (strcmp(argv[i], "--attempts") == 0) {
+            ok = parse_uint(argv[i + 1], 1000UL, &attempts) && attempts > 0;
+        }
+        if (!ok) {
+            return usage();
+        }
+    }
+    if (argc - i != 2) {
+        return usage();
+    }
+    const char *url = argv[i];
+    const char *out = argv[i + 1];
+
+    xc_http_resource res;
+    xc_err err = xc_http_resource_init(&res, url, strlen(url));
+    if (err != XC_OK) {
+        return fail(url, err);
+    }
+    err = xc_host_net_startup();
+    if (err != XC_OK) {
+        return fail("network", err);
+    }
+    xc_net net;
+    xc_clock clock;
+    xc_host_net(&net);
+    xc_host_clock(&clock);
+    uint8_t *buf = malloc(IO_BUFFER_SIZE);
+    if (buf == NULL) {
+        xc_host_net_cleanup();
+        return fail(url, XC_ERR_NOMEM);
+    }
+    xc_http_config cfg;
+    memset(&cfg, 0, sizeof cfg);
+    cfg.net = &net;
+    cfg.clock = &clock;
+    cfg.buf = buf;
+    cfg.buf_size = IO_BUFFER_SIZE;
+    cfg.timeout_ms = (uint32_t)timeout_ms;
+    cfg.max_attempts = (unsigned)attempts;
+    cfg.seed = (uint32_t)clock.now_ms(clock.ctx);
+    cfg.on_retry = get_retry;
+    xc_http_client client;
+    memset(&client, 0, sizeof client);
+    err = xc_http_client_init(&client, &cfg);
+
+    get_ctx g;
+    memset(&g, 0, sizeof g);
+    g.clock = &clock;
+    g.start_ms = clock.now_ms(clock.ctx);
+    g.next_report_ms = g.start_ms + 2000U;
+    if (err == XC_OK) {
+        err = xc_http_probe(&client, &res);
+    }
+    if (err == XC_OK) {
+        g.size = res.size;
+        g.f = xc_host_fopen(out, "wb");
+        err = g.f != NULL ? XC_OK : XC_ERR_IO;
+    }
+    if (err == XC_OK) {
+        err = xc_http_read(&client, &res, 0, res.size, get_write, &g);
+        if (fclose(g.f) != 0 && err == XC_OK) {
+            err = XC_ERR_IO;
+        }
+        if (err != XC_OK) {
+            (void)xc_host_remove(out); /* no partial files left behind */
+        }
+    }
+    uint64_t ms = clock.now_ms(clock.ctx) - g.start_ms;
+    int rc = err == XC_OK ? 0 : get_fail(&client, url, err);
+    xc_http_client_close(&client);
+    free(buf);
+    xc_host_net_cleanup();
+    if (rc == 0) {
+        (void)printf("downloaded %" PRIu64 " bytes in %.1f s (%.1f MB/s)\n", g.done,
+                     (double)ms / 1000.0, mb_per_s(g.done, ms));
+    }
+    return rc;
+}
+
 int main(int argc, char **argv)
 {
+    if (argc >= 2 && strcmp(argv[1], "get") == 0) {
+        return cmd_get(argc - 2, argv + 2);
+    }
     if (argc == 3 && strcmp(argv[1], "layout") == 0) {
         return cmd_layout(argv[2]);
     }
