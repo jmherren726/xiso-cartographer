@@ -16,6 +16,7 @@
 #include <string.h>
 
 #include "xcat/crc32.h"
+#include "xcat/credentials.h"
 #include "xcat/extract.h"
 #include "xcat/fatx.h"
 #include "xcat/host.h"
@@ -33,7 +34,8 @@ static int usage(void)
                   "       xcat-cli extract <image> <out-dir>\n"
                   "       xcat-cli check <image> [title]\n"
                   "       xcat-cli layout <image>\n"
-                  "       xcat-cli get [--timeout <ms>] [--attempts <n>] <url> <file>\n",
+                  "       xcat-cli get [--timeout <ms>] [--attempts <n>] [--credentials <file>]\n"
+                  "                    <url> <file>\n",
                   xc_version_string());
     return 2;
 }
@@ -369,8 +371,45 @@ static bool parse_uint(const char *s, unsigned long max, unsigned long *out)
     return true;
 }
 
+/*
+ * Loads a credentials file (docs/formats/credentials.md). Per §7 a bad or
+ * unreadable file is reported and the download goes on without credentials;
+ * returns true only if `c` holds credentials to use.
+ */
+static bool load_credentials(const char *path, xc_credentials *c)
+{
+    memset(c, 0, sizeof *c);
+    FILE *f = xc_host_fopen(path, "rb");
+    if (f == NULL) {
+        (void)fprintf(stderr, "xcat-cli: %s: can't read it; continuing without credentials\n",
+                      path);
+        return false;
+    }
+    char *data = malloc(XC_CRED_MAX_FILE + 1);
+    size_t len = data != NULL ? fread(data, 1, XC_CRED_MAX_FILE + 1, f) : 0;
+    bool read_ok = data != NULL && ferror(f) == 0;
+    (void)fclose(f);
+    xc_cred_error cerr;
+    xc_err err = read_ok ? xc_cred_parse(data, len, c, &cerr) : XC_ERR_IO;
+    free(data);
+    if (err == XC_ERR_CREDENTIALS) {
+        (void)fprintf(stderr, "xcat-cli: %s line %zu: %s; continuing without credentials\n", path,
+                      cerr.line, cerr.message);
+    } else if (err != XC_OK) {
+        (void)fprintf(stderr, "xcat-cli: %s: %s; continuing without credentials\n", path,
+                      xc_err_str(err));
+    }
+    return err == XC_OK;
+}
+
 static int get_fail(const xc_http_client *c, const char *url, xc_err err)
 {
+    if (err == XC_ERR_HTTP_DENIED && c->last_section != NULL) {
+        /* credentials.md §7: name the section, never its values. */
+        (void)fprintf(stderr, "xcat-cli: %s: login missing or expired for [%s] (HTTP %d)\n", url,
+                      c->last_section, c->last_status);
+        return 1;
+    }
     if (err == XC_ERR_HTTP_STATUS || err == XC_ERR_HTTP_DENIED || err == XC_ERR_HTTP_NOT_FOUND) {
         (void)fprintf(stderr, "xcat-cli: %s: %s (HTTP %d)\n", url, xc_err_str(err), c->last_status);
         return 1;
@@ -382,10 +421,14 @@ static int cmd_get(int argc, char **argv)
 {
     unsigned long timeout_ms = 0;
     unsigned long attempts = 0;
+    const char *cred_path = NULL;
     int i = 0;
     for (; i + 1 < argc && strncmp(argv[i], "--", 2) == 0; i += 2) {
         bool ok = false;
-        if (strcmp(argv[i], "--timeout") == 0) {
+        if (strcmp(argv[i], "--credentials") == 0 && cred_path == NULL) {
+            cred_path = argv[i + 1];
+            ok = true;
+        } else if (strcmp(argv[i], "--timeout") == 0) {
             ok = parse_uint(argv[i + 1], 3600000UL, &timeout_ms) && timeout_ms > 0;
         } else if (strcmp(argv[i], "--attempts") == 0) {
             ok = parse_uint(argv[i + 1], 1000UL, &attempts) && attempts > 0;
@@ -428,6 +471,13 @@ static int cmd_get(int argc, char **argv)
     cfg.max_attempts = (unsigned)attempts;
     cfg.seed = (uint32_t)clock.now_ms(clock.ctx);
     cfg.on_retry = get_retry;
+    xc_credentials creds;
+    xc_http_auth auth;
+    memset(&creds, 0, sizeof creds);
+    if (cred_path != NULL && load_credentials(cred_path, &creds)) {
+        xc_cred_http_auth(&auth, &creds);
+        cfg.auth = &auth;
+    }
     xc_http_client client;
     memset(&client, 0, sizeof client);
     err = xc_http_client_init(&client, &cfg);
@@ -457,6 +507,7 @@ static int cmd_get(int argc, char **argv)
     uint64_t ms = clock.now_ms(clock.ctx) - g.start_ms;
     int rc = err == XC_OK ? 0 : get_fail(&client, url, err);
     xc_http_client_close(&client);
+    xc_cred_free(&creds);
     free(buf);
     xc_host_net_cleanup();
     if (rc == 0) {

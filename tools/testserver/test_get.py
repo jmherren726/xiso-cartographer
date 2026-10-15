@@ -39,7 +39,16 @@ class Scenario:
     args: list[str] = field(default_factory=list)
     file: str = "big.bin"  # which served file a success must match
     check: str | None = None  # name of an extra check on the server's request log
+    creds: str | None = None  # credentials file to pass with --credentials ("-": a missing file)
 
+
+# A LAN-style section for the test server. 127.0.0.1 isn't a private range (credentials.md §6),
+# so over plain http the token must never be sent, even with allow_http.
+LOOPBACK_CREDS = (
+    "# xcat-credentials v1\n[lan]\nhosts = 127.0.0.1\nallow_http = yes\n"
+    "header = Authorization: Bearer test-token\n"
+)
+BAD_CREDS = "# xcat-credentials v1\n[lan]\nhosts = 127.0.0.1:*\nheader = Authorization: Bearer x\n"
 
 # --timeout 1000 keeps stalls short; the backoff (0.5-1 s, then 1-2 s) is the client's own.
 FAST = ["--timeout", "1000"]
@@ -71,6 +80,13 @@ SCENARIOS: dict[str, Scenario] = {
                     stderr="name lookup failed"),
     "https": Scenario("https://127.0.0.1:{port}/big.bin", ok=False, stderr="Not supported by this version"),
     "bad_url": Scenario("ftp://127.0.0.1/big.bin", ok=False, stderr="Invalid or unsupported URL"),
+    "creds_not_over_http": Scenario("/big.bin?auth=Bearer%20test-token", ok=False, creds=LOOPBACK_CREDS,
+                                    stderr=r"Access denied.*HTTP 401", check="no_authorization"),
+    "creds_unused_host": Scenario("/big.bin", creds=LOOPBACK_CREDS.replace("127.0.0.1", "192.168.77.7"),
+                                  check="no_authorization"),
+    "creds_bad_file": Scenario("/big.bin", creds=BAD_CREDS, check="no_authorization",
+                               stderr=r"line 3: \[lan\]: invalid host pattern; continuing without credentials"),
+    "creds_missing_file": Scenario("/big.bin", creds="-", stderr="can't read it; continuing without credentials"),
 }
 
 
@@ -115,6 +131,8 @@ def check_requests(name: str, srv: rangeserver.RangeServer) -> str | None:
         ranges = [r.get("range") for r in reqs]
         if ranges != ["bytes=0-0", f"bytes=0-{BIG - 1}", f"bytes=1500000-{BIG - 1}"]:
             return f"unexpected ranges: {ranges}"
+    if name == "no_authorization" and any("authorization" in r for r in reqs):
+        return "a credential was sent where credentials.md §6 forbids it"
     return None
 
 
@@ -134,6 +152,13 @@ def run(cli: str, work: str, name: str) -> int:
     root = os.path.join(scratch, "served")
     make_files(root)
     out = os.path.join(scratch, "download.bin")
+    args = list(sc.args)
+    if sc.creds is not None:
+        cred_file = os.path.join(scratch, "credentials")
+        if sc.creds != "-":
+            with open(cred_file, "w", encoding="utf-8", newline="\n") as f:
+                f.write(sc.creds)
+        args += ["--credentials", cred_file]
 
     srv = CountingServer(root)
     srv.start()
@@ -141,13 +166,13 @@ def run(cli: str, work: str, name: str) -> int:
         url = sc.url.format(port=srv.port, closed_port=closed_port())
         if url.startswith("/"):
             url = f"http://127.0.0.1:{srv.port}{url}"
-        result = subprocess.run([cli, "get", *sc.args, url, out], capture_output=True, text=True,
+        result = subprocess.run([cli, "get", *args, url, out], capture_output=True, text=True,
                                 timeout=120, check=False)
     finally:
         srv.shutdown()
         srv.server_close()
 
-    print(f"$ xcat-cli get {' '.join(sc.args)} {url}")
+    print(f"$ xcat-cli get {' '.join(args)} {url}")
     print(result.stdout + result.stderr, end="")
     problems = []
     if (result.returncode == 0) != sc.ok:

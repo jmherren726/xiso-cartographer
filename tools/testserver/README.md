@@ -14,6 +14,7 @@ xcat-cli get "http://127.0.0.1:8080/<file>?drop=100000&times=3" <out>     # surv
 | Parameter | Effect |
 |---|---|
 | `redirect=N` | Answer `302` N times in a row (relative `Location`) before serving |
+| `auth=VALUE` | Answer `401` unless the request carries `Authorization: VALUE` (for credentials tests) |
 | `status=CODE` | Answer `CODE` (e.g. `503`, `429`, `403`) with an empty body instead of the file |
 | `retry_after=S` | With `status`: also send `Retry-After: S` |
 | `drop=N` | Close the connection after N body bytes, without warning |

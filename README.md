@@ -48,7 +48,7 @@ build/host-debug/tools/xcat-cli/xcat-cli layout <image>             # can it be 
 build/host-debug/tools/xcat-cli/xcat-cli get <url> <file>           # download over HTTP with Range and resume
 ```
 
-`get` speaks plain `http://` only for now (HTTPS arrives in M5) and reports retries and MB/s on the way. [tools/testserver](tools/testserver/README.md) has a local Range server, with optional faults, to try it against.
+`get` speaks plain `http://` only for now (HTTPS arrives in M5) and reports retries and MB/s on the way. `--credentials <file>` adds logins from a [credentials file](docs/formats/credentials.md), sent only to the hosts each one is scoped to. [tools/testserver](tools/testserver/README.md) has a local Range server, with optional faults, to try it against.
 
 **Xbox app** (needs Docker):
 
@@ -65,7 +65,7 @@ See [docs/build-xbox.md](docs/build-xbox.md) for building without `make`, the Wi
 |---|---|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Layers, modules, interfaces, install flow, memory budget |
 | [docs/formats/map.md](docs/formats/map.md) | The map file format (where your images are) |
-| [docs/formats/credentials.md](docs/formats/credentials.md) | Logins for sources that need them: host-scoped tokens, kept out of maps (design) |
+| [docs/formats/credentials.md](docs/formats/credentials.md) | Logins for sources that need them: host-scoped tokens, kept out of maps |
 | [docs/formats/fatx-names.md](docs/formats/fatx-names.md) | What the Xbox hard disk can store, measured on the console, and when an install is refused |
 | [docs/HANDOFF.md](docs/HANDOFF.md) | Goals, design decisions, roadmap and standards |
 | [docs/build-xbox.md](docs/build-xbox.md) | Building the XBE and running it in xemu or on hardware |

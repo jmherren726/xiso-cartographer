@@ -9,6 +9,7 @@ misbehave in controlled ways, so tests can check that the client survives (or
 correctly refuses) each case:
 
     redirect=N      answer 302 N times in a row before serving (Location is relative)
+    auth=VALUE      answer 401 unless the request has "Authorization: VALUE"
     status=CODE     answer CODE (e.g. 503, 403) instead of the file ...
     retry_after=S   ... with Retry-After: S
     drop=N          close the connection after N body bytes ...
@@ -123,6 +124,10 @@ class Handler(BaseHTTPRequestHandler):
             nq = dict(q, redirect=str(redirect - 1))
             name = url.path.rsplit("/", 1)[-1]
             self.empty(302, [("Location", urllib.parse.quote(name) + "?" + urllib.parse.urlencode(nq))], close)
+            return
+
+        if "auth" in q and self.headers.get("Authorization") != q["auth"]:
+            self.empty(401, [], close)
             return
 
         if "status" in q and srv.take(key, "status", times):

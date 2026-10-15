@@ -49,6 +49,8 @@ const char *xc_err_str(xc_err err)
         return "The file on the server changed during the download";
     case XC_ERR_UNSUPPORTED:
         return "Not supported by this version";
+    case XC_ERR_CREDENTIALS:
+        return "The credentials file is invalid, so no credentials are used";
     case XC_ERR_COUNT_:
         break;
     }

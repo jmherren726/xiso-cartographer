@@ -1,6 +1,7 @@
 # libxcat: portable core. Must not depend on nxdk or any platform headers.
 add_library(xcat
   src/crc32.c
+  src/credentials.c
   src/error.c
   src/extract.c
   src/fatx.c
