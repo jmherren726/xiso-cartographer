@@ -22,6 +22,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <windows.h>
+#include <xboxkrnl/xboxkrnl.h>
 
 #include "xcat/crc32.h"
 #include "xcat/http_client.h"
@@ -57,6 +58,10 @@ __attribute__((format(printf, 1, 2))) static void out(const char *fmt, ...)
     if (log_file != INVALID_HANDLE_VALUE) {
         DWORD put = 0;
         (void)WriteFile(log_file, line, (DWORD)n, &put, NULL);
+        /* To the disk now: the test usually ends with the power switch, which would drop
+         * whatever the FATX cache still held (and with it the end of an unfinished run). */
+        IO_STATUS_BLOCK io;
+        (void)NtFlushBuffersFile(log_file, &io);
     }
 }
 
