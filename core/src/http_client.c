@@ -499,7 +499,8 @@ static xc_err fetch(xc_http_client *c, xc_http_resource *r, uint64_t first, uint
         }
         xc_http_retry info;
         info.err = err;
-        info.status = c->last_status;
+        /* A connection lost in the middle of a 206 body is a network error, not a status. */
+        info.status = err == XC_ERR_HTTP_STATUS ? c->last_status : 0;
         info.failures = failures;
         info.max_attempts = c->cfg.max_attempts;
         info.delay_ms = a.has_retry_after ? a.retry_after_ms : backoff_ms(c, failures);

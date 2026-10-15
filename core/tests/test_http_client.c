@@ -571,14 +571,31 @@ static void serve_and_drop(fake *f, fconn *c, const req *r)
     }
 }
 
+static int g_drop_retries;
+
+/* A cut 206 body is reported as a network error, without the 206's status. */
+static bool expect_net_retry(void *ctx, const xc_http_retry *r)
+{
+    (void)ctx;
+    g_drop_retries++;
+    TEST_ASSERT_EQUAL_INT(0, r->status);
+    TEST_ASSERT_TRUE(r->err == XC_ERR_NET_IO || r->err == XC_ERR_NET_TIMEOUT);
+    return true;
+}
+
 static void test_resume_after_drop(void)
 {
     static const xc_err errs[] = {XC_OK /* EOF */, XC_ERR_NET_IO, XC_ERR_NET_TIMEOUT};
     for (size_t i = 0; i < sizeof errs / sizeof errs[0]; i++) {
         start(serve_and_drop, "http://h/f");
+        xc_http_config cfg = base_cfg();
+        cfg.on_retry = expect_net_retry;
+        TEST_ASSERT_EQUAL_INT(XC_OK, xc_http_client_init(&client, &cfg));
+        g_drop_retries = 0;
         g_cut = 54321;
         g_cut_err = errs[i];
         TEST_ASSERT_EQUAL_INT(XC_OK, read_all(0, FILE_SIZE));
+        TEST_ASSERT_EQUAL_INT(3, g_drop_retries);
         check_got(0, FILE_SIZE);
         /* probe, then three cut attempts each resuming exactly at the cut, then success. */
         TEST_ASSERT_EQUAL_INT(5, F.nlog);
