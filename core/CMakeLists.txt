@@ -7,6 +7,7 @@ add_library(xcat
   src/fatx.c
   src/http.c
   src/http_client.c
+  src/install.c
   src/journal.c
   src/map.c
   src/source.c

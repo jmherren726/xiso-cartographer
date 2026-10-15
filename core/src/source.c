@@ -31,6 +31,7 @@ void xc_source_memory(xc_source *src, xc_mem_source *mem, const void *data, size
     mem->data = data;
     mem->len = len;
     src->read_at = mem_read_at;
+    src->read_stream = NULL;
     src->ctx = mem;
     src->size = len;
 }

@@ -1,6 +1,7 @@
 /* Tests for the extractor (xcat/extract.h, ADR 0004). Fixture extraction is tested end to end by
  * the extract_<fixture> tests (xcat-cli + tools/fixtures/extract_and_check.py). */
 #include "unity.h"
+#include "xcat/crc32.h"
 #include "xcat/extract.h"
 
 #include <stdbool.h>
@@ -41,6 +42,7 @@ typedef struct msink {
     mfile *open;
     size_t writes_before_failure; /* SIZE_MAX = never fail */
     bool dirs_after_files;        /* set if a directory is made after a file begins */
+    size_t nwrites;
 } msink;
 
 static msink ms;
@@ -79,6 +81,7 @@ static xc_err m_write(void *ctx, const void *buf, size_t len)
         m->writes_before_failure--;
     }
     TEST_ASSERT_TRUE(m->open->len + len <= MAX_DATA);
+    m->nwrites++;
     memcpy(m->open->data + m->open->len, buf, len);
     m->open->len += len;
     return XC_OK;
@@ -100,7 +103,7 @@ static uint8_t buf[1000]; /* deliberately small: forces several chunks per file 
 
 static xc_extract_opts opts(uint64_t gap)
 {
-    xc_extract_opts o = {buf, sizeof buf, gap, NULL, NULL};
+    xc_extract_opts o = {buf, sizeof buf, gap, NULL, NULL, NULL, NULL, NULL};
     return o;
 }
 
@@ -290,6 +293,233 @@ static void test_invalid_arguments(void)
     TEST_ASSERT_EQUAL_INT(XC_ERR_INVALID_ARG, xc_extract(NULL, NULL, NULL, NULL, NULL));
 }
 
+/* --- resume: skip, file_done ------------------------------------------------------- */
+
+static size_t done_index[MAX_FILES];
+static uint32_t done_crc[MAX_FILES];
+static size_t ndone;
+
+static xc_err on_file_done(void *ctx, size_t index, uint32_t crc)
+{
+    (void)ctx;
+    done_index[ndone] = index;
+    done_crc[ndone] = crc;
+    ndone++;
+    return XC_OK;
+}
+
+static uint32_t expected_crc(uint64_t offset, uint32_t size)
+{
+    return xc_crc32(0, src_data + offset, size);
+}
+
+static bool progress_started_at_skipped;
+
+static bool check_resume_progress(void *ctx, const xc_extract_progress *p)
+{
+    (void)ctx;
+    /* "b" (500 bytes, file 1) was installed before: progress starts there. */
+    progress_started_at_skipped =
+        progress_started_at_skipped || (p->bytes_done > 500 && p->files_done >= 1);
+    TEST_ASSERT_TRUE(p->bytes_done >= 500);
+    TEST_ASSERT_TRUE(p->files_done >= 1);
+    return true;
+}
+
+static void test_skip_and_file_done(void)
+{
+    xc_xdvdfs_entry files[] = {file_at("a", 0, 1500), file_at("b", 2048, 500),
+                               file_at("empty", 0, 0), file_at("c", 4096, 300)};
+    bool skip[] = {false, true, false, false};
+    xc_extract_opts o = opts(XC_EXTRACT_DEFAULT_GAP);
+    o.skip = skip;
+    o.file_done = on_file_done;
+    o.progress = check_resume_progress;
+    ndone = 0;
+    progress_started_at_skipped = false;
+    xc_extract_stats st;
+    TEST_ASSERT_EQUAL_INT(XC_OK, extract(files, 4, NULL, 0, &o, &st));
+    TEST_ASSERT_EQUAL_size_t(3, ms.nfiles); /* "b" is never touched */
+    TEST_ASSERT_EQUAL_STRING("a", ms.files[0].path);
+    TEST_ASSERT_EQUAL_STRING("empty", ms.files[1].path);
+    TEST_ASSERT_EQUAL_STRING("c", ms.files[2].path);
+    assert_content(&ms.files[0], 0);
+    assert_content(&ms.files[2], 4096);
+    TEST_ASSERT_EQUAL_size_t(3, st.files_written);
+    TEST_ASSERT_EQUAL_size_t(1, st.files_skipped);
+    TEST_ASSERT_EQUAL_size_t(1, st.spans); /* "b"'s bytes are read through as part of the gap */
+    TEST_ASSERT_EQUAL_size_t(3, ndone);
+    TEST_ASSERT_EQUAL_size_t(0, done_index[0]);
+    TEST_ASSERT_EQUAL_HEX32(expected_crc(0, 1500), done_crc[0]);
+    TEST_ASSERT_EQUAL_size_t(2, done_index[1]);
+    TEST_ASSERT_EQUAL_HEX32(0, done_crc[1]);
+    TEST_ASSERT_EQUAL_size_t(3, done_index[2]);
+    TEST_ASSERT_EQUAL_HEX32(expected_crc(4096, 300), done_crc[2]);
+    TEST_ASSERT_TRUE(progress_started_at_skipped);
+    /* Everything skipped: nothing is read. */
+    bool all[] = {true, true, true, true};
+    o.skip = all;
+    o.progress = NULL;
+    TEST_ASSERT_EQUAL_INT(XC_OK, extract(files, 4, NULL, 0, &o, &st));
+    TEST_ASSERT_EQUAL_size_t(0, ms.nfiles);
+    TEST_ASSERT_EQUAL_UINT64(0, st.bytes_read);
+}
+
+static xc_err fail_file_done(void *ctx, size_t index, uint32_t crc)
+{
+    (void)ctx;
+    (void)crc;
+    return index == 0 ? XC_ERR_IO : XC_OK;
+}
+
+static void test_file_done_error_stops(void)
+{
+    xc_xdvdfs_entry files[] = {file_at("a", 0, 100), file_at("b", 100, 100)};
+    xc_extract_opts o = opts(XC_EXTRACT_DEFAULT_GAP);
+    o.file_done = fail_file_done;
+    xc_extract_stats st;
+    TEST_ASSERT_EQUAL_INT(XC_ERR_IO, extract(files, 2, NULL, 0, &o, &st));
+    TEST_ASSERT_EQUAL_size_t(1, ms.nfiles); /* "b" never begins */
+    TEST_ASSERT_TRUE(ms.files[0].complete);
+}
+
+/* --- read_stream: one call per span, any piece size ------------------------------------ */
+
+typedef struct stream_src {
+    size_t piece;
+    int calls;
+    int read_at_calls;
+    uint64_t skip_at; /* drop one byte at this offset (UINT64_MAX: never) */
+    uint64_t stop_at; /* end the stream early here (UINT64_MAX: never) */
+} stream_src;
+
+static stream_src ss;
+
+/* Must never be used while read_stream exists; the tests check read_at_calls stays 0. */
+static xc_err ss_read_at(void *ctx, uint64_t offset, void *out, size_t len)
+{
+    stream_src *s = ctx;
+    (void)offset;
+    (void)out;
+    (void)len;
+    s->read_at_calls++;
+    return XC_ERR_IO;
+}
+
+static xc_err ss_read_stream(void *ctx, uint64_t offset, uint64_t len, xc_source_data_fn fn,
+                             void *fn_ctx)
+{
+    stream_src *s = ctx;
+    s->calls++;
+    uint64_t end = offset + len;
+    for (uint64_t pos = offset; pos < end;) {
+        if (pos >= s->stop_at) {
+            return XC_OK; /* the source "forgot" the rest */
+        }
+        if (pos == s->skip_at) {
+            pos++;
+            continue;
+        }
+        size_t n = end - pos < s->piece ? (size_t)(end - pos) : s->piece;
+        if (s->skip_at > pos && s->skip_at < pos + n) {
+            n = (size_t)(s->skip_at - pos);
+        }
+        xc_err err = fn(fn_ctx, pos, src_data + pos, n);
+        if (err != XC_OK) {
+            return err;
+        }
+        pos += n;
+    }
+    return XC_OK;
+}
+
+static xc_err extract_streamed(xc_xdvdfs_entry *files, size_t nfiles, const xc_extract_opts *o,
+                               xc_extract_stats *st)
+{
+    xc_source src = {ss_read_at, &ss, SRC_SIZE, ss_read_stream};
+    xc_xdvdfs_listing l;
+    memset(&l, 0, sizeof l);
+    l.files = files;
+    l.file_count = nfiles;
+    for (size_t i = 0; i < nfiles; i++) {
+        l.total_file_bytes += files[i].size;
+    }
+    memset(&ms, 0, sizeof ms);
+    ms.writes_before_failure = SIZE_MAX;
+    xc_sink sink = {m_make_dir, m_begin, m_write, m_end, &ms};
+    return xc_extract(&src, &l, &sink, o, st);
+}
+
+static void reset_stream(size_t piece)
+{
+    memset(&ss, 0, sizeof ss);
+    ss.piece = piece;
+    ss.skip_at = UINT64_MAX;
+    ss.stop_at = UINT64_MAX;
+}
+
+static void test_read_stream_routes_spans(void)
+{
+    xc_xdvdfs_entry files[] = {file_at("a", 0, 2500),      file_at("e1", 0, 0),
+                               file_at("b", 2600, 7),      file_at("c", 3000, 1),
+                               file_at("far", 30000, 900), file_at("e2", 0, 0)};
+    for (size_t piece = 1; piece <= 4099; piece += 1366) {
+        reset_stream(piece);
+        xc_extract_opts o = opts(1024);
+        o.file_done = on_file_done;
+        ndone = 0;
+        xc_extract_stats st;
+        TEST_ASSERT_EQUAL_INT(XC_OK, extract_streamed(files, 6, &o, &st));
+        TEST_ASSERT_EQUAL_INT(2, ss.calls); /* [a..c] and [far]: one request each */
+        TEST_ASSERT_EQUAL_INT(0, ss.read_at_calls);
+        TEST_ASSERT_EQUAL_size_t(2, st.spans);
+        TEST_ASSERT_EQUAL_size_t(6, ms.nfiles);
+        assert_content(&ms.files[0], 0);
+        assert_content(&ms.files[2], 2600);
+        assert_content(&ms.files[3], 3000);
+        assert_content(&ms.files[4], 30000);
+        TEST_ASSERT_TRUE(ms.files[1].complete && ms.files[5].complete);
+        TEST_ASSERT_EQUAL_UINT64(3001 + 900, st.bytes_read);
+        TEST_ASSERT_EQUAL_size_t(6, ndone);
+        TEST_ASSERT_EQUAL_HEX32(expected_crc(0, 2500), done_crc[0]);
+        TEST_ASSERT_EQUAL_HEX32(expected_crc(30000, 900), done_crc[4]);
+    }
+    /* Small pieces are gathered: "a" (2500 bytes) arrives 1 byte at a time but is written in
+       buffer-sized writes (1000, 1000, 500). */
+    xc_xdvdfs_entry one[] = {file_at("a", 0, 2500)};
+    reset_stream(1);
+    xc_extract_opts o = opts(1024);
+    xc_extract_stats st;
+    TEST_ASSERT_EQUAL_INT(XC_OK, extract_streamed(one, 1, &o, &st));
+    TEST_ASSERT_EQUAL_size_t(3, ms.nwrites);
+    assert_content(&ms.files[0], 0);
+}
+
+static void test_read_stream_faults(void)
+{
+    xc_xdvdfs_entry files[] = {file_at("a", 0, 2500), file_at("b", 2600, 100)};
+    xc_extract_opts o = opts(1024);
+    xc_extract_stats st;
+    /* A source that skips a byte must never produce a file with a hole. */
+    reset_stream(64);
+    ss.skip_at = 1000;
+    TEST_ASSERT_EQUAL_INT(XC_ERR_INVALID_ARG, extract_streamed(files, 2, &o, &st));
+    TEST_ASSERT_TRUE(ms.files[0].ended);
+    TEST_ASSERT_FALSE(ms.files[0].complete);
+    /* A stream that ends early leaves the open file incomplete. */
+    reset_stream(64);
+    ss.stop_at = 2650;
+    TEST_ASSERT_EQUAL_INT(XC_ERR_IO, extract_streamed(files, 2, &o, &st));
+    TEST_ASSERT_TRUE(ms.files[0].complete);
+    TEST_ASSERT_TRUE(ms.files[1].ended);
+    TEST_ASSERT_FALSE(ms.files[1].complete);
+    /* A span past the end of the source is refused before anything is read. */
+    xc_xdvdfs_entry past[] = {file_at("past", SRC_SIZE - 10, 100)};
+    reset_stream(64);
+    TEST_ASSERT_EQUAL_INT(XC_ERR_RANGE, extract_streamed(past, 1, &o, &st));
+    TEST_ASSERT_EQUAL_INT(0, ss.calls);
+}
+
 int main(void)
 {
     for (size_t i = 0; i < SRC_SIZE; i++) {
@@ -306,5 +536,9 @@ int main(void)
     RUN_TEST(test_sink_write_error_stops_and_ends_incomplete);
     RUN_TEST(test_source_error_propagates);
     RUN_TEST(test_invalid_arguments);
+    RUN_TEST(test_skip_and_file_done);
+    RUN_TEST(test_file_done_error_stops);
+    RUN_TEST(test_read_stream_routes_spans);
+    RUN_TEST(test_read_stream_faults);
     return UNITY_END();
 }

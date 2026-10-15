@@ -14,6 +14,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 
+#include "xcat/install.h"
 #include "xcat/net.h"
 #include "xcat/sink.h"
 #include "xcat/source.h"
@@ -62,6 +63,12 @@ void xc_host_net(xc_net *net);
 
 /* Monotonic milliseconds and sleep (xcat/net.h). */
 void xc_host_clock(xc_clock *clock);
+
+/*
+ * File access for xc_install (xcat/install.h): the host separator, durable
+ * appends and writes (fsync / _commit), and the directory sink and file source above.
+ */
+void xc_host_install_io(xc_install_io *io);
 
 #ifdef __cplusplus
 }

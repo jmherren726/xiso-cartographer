@@ -53,8 +53,9 @@ Status: ✅ exists · 🔜 next milestone · ⏳ later.
 | `source` | `xc_source` random-access byte source + in-memory source (`xcat/source.h`) | M1 | ✅ |
 | `crc32` | CRC-32 (zip/zlib variant) for checking downloads and, in M5b, zip members (`xcat/crc32.h`) | M3 | ✅ |
 | `xdvdfs` | Find the game partition (xiso, XGD1/2/3) and walk the directory trees; produce an offset-sorted file list ([xdvdfs.md](formats/xdvdfs.md), `xcat/xdvdfs.h`) | M1 | ✅ |
-| `extract` | Pull byte ranges from a `ByteSource` and write them to a `Sink`, coalescing small gaps into one span (`xcat/extract.h`). Output matches extract-xiso byte for byte. Journal/resume and hash verification follow with the network install | M1 ✅ (local), M4 (resume), M5 (hashes) | ✅ local |
-| `journal` | Install journal: identity of the image, one CRC-checked line per finished file; read back against the listing to resume, or to refuse a folder that holds another image ([journal.md](formats/journal.md), `xcat/journal.h`) | M4 | ✅ format and reader; used by the install in M4 |
+| `extract` | Pull byte ranges from a `ByteSource` and write them to a `Sink`, coalescing small gaps into one span (`xcat/extract.h`). Each span is one `read_stream` call (one HTTP Range request) when the source has it; small network pieces are gathered into buffer-sized writes. Skips files already installed (resume) and reports each finished file with its CRC-32. Output matches extract-xiso byte for byte | M1 (local), M4 (streaming, resume), M5 (hashes) | ✅ local and streamed |
+| `journal` | Install journal: identity of the image, one CRC-checked line per finished file; read back against the listing to resume, or to refuse a folder that holds another image ([journal.md](formats/journal.md), `xcat/journal.h`) | M4 | ✅ |
+| `install` | One whole install: tables, FATX check, folder choice or resume, free space, journal, extract, read-back CRC check, marker (§5, `xcat/install.h`). Shared by the XBE and `xcat-cli install` | M4 | ✅ host; console in M4 |
 | `fatx` | FATX rules measured on the console: check that a game's files can be stored (names ≤ 42 bytes, allowed bytes, paths ≤ 250, ≤ 4,096 entries per directory) and refuse it otherwise; generate valid install folder names ([fatx-names.md](formats/fatx-names.md), [ADR 0008](adr/0008-refuse-games-fatx-cant-store.md), `xcat/fatx.h`) | M2 | ✅ |
 | `url` | Parse `http`/`https` URLs, build percent-encoded request targets, resolve redirect `Location`s ([http.md §2](formats/http.md#2-urls), `xcat/url.h`) | M3 | ✅ |
 | `http` | HTTP/1.1 response parsing: status line, headers, `Content-Range`, chunked bodies, with hard limits ([http.md §4–§5](formats/http.md#4-response-head), `xcat/http.h`). The client on top: `Range`, cross-host redirects (max 5), timeouts, backoff, resume; asks `credentials` what to attach **on every redirect hop** ([http.md §3, §6–§9](formats/http.md#3-requests)) | M3 | ✅ parser · ✅ client (`xcat/http_client.h`) |
@@ -75,7 +76,7 @@ The core reaches the outside world only through small structs of function pointe
 
 | Interface | Provides | Implemented by |
 |---|---|---|
-| `xc_io` | open/read/write/seek/close files, create directories, free space | nxdk (FATX), host (stdio/POSIX) |
+| [`xc_install_io`](../core/include/xcat/install.h) | what an install needs: exists, size, small reads, durable appends and writes, remove, free space, a sink for a folder, a source for an installed file | host ([`xc_host_install_io`](../platform/host/include/xcat/host.h)) ✅; nxdk (FATX) in M4 |
 | [`xc_net`](../core/include/xcat/net.h) | TCP connect/send/recv/close with timeouts, DNS | host ([`xc_host_net`](../platform/host/include/xcat/host.h): Winsock/BSD sockets) ✅; nxdk ([`xc_nx_net`](../platform/nxdk/include/xcat/nxdk.h): lwIP) ✅, on hardware in the M3 network test |
 | [`xc_clock`](../core/include/xcat/net.h) | a monotonic clock and sleep (for timeouts and backoff); wall-clock time for TLS is added in M5 | nxdk (`xc_nx_clock`: CPU performance counter; NTP for wall-clock time in M5), host (`xc_host_clock`) |
 | `xc_log` | levelled logging | nxdk (`E:\Apps\xcat\xcat.log`, rotated), host (stderr) |
@@ -92,13 +93,14 @@ The streaming abstractions used by `extract`:
 1. Resolve the map entry for the chosen catalog item to a URL ([map.md](formats/map.md)).
 2. Probe the URL: follow redirects, and require `206` with a matching `Content-Range`.
 3. Fetch the volume descriptor and directory tables. Build the file list and total size.
-4. Check free space on the target drive.
-5. Create `<drive>:\Games\<FATX-safe title>\` and open the journal.
-6. For each file in offset order (neighbours coalesced): request its range and write it as it streams in. Journal it when done.
-7. Verify sizes, plus the whole-image hash for trimmed xisos when the source provides one ([ADR 0004](adr/0004-streaming-install.md)).
-8. Write the `.xcat-installed` marker and dashboard artwork, then remove the journal.
+4. Check that FATX can store every file under `\Games\<folder>` ([ADR 0008](adr/0008-refuse-games-fatx-cant-store.md)).
+5. Choose the folder `<drive>:\Games\<FATX-safe title>\`: a fresh one, or one whose journal matches this image (resume). A finished install or a folder that isn't ours is never touched; the next numbered name is used instead ([journal.md §6](formats/journal.md#6-reading-a-journal)).
+6. Check free space for the files still to be written.
+7. Write the journal's identity lines, then stream each span (neighbouring files, one Range request) into the files. After each file is flushed to disk, append its `done` line.
+8. Read every file back and compare its CRC-32 with the journal ([journal.md §7](formats/journal.md#7-verification)); the whole-image hash for trimmed xisos follows in M5 ([ADR 0004](adr/0004-streaming-install.md)).
+9. Write the `.xcat-installed` marker (dashboard artwork later), then remove the journal.
 
-On resume, skip journaled files and rewrite the partial one from its start.
+On resume, journaled files that are still on disk with their size are skipped, and everything else, including a file that was half-written, is written again from its start. Steps 3–9 are `xc_install` (`xcat/install.h`).
 
 ## 6. Memory budget
 

@@ -2,6 +2,7 @@
 # for tests and xcat-cli. Never built for the Xbox (docs/ARCHITECTURE.md §2).
 add_library(xcat_host STATIC
   src/host_file.c
+  src/host_install.c
   src/host_net.c
   src/host_path.c
   src/host_sink.c

@@ -125,7 +125,8 @@ typedef xc_err (*xc_http_data_fn)(void *ctx, uint64_t offset, const uint8_t *dat
 xc_err xc_http_read(xc_http_client *c, xc_http_resource *r, uint64_t offset, uint64_t len,
                     xc_http_data_fn fn, void *ctx);
 
-/* An xc_source over HTTP: every read_at is one xc_http_read. */
+/* An xc_source over HTTP: every read_at, and every read_stream (a whole span), is one
+ * xc_http_read. */
 typedef struct xc_http_source {
     xc_http_client *client;
     xc_http_resource *res;

@@ -157,7 +157,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
     wr32(v.vd + 0x18, rd32(data + 4));
     memcpy(v.vd + 0x7EC, magic, sizeof magic);
 
-    xc_source src = {vimg_read, &v, v.size};
+    xc_source src = {vimg_read, &v, v.size, NULL};
     run(&src);
     return 0;
 }

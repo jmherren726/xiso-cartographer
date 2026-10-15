@@ -47,6 +47,7 @@ build/host-debug/tools/xcat-cli/xcat-cli check <image> [title]      # can the Xb
 build/host-debug/tools/xcat-cli/xcat-cli layout <image>             # can it be installed in one pass?
 build/host-debug/tools/xcat-cli/xcat-cli get <url> <file>           # download over HTTP with Range and resume
 build/host-debug/tools/xcat-cli/xcat-cli map <map-file>             # check a map file and list its entries
+build/host-debug/tools/xcat-cli/xcat-cli install <url|image> <games-dir> [title]   # install like the console: resumable, verified
 ```
 
 `get` speaks plain `http://` only for now (HTTPS arrives in M5) and reports retries and MB/s on the way. `--credentials <file>` adds logins from a [credentials file](docs/formats/credentials.md), sent only to the hosts each one is scoped to. [tools/testserver](tools/testserver/README.md) has a local Range server, with optional faults, to try it against.

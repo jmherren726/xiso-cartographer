@@ -50,6 +50,7 @@ xc_err xc_nx_file_open(xc_source *src, xc_nx_file *f, const char *path)
     }
     f->handle = h;
     src->read_at = file_read_at;
+    src->read_stream = NULL;
     src->ctx = f;
     src->size = (uint64_t)size.QuadPart;
     return XC_OK;
