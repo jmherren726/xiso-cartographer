@@ -12,6 +12,7 @@
  * (docs/formats/credentials.md). Everything shown is also appended to E:\xcat\install.log.
  * The real UI replaces this in M8.
  */
+#include <SDL.h>
 #include <hal/debug.h>
 #include <hal/video.h>
 #include <stdarg.h>
@@ -88,14 +89,88 @@ static void open_log(void)
     }
 }
 
-static void halt(void)
+/* --- controllers: LT + RT + Back + Black returns to the dashboard ------------------- */
+
+#define MAX_PADS 4
+#define PAD_POLL_MS 100U
+#define TRIGGER_DOWN 16384 /* of 32767 */
+
+static bool pads_ok;
+static SDL_GameController *pads[MAX_PADS];
+static DWORD next_pad_poll;
+static bool exit_requested;
+
+static void pads_init(void)
+{
+    pads_ok = SDL_Init(SDL_INIT_GAMECONTROLLER) == 0;
+}
+
+/* True once LT + RT + Back + Black (the rocky5 shortcut) is held on any controller. Cheap to
+   call often: it looks at the controllers at most every 100 ms. */
+static bool exit_combo(void)
+{
+    if (!pads_ok || exit_requested || GetTickCount() - next_pad_poll > 0x80000000U) {
+        return exit_requested;
+    }
+    next_pad_poll = GetTickCount() + PAD_POLL_MS;
+    SDL_Event e;
+    while (SDL_PollEvent(&e)) {
+        if (e.type == SDL_CONTROLLERDEVICEADDED) {
+            for (int i = 0; i < MAX_PADS; i++) {
+                if (pads[i] == NULL) {
+                    pads[i] = SDL_GameControllerOpen(e.cdevice.which);
+                    break;
+                }
+            }
+        } else if (e.type == SDL_CONTROLLERDEVICEREMOVED) {
+            SDL_GameController *gone = SDL_GameControllerFromInstanceID(e.cdevice.which);
+            for (int i = 0; i < MAX_PADS; i++) {
+                if (pads[i] != NULL && pads[i] == gone) {
+                    SDL_GameControllerClose(pads[i]);
+                    pads[i] = NULL;
+                }
+            }
+        }
+    }
+    SDL_GameControllerUpdate();
+    for (int i = 0; i < MAX_PADS; i++) {
+        SDL_GameController *c = pads[i];
+        if (c != NULL &&
+            SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_TRIGGERLEFT) > TRIGGER_DOWN &&
+            SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_TRIGGERRIGHT) > TRIGGER_DOWN &&
+            SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_BACK) &&
+            SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER)) { /* Black */
+            exit_requested = true;
+        }
+    }
+    return exit_requested;
+}
+
+static void close_log(void)
 {
     if (log_file != INVALID_HANDLE_VALUE) {
         CloseHandle(log_file);
         log_file = INVALID_HANDLE_VALUE;
     }
+}
+
+/* Back to the dashboard. Everything written so far is on the disk already (journal and
+   checkpoints are flushed as they go), so an unfinished install resumes next time. */
+static void to_dashboard(void)
+{
+    out("\nReturning to the dashboard...\n");
+    close_log();
+    HalReturnToFirmware(HalQuickRebootRoutine);
+}
+
+static void halt(void)
+{
+    close_log();
     for (;;) {
-        Sleep(1000);
+        if (exit_combo()) {
+            to_dashboard();
+        }
+        Sleep(PAD_POLL_MS);
     }
 }
 
@@ -141,7 +216,7 @@ static bool on_retry(void *ctx, const xc_http_retry *r)
     /* Which step was slow (diagnosis for the first-request timeout seen in M3). */
     out("           last connect: lookup %lu ms, handshake %lu ms, %s\n", (unsigned long)st.dns_ms,
         (unsigned long)st.connect_ms, xc_err_str(st.result));
-    return true;
+    return !exit_combo(); /* the shortcut also works while waiting out an outage */
 }
 
 static void load_credentials(void)
@@ -360,37 +435,67 @@ static void title_from(const char *name, char *out_title, size_t size)
 }
 
 typedef struct ui {
-    uint64_t start_ms;
-    uint64_t next_ms;
     int phase;
+    uint64_t next_ms;
+    uint64_t phase_ms;    /* when the current phase began */
+    uint64_t phase_bytes; /* bytes_done when it began: a resumed install starts above 0 */
+    uint64_t write_ms;    /* how long writing took, once it's over */
+    uint64_t write_bytes; /* bytes written in this run */
+    uint64_t verify_ms;
+    uint64_t verify_bytes;
 } ui;
+
+/* Decimal MB/s in tenths. */
+static uint64_t mbps_tenths(uint64_t bytes, uint64_t ms)
+{
+    return ms > 0 ? bytes / ms / 100U : 0;
+}
+
+static void end_phase(ui *u, uint64_t now, uint64_t bytes_done)
+{
+    if (u->phase == XC_INSTALL_WRITING) {
+        u->write_ms = now - u->phase_ms;
+        u->write_bytes = bytes_done - u->phase_bytes;
+    } else if (u->phase == XC_INSTALL_VERIFYING) {
+        u->verify_ms = now - u->phase_ms;
+        u->verify_bytes = bytes_done - u->phase_bytes;
+    }
+}
+
+static uint64_t last_bytes_done;
 
 static bool on_progress(void *ctx, const xc_install_progress *p)
 {
     ui *u = ctx;
     uint64_t now = now_ms();
     if ((int)p->phase != u->phase) {
+        end_phase(u, now, last_bytes_done);
         u->phase = (int)p->phase;
         u->next_ms = 0;
-        if (p->phase == XC_INSTALL_WRITING) {
-            u->start_ms = now;
-        }
+        u->phase_ms = now;
+        u->phase_bytes = p->bytes_done;
         out("  %s\n", p->phase == XC_INSTALL_WRITING     ? "writing files"
                       : p->phase == XC_INSTALL_VERIFYING ? "verifying (reading every file back)"
                                                          : "reading the directory tables");
     }
+    last_bytes_done = p->bytes_done;
     if (now >= u->next_ms && p->bytes_total > 0) {
         u->next_ms = now + REPORT_EVERY_MS;
         char speed[24] = "-";
-        if (p->phase == XC_INSTALL_WRITING && now > u->start_ms) {
-            tenths(speed, sizeof speed, p->bytes_done / (now - u->start_ms) / 100U);
+        if (now > u->phase_ms + 1000U) {
+            /* this run's bytes only: what a resume found on the disk isn't speed */
+            tenths(speed, sizeof speed,
+                   mbps_tenths(p->bytes_done - u->phase_bytes, now - u->phase_ms));
         }
+        /* The file being worked on (1-based), not the number finished: one big file would
+           otherwise read "0 of N" for most of an install. */
+        size_t current = p->files_done < p->file_count ? p->files_done + 1 : p->file_count;
         out("  %4llu s  %llu of %llu MiB, file %u of %u, %s MB/s\n",
             (unsigned long long)((now - run_start_ms) / 1000U),
             (unsigned long long)(p->bytes_done >> 20U), (unsigned long long)(p->bytes_total >> 20U),
-            (unsigned)p->files_done, (unsigned)p->file_count, speed);
+            (unsigned)current, (unsigned)p->file_count, speed);
     }
-    return true;
+    return !exit_combo();
 }
 
 static const char *problem_text(const xc_fatx_problem *p)
@@ -419,7 +524,10 @@ static bool install(const xc_source *src, const char *name, const char *etag,
     out("\n%s\n", name);
     xc_install_io io;
     xc_nx_install_io(&io);
-    ui u = {now_ms(), 0, -1};
+    ui u;
+    memset(&u, 0, sizeof u);
+    u.phase = -1;
+    last_bytes_done = 0;
     xc_install_req req;
     memset(&req, 0, sizeof req);
     req.src = src;
@@ -435,19 +543,23 @@ static bool install(const xc_source *src, const char *name, const char *etag,
     req.progress = on_progress;
     req.progress_ctx = &u;
     xc_err err = xc_install(&req, &result);
-    uint64_t ms = now_ms() - u.start_ms;
+    end_phase(&u, now_ms(), last_bytes_done);
     if (result.other_folder_reason != NULL) {
         out("  (not the existing folder of that name: %s)\n", result.other_folder_reason);
     }
     if (err == XC_OK) {
-        char speed[24];
-        tenths(speed, sizeof speed, ms > 0 ? result.bytes_written / ms / 100U : 0);
+        char wspeed[24];
+        char vspeed[24];
+        tenths(wspeed, sizeof wspeed, mbps_tenths(u.write_bytes, u.write_ms));
+        tenths(vspeed, sizeof vspeed, mbps_tenths(u.verify_bytes, u.verify_ms));
         out("  OK: %u files in %s, verified%s\n", (unsigned)result.file_count, result.folder,
             result.resumed ? " (resumed)" : "");
-        out("  %u written, %u kept from an earlier attempt; %llu MiB in %llu s (%s MB/s)\n",
-            (unsigned)result.files_written, (unsigned)result.files_skipped,
-            (unsigned long long)(result.bytes_written >> 20U), (unsigned long long)(ms / 1000U),
-            speed);
+        out("  %u written, %u kept from an earlier attempt\n", (unsigned)result.files_written,
+            (unsigned)result.files_skipped);
+        out("  wrote %llu MiB in %llu s (%s MB/s); read back %llu MiB in %llu s (%s MB/s)\n",
+            (unsigned long long)(u.write_bytes >> 20U), (unsigned long long)(u.write_ms / 1000U),
+            wspeed, (unsigned long long)(u.verify_bytes >> 20U),
+            (unsigned long long)(u.verify_ms / 1000U), vspeed);
         if (result.files_continued > 0) {
             out("  %u file(s) continued from a checkpoint (%llu MiB were already there)\n",
                 (unsigned)result.files_continued,
@@ -567,6 +679,8 @@ int main(void)
     debugPrint("xiso-cartographer %s - install (M4)\n", xc_version_string());
     xc_nx_clock(&clk);
     run_start_ms = now_ms();
+    pads_init();
+    debugPrint("Hold LT + RT + Back + Black to return to the dashboard.\n");
     io_buf = malloc(IO_BUF_SIZE);
     recv_buf = malloc(RECV_BUF_SIZE);
     if (io_buf == NULL || recv_buf == NULL || !xc_nx_mount_e()) {
@@ -592,11 +706,15 @@ int main(void)
 
     int installed = 0;
     int total = 0;
-    for (size_t i = 0; have_map && i < map.entry_count; i++, total++) {
+    for (size_t i = 0; have_map && i < map.entry_count && !exit_combo(); i++, total++) {
         installed += install_url(map.entries[i].url) ? 1 : 0;
     }
-    for (int i = 0; i < nlocal; i++, total++) {
+    for (int i = 0; i < nlocal && !exit_combo(); i++, total++) {
         installed += install_file(local[i]) ? 1 : 0;
+    }
+    if (exit_combo()) {
+        xc_map_free(&map);
+        to_dashboard();
     }
     xc_map_free(&map);
     out("\nDone: %d of %d image(s) installed and verified.\n", installed, total);

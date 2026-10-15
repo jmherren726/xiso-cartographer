@@ -35,6 +35,9 @@ SRCS = $(CURDIR)/main.c \
 
 CFLAGS += -I$(CORE_DIR)/include -I$(PLATFORM_DIR)/include -std=c11 -Wall -Wextra -Werror
 
+# SDL2 (prebuilt in the nxdk image) only for reading the controllers: the dashboard shortcut.
+NXDK_SDL = y
+
 NXDK_DIR ?= $(ROOT_DIR)/third_party/nxdk
 
 include $(NXDK_DIR)/Makefile

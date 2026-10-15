@@ -777,8 +777,10 @@ static bool install_progress(void *ctx, const xc_install_progress *p)
     }
     if (now >= ui->next_ms && p->bytes_total > 0) {
         ui->next_ms = now + 2000U;
+        /* the file being worked on (1-based), as on the console */
+        size_t current = p->files_done < p->file_count ? p->files_done + 1 : p->file_count;
         (void)fprintf(stderr, "  %.1f of %.1f MiB, file %zu of %zu\n", mib(p->bytes_done),
-                      mib(p->bytes_total), p->files_done, p->file_count);
+                      mib(p->bytes_total), current, p->file_count);
     }
     return true;
 }
