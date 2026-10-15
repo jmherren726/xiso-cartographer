@@ -31,9 +31,10 @@ typedef enum xc_text_header {
 
 /*
  * Checks a trimmed header line "#" 1*WSP name 1*WSP "v" major ["." minor], with
- * numbers that have no leading zeros (map.md §3, credentials.md §3.3).
+ * numbers that have no leading zeros (map.md §3, credentials.md §3.3). `minor` may be
+ * NULL; it is 0 when the header has none.
  */
 xc_text_header xc_text_check_header(const char *line, const char *name, unsigned long supported,
-                                    unsigned long *major);
+                                    unsigned long *major, unsigned long *minor);
 
 #endif /* XCAT_TEXT_H */

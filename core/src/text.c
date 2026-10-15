@@ -104,7 +104,7 @@ static bool version_number(const char **s, unsigned long *v)
 }
 
 xc_text_header xc_text_check_header(const char *line, const char *name, unsigned long supported,
-                                    unsigned long *major)
+                                    unsigned long *major, unsigned long *minor_out)
 {
     size_t name_len = strlen(name);
     if (line[0] != '#' || !xc_text_space(line[1])) {
@@ -137,6 +137,9 @@ xc_text_header xc_text_check_header(const char *line, const char *name, unsigned
     }
     if (*s != '\0') {
         return XC_TEXT_HEADER_MISSING;
+    }
+    if (minor_out != NULL) {
+        *minor_out = minor;
     }
     if (*major > supported) {
         return XC_TEXT_HEADER_NEWER;

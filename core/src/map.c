@@ -495,7 +495,7 @@ static xc_err load_file(loader *L, char *text, size_t len, size_t source, char *
         }
         if (!header_seen) {
             unsigned long major = 0;
-            switch (xc_text_check_header(t, "xcat-map", XC_MAP_VERSION_MAJOR, &major)) {
+            switch (xc_text_check_header(t, "xcat-map", XC_MAP_VERSION_MAJOR, &major, NULL)) {
             case XC_TEXT_HEADER_OK:
                 header_seen = true;
                 continue;

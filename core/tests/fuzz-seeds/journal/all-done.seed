@@ -1,0 +1,8 @@
+# xcat-journal v1
+image 7825162240 0 8649D58F 4
+validators "e" -
+source http://192.168.1.20:8080/x%20y.iso
+done 12345 0000ABCD default.xbe
+done 4000000 9A0C3B71 media/a%20b.bik
+done 0 00000000 media/100%25.wav
+done 1 FFFFFFFF x/y/z.dat
