@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <windows.h>
+#include <xboxkrnl/xboxkrnl.h>
 
 #include "xcat/nxdk.h"
 
@@ -140,7 +141,11 @@ static xc_err sink_end_file(void *ctx, bool complete)
     if (ds->handle == NULL) {
         return XC_ERR_INVALID_ARG;
     }
-    bool ok = CloseHandle(ds->handle) != 0;
+    /* A completed file is on the disk before end_file returns: the install journal records it
+       next (docs/formats/journal.md §2.3). */
+    IO_STATUS_BLOCK io;
+    bool synced = !complete || NT_SUCCESS(NtFlushBuffersFile(ds->handle, &io));
+    bool ok = CloseHandle(ds->handle) != 0 && synced;
     ds->handle = NULL;
     ok = ok && complete && ds->written == ds->expected;
     if (!ok) {

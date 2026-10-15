@@ -15,12 +15,22 @@ PLATFORM_DIR := $(ROOT_DIR)/platform/nxdk
 # platform dependencies, so it needs no separate library build here.
 SRCS = $(CURDIR)/main.c \
        $(CORE_DIR)/src/crc32.c \
+       $(CORE_DIR)/src/credentials.c \
        $(CORE_DIR)/src/error.c \
        $(CORE_DIR)/src/extract.c \
        $(CORE_DIR)/src/fatx.c \
+       $(CORE_DIR)/src/http.c \
+       $(CORE_DIR)/src/http_client.c \
+       $(CORE_DIR)/src/install.c \
+       $(CORE_DIR)/src/journal.c \
+       $(CORE_DIR)/src/map.c \
        $(CORE_DIR)/src/source.c \
+       $(CORE_DIR)/src/text.c \
+       $(CORE_DIR)/src/url.c \
        $(CORE_DIR)/src/version.c \
        $(CORE_DIR)/src/xdvdfs.c \
+       $(PLATFORM_DIR)/src/nx_install.c \
+       $(PLATFORM_DIR)/src/nx_net.c \
        $(PLATFORM_DIR)/src/nx_platform.c
 
 CFLAGS += -I$(CORE_DIR)/include -I$(PLATFORM_DIR)/include -std=c11 -Wall -Wextra -Werror

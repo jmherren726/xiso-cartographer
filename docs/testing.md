@@ -36,7 +36,7 @@ Newest first. "Build" is the commit or CI artifact tested.
 
 ## M2: on-box install from the hard disk
 
-**Exit test:** an image already on the HDD installs to `E:\Games\<title>` in xemu and on hardware, and every installed file matches the image (checked on the console itself; see [build-xbox.md](build-xbox.md#what-the-app-does-m2)).
+**Exit test:** an image already on the HDD installs to `E:\Games\<title>` in xemu and on hardware, and every installed file matches the image (checked on the console itself; see [build-xbox.md](build-xbox.md#what-the-app-does-m4)).
 
 | Step | Image | Where | How |
 |---|---|---|---|
@@ -76,6 +76,34 @@ A run passes when the screen ends with "Done: N of N image(s) installed and veri
 The cable pull tests a lost connection within one run. A power cut or reboot can't be resumed by this test: it keeps its progress in memory only, so the next launch starts from 0. Resuming an install after a power cut is M4's exit test (a journal on disk).
 
 A run passes when the screen ends with "CRC-32 … matches, PASS". Each run is appended to `E:\xcat\net-test.log` (it starts over past 1 MiB); fetch it over FTP and record in the results log: the average MB/s, the retries and the longest pause (step 3), and the disk-write line (step 4). The MB/s figure also sizes the install buffers ([ARCHITECTURE.md §6](ARCHITECTURE.md)).
+
+## M4: streamed install over HTTP
+
+**Exit test** ([HANDOFF.md §4.1](HANDOFF.md#41-roadmap)): an over-4 GB fixture installs over the LAN, and resumes after a power cut. The main app (`app/bin/default.xbe`) installs every entry of `E:\xcat\map.txt` while it streams in, with a journal in the install folder ([journal.md](formats/journal.md)), then reads every file back and compares its CRC-32.
+
+**On the PC:**
+
+1. Make the fixtures, including the 4.3 GB `large` image. It's sparse, so it takes almost no disk space, and it holds test data only, never a game: `python3 tools/fixtures/fixtures.py --out C:\xcat-fixtures --large`.
+2. Serve them to the LAN: `python3 tools/testserver/rangeserver.py --root C:\xcat-fixtures --bind 0.0.0.0`. Optional check from the PC: `xcat-cli install http://127.0.0.1:8080/small.iso <some folder>` ends with "verified".
+3. Write `map.txt` with the PC's LAN address:
+
+   ```
+   # xcat-map v1
+   00000001 = http://192.168.1.10:8080/large.iso
+   ```
+
+   (Any 8 hex digits work as the key until the catalog exists. The install folder is named after the file: `E:\Games\large`.)
+
+**On the console:**
+
+| Step | Where | How |
+|---|---|---|
+| 1 | Hardware | FTP `map.txt` to `E:\xcat\` and `app/bin/` to e.g. `E:\Apps\xiso-cartographer\`. Empty `E:\xcat\isos\` first, or the M2 test image installs again too. About 4.4 GB must be free on E:. |
+| 2 | Hardware | Launch it. The screen shows "writing files" with MiB, file count and MB/s every 5 s. At roughly a third or half way, **switch the console off at the power button**. |
+| 3 | Hardware | Switch it on and launch the app again. It must show "(resumed)" at the end, with a number of files "kept from an earlier attempt", and the big file must not start from 0 if it had finished before the power cut. It ends with "OK: … verified" and "Done: 1 of 1". |
+| 4 | Hardware (optional) | Launch once more: the game goes to `E:\Games\large (2)`, because the first one is finished ("already installed there"). Delete that folder afterwards. |
+
+A pass is "OK: … verified (resumed)" in step 3. Send `E:\xcat\install.log`: it has every run, the MB/s, and for any retry the time the last connection's lookup and handshake took (that's to pin down the one-off 15 s first-request delay from M3). Delete `E:\Games\large` afterwards; it's test data.
 
 ## FATX probe (M2)
 

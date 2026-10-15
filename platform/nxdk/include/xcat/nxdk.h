@@ -13,6 +13,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "xcat/install.h"
 #include "xcat/net.h"
 #include "xcat/sink.h"
 #include "xcat/source.h"
@@ -63,5 +64,17 @@ void xc_nx_net(xc_net *net);
 
 /* Monotonic milliseconds from the CPU's performance counter, and sleep. */
 void xc_nx_clock(xc_clock *clock);
+
+/* How the last connect went, for diagnosing slow first requests (M3 hardware notes). */
+typedef struct xc_nx_net_stats {
+    unsigned connects;   /* connect attempts so far */
+    uint32_t dns_ms;     /* name lookup of the last one */
+    uint32_t connect_ms; /* TCP handshake of the last one */
+    xc_err result;       /* XC_OK, or why it failed */
+} xc_nx_net_stats;
+void xc_nx_net_last(xc_nx_net_stats *out);
+
+/* File access for xc_install (xcat/install.h) on FATX, with flushed, durable writes. */
+void xc_nx_install_io(xc_install_io *io);
 
 #endif /* XCAT_NXDK_H */

@@ -23,6 +23,13 @@ struct xc_net_conn {
     int s;
 };
 
+static xc_nx_net_stats stats;
+
+void xc_nx_net_last(xc_nx_net_stats *out)
+{
+    *out = stats;
+}
+
 /* --- clock ---------------------------------------------------------------------------- */
 
 static uint64_t clock_now_ms(void *ctx)
@@ -117,9 +124,16 @@ static xc_err net_connect(void *ctx, const char *host, uint16_t port, uint32_t t
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_protocol = IPPROTO_TCP;
     struct addrinfo *ai = NULL;
+    uint64_t t0 = clock_now_ms(NULL);
+    stats.connects++;
+    stats.connect_ms = 0;
     if (lwip_getaddrinfo(host, port_str, &hints, &ai) != 0 || ai == NULL) {
+        stats.dns_ms = (uint32_t)(clock_now_ms(NULL) - t0);
+        stats.result = XC_ERR_NET_DNS;
         return XC_ERR_NET_DNS;
     }
+    uint64_t t1 = clock_now_ms(NULL);
+    stats.dns_ms = (uint32_t)(t1 - t0);
     xc_net_conn *conn = malloc(sizeof *conn);
     int s = lwip_socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
     xc_err err = conn == NULL ? XC_ERR_NOMEM : XC_OK;
@@ -143,6 +157,8 @@ static xc_err net_connect(void *ctx, const char *host, uint16_t port, uint32_t t
         }
     }
     lwip_freeaddrinfo(ai);
+    stats.connect_ms = (uint32_t)(clock_now_ms(NULL) - t1);
+    stats.result = err;
     if (err != XC_OK) {
         if (s >= 0) {
             (void)lwip_close(s);
