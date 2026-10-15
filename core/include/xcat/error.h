@@ -19,6 +19,17 @@ typedef enum xc_err {
     XC_ERR_NOT_INSTALLABLE, /* the game's files can't be stored on FATX (ADR 0008) */
     XC_ERR_URL,             /* not an accepted http(s) URL (docs/formats/http.md §2) */
     XC_ERR_HTTP_PROTOCOL,   /* the server's response breaks docs/formats/http.md */
+    XC_ERR_NET_DNS,         /* the server's name doesn't resolve */
+    XC_ERR_NET_CONNECT,     /* no connection could be opened */
+    XC_ERR_NET_TIMEOUT,     /* the server stopped responding */
+    XC_ERR_NET_IO,          /* the connection failed or closed early */
+    XC_ERR_HTTP_NO_RANGE,   /* the server ignores Range (ADR 0004) */
+    XC_ERR_HTTP_DENIED,     /* 401/403 (ADR 0006: reported, never worked around) */
+    XC_ERR_HTTP_NOT_FOUND,  /* 404/410 */
+    XC_ERR_HTTP_STATUS,     /* any other error status; see xc_http_client.last_status */
+    XC_ERR_HTTP_REDIRECTS,  /* more than 5 redirects */
+    XC_ERR_HTTP_CHANGED,    /* the remote file changed between requests */
+    XC_ERR_UNSUPPORTED,     /* not supported by this version (e.g. https before M5) */
     XC_ERR_COUNT_           /* number of codes; not an error */
 } xc_err;
 

@@ -108,7 +108,7 @@ Lines end in CRLF and the head ends with an empty line. There is no body. `Conne
 
 | Status | Meaning to the client |
 |---|---|
-| `206` | Success. `Content-Range` must be present, with `first` equal to the requested first byte and `last` not beyond the requested last byte. `total` must equal the size learned from earlier responses. A shorter range than requested is accepted, and the rest is requested next. |
+| `206` | Success. `Content-Range` must be present with a known total (`/*` is rejected: the client must know the file's size), with `first` equal to the requested first byte and `last` not beyond the requested last byte. `total` must equal the size learned from earlier responses. A shorter range than requested is accepted, and the rest is requested next. |
 | `200` (to a `Range` request) | The server ignores `Range`: "this server doesn't support resumable downloads" ([ADR 0004](../adr/0004-streaming-install.md)). Not retried. |
 | `301`, `302`, `303`, `307`, `308` | Redirect to `Location` (§2.3), at most 5 per request. Each hop is a new request, and credentials are decided again for it (§8). The final URL is remembered for later requests to the same file. |
 | `401`, `403` | Access denied. Reported, never retried ([ADR 0006](../adr/0006-no-links-no-bypass.md)). |
