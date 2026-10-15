@@ -90,6 +90,57 @@ static xc_err sink_end_file(void *ctx, bool complete)
     return ok ? XC_OK : XC_ERR_IO;
 }
 
+/* ADR 0011: a checkpoint needs the bytes so far on the device. */
+static xc_err sink_sync(void *ctx)
+{
+    xc_host_dir_sink *ds = ctx;
+    if (ds->f == NULL) {
+        return XC_ERR_INVALID_ARG;
+    }
+    return xc_host_sync(ds->f) ? XC_OK : XC_ERR_IO;
+}
+
+/* ADR 0011: reopens a partly written file, cut back to its last checkpoint. */
+static xc_err sink_resume_file(void *ctx, const char *path, uint32_t size, uint32_t keep)
+{
+    xc_host_dir_sink *ds = ctx;
+    if (ds->f != NULL || keep > size) {
+        return XC_ERR_INVALID_ARG;
+    }
+    ds->open_path = join(ds->root, path);
+    if (ds->open_path == NULL) {
+        return XC_ERR_NOMEM;
+    }
+    ds->f = xc_host_fopen(ds->open_path, "r+b");
+    bool ok = ds->f != NULL && xc_host_truncate(ds->f, keep) && fseek(ds->f, 0, SEEK_END) == 0;
+    if (!ok) {
+        if (ds->f != NULL) {
+            (void)fclose(ds->f);
+            ds->f = NULL;
+        }
+        free(ds->open_path);
+        ds->open_path = NULL;
+        return XC_ERR_IO;
+    }
+    ds->expected = size;
+    ds->written = keep;
+    return XC_OK;
+}
+
+/* ADR 0011: closes an unfinished file that has a checkpoint, keeping it for the next attempt. */
+static xc_err sink_suspend_file(void *ctx)
+{
+    xc_host_dir_sink *ds = ctx;
+    if (ds->f == NULL) {
+        return XC_ERR_INVALID_ARG;
+    }
+    bool ok = fclose(ds->f) == 0;
+    ds->f = NULL;
+    free(ds->open_path);
+    ds->open_path = NULL;
+    return ok ? XC_OK : XC_ERR_IO;
+}
+
 xc_err xc_host_dir_sink_open(xc_sink *sink, xc_host_dir_sink *ds, const char *root)
 {
     if (sink == NULL || ds == NULL || root == NULL) {
@@ -125,6 +176,9 @@ xc_err xc_host_dir_sink_open(xc_sink *sink, xc_host_dir_sink *ds, const char *ro
     sink->write = sink_write;
     sink->end_file = sink_end_file;
     sink->ctx = ds;
+    sink->sync = sink_sync;
+    sink->resume_file = sink_resume_file;
+    sink->suspend_file = sink_suspend_file;
     return XC_OK;
 }
 

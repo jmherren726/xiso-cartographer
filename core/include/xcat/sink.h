@@ -30,6 +30,24 @@ typedef struct xc_sink {
      */
     xc_err (*end_file)(void *ctx, bool complete);
     void *ctx;
+    /*
+     * Optional (NULL if the sink has none; then no checkpoints are made, ADR 0011):
+     * makes everything written to the open file so far durable, so it survives a
+     * power cut.
+     */
+    xc_err (*sync)(void *ctx);
+    /*
+     * Optional: opens an existing file that will end up `size` bytes long, cut back
+     * to its first `keep` bytes, for appending the rest. Fails if the file is
+     * shorter than `keep`.
+     */
+    xc_err (*resume_file)(void *ctx, const char *path, uint32_t size, uint32_t keep);
+    /*
+     * Optional: closes the open, unfinished file but keeps what it has (instead of
+     * end_file(complete = false), which removes it). Used after an error once the
+     * file has a checkpoint, so the next attempt can continue it (ADR 0011).
+     */
+    xc_err (*suspend_file)(void *ctx);
 } xc_sink;
 
 #ifdef __cplusplus

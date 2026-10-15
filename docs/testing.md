@@ -100,7 +100,7 @@ A run passes when the screen ends with "CRC-32 … matches, PASS". Each run is a
 |---|---|---|
 | 1 | Hardware | FTP `map.txt` to `E:\xcat\` and `app/bin/` to e.g. `E:\Apps\xiso-cartographer\`. Empty `E:\xcat\isos\` first, or the M2 test image installs again too. About 4.4 GB must be free on E:. |
 | 2 | Hardware | Launch it. The screen shows "writing files" with MiB, file count and MB/s every 5 s. At roughly a third or half way, **switch the console off at the power button**. |
-| 3 | Hardware | Switch it on and launch the app again. It must show "(resumed)" at the end, with a number of files "kept from an earlier attempt", and the big file must not start from 0 if it had finished before the power cut. It ends with "OK: … verified" and "Done: 1 of 1". |
+| 3 | Hardware | Switch it on and launch the app again. The progress must pick up near where it stopped (at most 64 MiB earlier), not at 0. It ends with "OK: … verified (resumed)", the line "1 file(s) continued from a checkpoint (… MiB were already there)", and "Done: 1 of 1". |
 | 4 | Hardware (optional) | Launch once more: the game goes to `E:\Games\large (2)`, because the first one is finished ("already installed there"). Delete that folder afterwards. |
 
 A pass is "OK: … verified (resumed)" in step 3. Send `E:\xcat\install.log`: it has every run, the MB/s, and for any retry the time the last connection's lookup and handshake took (that's to pin down the one-off 15 s first-request delay from M3). Delete `E:\Games\large` afterwards; it's test data.

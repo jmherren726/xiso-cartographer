@@ -71,11 +71,12 @@ class Env:
     def url(self, query: str = "", name: str = "game.iso") -> str:
         return f"http://127.0.0.1:{self.srv.port}/{name}" + (f"?{query}" if query else "")
 
-    def args(self, image: str, title: str = "Game") -> list[str]:
-        return [self.cli, "install", "--timeout", "2000", image, self.games, title]
+    def args(self, image: str, title: str = "Game", extra: list[str] | None = None) -> list[str]:
+        return [self.cli, "install", "--timeout", "2000", *(extra or []), image, self.games, title]
 
-    def run(self, image: str, title: str = "Game") -> subprocess.CompletedProcess[str]:
-        result = subprocess.run(self.args(image, title), capture_output=True, text=True,
+    def run(self, image: str, title: str = "Game",
+            extra: list[str] | None = None) -> subprocess.CompletedProcess[str]:
+        result = subprocess.run(self.args(image, title, extra), capture_output=True, text=True,
                                 timeout=300, check=False)
         print(f"$ xcat-cli install {image} {title}\n{result.stdout}{result.stderr}", end="")
         return result
@@ -95,14 +96,20 @@ class Env:
 
     def kill_after_done_lines(self, image: str, lines: int, title: str = "Game") -> None:
         """Starts an install and kills it once the journal has `lines` done records."""
+        self.kill_when(image, lambda js: sum(1 for line in js if line.startswith("done ")) >= lines,
+                       title)
+
+    def kill_when(self, image: str, ready, title: str = "Game",
+                  extra: list[str] | None = None) -> None:
+        """Starts an install and kills it once ready(journal lines) is true."""
         journal = os.path.join(self.games, title, JOURNAL)
-        proc = subprocess.Popen(self.args(image, title), stdout=subprocess.PIPE,
+        proc = subprocess.Popen(self.args(image, title, extra), stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, text=True)
         deadline = time.monotonic() + 120
         while time.monotonic() < deadline and proc.poll() is None:
             try:
                 with open(journal, encoding="ascii", errors="replace") as f:
-                    if sum(1 for line in f if line.startswith("done ")) >= lines:
+                    if ready(f.read().splitlines()):
                         break
             except OSError:
                 pass
@@ -229,6 +236,20 @@ def s_verify_catches_damage(e: Env) -> None:
     e.check_installed("small")
 
 
+def s_resume_inside_file(e: Env) -> None:
+    """ADR 0011: a kill after a checkpoint inside a file continues that file, not from 0."""
+    e.serve("small")
+    cp = ["--checkpoint", "16384"]
+    e.kill_when(e.url("rate=60000"),
+                lambda js: any(j.startswith("part ") and " media/intro.xmv " in j for j in js),
+                extra=cp)
+    r = e.run(e.url(), extra=cp)
+    e.expect(r.returncode == 0, f"resume: exit {r.returncode}")
+    m = re.search(r"(\d+) files? continued from a checkpoint \((\d+) bytes kept\)", r.stdout)
+    e.expect(m is not None and int(m.group(2)) >= 16384, "no file was continued from a checkpoint")
+    e.check_installed("small")
+
+
 SCENARIOS = {
     "fixtures": s_fixtures,
     "local_image": s_local_image,
@@ -239,6 +260,7 @@ SCENARIOS = {
     "resume_after_kill": s_resume_after_kill,
     "resume_other_image": s_resume_other_image,
     "verify_catches_damage": s_verify_catches_damage,
+    "resume_inside_file": s_resume_inside_file,
 }
 
 

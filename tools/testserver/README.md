@@ -43,6 +43,6 @@ A fault counts down only on the responses it actually affects: `drop=1000` skips
 - an image FATX can't store is refused;
 - installing the same game twice uses a numbered second folder.
 
-The resume scenarios kill the installer once its journal has a few `done` lines, as a power cut would stop it, then run it again. It must resume in the same folder, start a new folder when the image changed, and, when a finished file was damaged in between, fail the read-back check and then repair the file on the next run.
+The resume scenarios kill the installer once its journal has a few `done` lines, as a power cut would stop it, then run it again. It must resume in the same folder, start a new folder when the image changed, and, when a finished file was damaged in between, fail the read-back check and then repair the file on the next run. `resume_inside_file` kills it right after a checkpoint inside a file (`--checkpoint 16384`), and the next run must continue that file rather than start it over (ADR 0011).
 
 `test_map_cli.py` checks `xcat-cli map` with a local include and an HTTP include served by the test server.

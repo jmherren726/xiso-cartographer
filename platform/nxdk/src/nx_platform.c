@@ -182,6 +182,65 @@ static xc_err sink_end_file(void *ctx, bool complete)
     return ok ? XC_OK : XC_ERR_IO;
 }
 
+/* ADR 0011: a checkpoint needs the bytes so far on the disk. */
+static xc_err sink_sync(void *ctx)
+{
+    xc_nx_dir_sink *ds = ctx;
+    if (ds->handle == NULL) {
+        return XC_ERR_INVALID_ARG;
+    }
+    IO_STATUS_BLOCK io;
+    NTSTATUS st = NtFlushBuffersFile(ds->handle, &io);
+    if (!NT_SUCCESS(st)) {
+        io_failed("flush", (unsigned long)st);
+        return XC_ERR_IO;
+    }
+    return XC_OK;
+}
+
+/* ADR 0011: reopens a partly written file, cut back to its last checkpoint. */
+static xc_err sink_resume_file(void *ctx, const char *path, uint32_t size, uint32_t keep)
+{
+    xc_nx_dir_sink *ds = ctx;
+    if (ds->handle != NULL || keep > size) {
+        return XC_ERR_INVALID_ARG;
+    }
+    if (!join(ds->open_path, ds->root, path)) {
+        return XC_ERR_LIMIT;
+    }
+    HANDLE h = CreateFileA(ds->open_path, GENERIC_WRITE, 0, NULL, OPEN_EXISTING,
+                           FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, NULL);
+    if (h == INVALID_HANDLE_VALUE) {
+        io_failed("reopen", (unsigned long)GetLastError());
+        return XC_ERR_IO;
+    }
+    LARGE_INTEGER have;
+    LARGE_INTEGER at;
+    at.QuadPart = (LONGLONG)keep;
+    if (!GetFileSizeEx(h, &have) || have.QuadPart < (LONGLONG)keep ||
+        !SetFilePointerEx(h, at, NULL, FILE_BEGIN) || !SetEndOfFile(h)) {
+        io_failed("truncate", (unsigned long)GetLastError());
+        CloseHandle(h);
+        return XC_ERR_IO;
+    }
+    ds->handle = h;
+    ds->expected = size;
+    ds->written = keep;
+    return XC_OK;
+}
+
+/* ADR 0011: closes an unfinished file that has a checkpoint, keeping it for the next attempt. */
+static xc_err sink_suspend_file(void *ctx)
+{
+    xc_nx_dir_sink *ds = ctx;
+    if (ds->handle == NULL) {
+        return XC_ERR_INVALID_ARG;
+    }
+    bool ok = CloseHandle(ds->handle) != 0;
+    ds->handle = NULL;
+    return ok ? XC_OK : XC_ERR_IO;
+}
+
 xc_err xc_nx_dir_sink_open(xc_sink *sink, xc_nx_dir_sink *ds, const char *root)
 {
     if (sink == NULL || ds == NULL || root == NULL || strlen(root) >= XC_NX_PATH_MAX) {
@@ -197,6 +256,9 @@ xc_err xc_nx_dir_sink_open(xc_sink *sink, xc_nx_dir_sink *ds, const char *root)
     sink->write = sink_write;
     sink->end_file = sink_end_file;
     sink->ctx = ds;
+    sink->sync = sink_sync;
+    sink->resume_file = sink_resume_file;
+    sink->suspend_file = sink_suspend_file;
     return XC_OK;
 }
 

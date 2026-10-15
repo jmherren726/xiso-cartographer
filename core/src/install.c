@@ -69,6 +69,8 @@ typedef struct job {
     xc_journal_state journal;
     bool *done;
     uint32_t *crc;
+    uint32_t *resume_bytes; /* ADR 0011: checkpoints to continue from */
+    uint32_t *resume_crc;
     char journal_path[XC_INSTALL_MAX_PATH];
     char line[JOURNAL_LINE_CAP];
     char path[XC_INSTALL_MAX_PATH]; /* scratch */
@@ -201,6 +203,38 @@ static xc_err on_file_done(void *ctx, size_t index, uint32_t crc)
     return err;
 }
 
+/* ADR 0011: the sink flushed the first `bytes` bytes; record the checkpoint, durably. */
+static xc_err on_checkpoint(void *ctx, size_t index, uint32_t bytes, uint32_t crc)
+{
+    job *j = ctx;
+    size_t len = 0;
+    xc_err err = xc_journal_format_part(j->listing.files[index].path, bytes, crc, j->line,
+                                        sizeof j->line, &len);
+    if (err == XC_OK) {
+        err = j->io->append(j->io->ctx, j->journal_path, j->line, len);
+    }
+    return err;
+}
+
+/* journal.md §6.6: an unfinished file continues at its last checkpoint if the file on disk is
+   at least that long; otherwise it's written from the start. */
+static void check_checkpoints(job *j)
+{
+    for (size_t i = 0; i < j->listing.file_count; i++) {
+        uint32_t keep = j->journal.part_bytes[i];
+        uint64_t size = 0;
+        if (j->done[i] || keep == 0 ||
+            !join(j, j->path, j->res->folder, j->listing.files[i].path) ||
+            j->io->file_size(j->io->ctx, j->path, &size) != XC_OK || size < keep) {
+            continue;
+        }
+        j->resume_bytes[i] = keep;
+        j->resume_crc[i] = j->journal.part_crc[i];
+        j->res->files_continued++;
+        j->res->bytes_continued += keep;
+    }
+}
+
 /* --- §7: read-back verification ----------------------------------------------------- */
 
 static xc_err verify(job *j)
@@ -292,7 +326,9 @@ static xc_err run_install(job *j)
     size_t files = j->listing.file_count > 0 ? j->listing.file_count : 1;
     j->done = calloc(files, sizeof *j->done);
     j->crc = calloc(files, sizeof *j->crc);
-    if (j->done == NULL || j->crc == NULL) {
+    j->resume_bytes = calloc(files, sizeof *j->resume_bytes);
+    j->resume_crc = calloc(files, sizeof *j->resume_crc);
+    if (j->done == NULL || j->crc == NULL || j->resume_bytes == NULL || j->resume_crc == NULL) {
         return XC_ERR_NOMEM;
     }
     xc_journal_make_id(&j->id, &j->listing, j->vol.partition_offset, j->src.size, req->etag,
@@ -324,13 +360,14 @@ static xc_err run_install(job *j)
             j->crc[i] = j->journal.crc[i];
         }
         check_done_files(j);
+        check_checkpoints(j);
     }
 
     /* Free space for everything still to be written, cluster-rounded (as M2 did). */
     uint64_t need = (uint64_t)(j->listing.dir_count + 2U) * req->cluster_size;
     for (size_t i = 0; i < j->listing.file_count; i++) {
         if (!j->done[i]) {
-            need += round_up(j->listing.files[i].size, req->cluster_size);
+            need += round_up(j->listing.files[i].size - j->resume_bytes[i], req->cluster_size);
         }
     }
     uint64_t free_bytes = 0;
@@ -372,6 +409,11 @@ static xc_err run_install(job *j)
         o.progress_ctx = j;
         o.file_done = on_file_done;
         o.file_done_ctx = j;
+        o.checkpoint_every =
+            req->checkpoint_bytes != 0 ? req->checkpoint_bytes : XC_INSTALL_CHECKPOINT;
+        o.checkpoint = on_checkpoint;
+        o.resume_bytes = j->resume_bytes;
+        o.resume_crc = j->resume_crc;
         /* `skip` must not change while extracting: on_file_done marks files in a copy. */
         bool *skip = malloc(files * sizeof *skip);
         if (skip == NULL) {
@@ -430,6 +472,8 @@ xc_err xc_install(const xc_install_req *req, xc_install_result *res)
     xc_xdvdfs_listing_free(&j->listing);
     free(j->done);
     free(j->crc);
+    free(j->resume_bytes);
+    free(j->resume_crc);
     free(j);
     return err;
 }

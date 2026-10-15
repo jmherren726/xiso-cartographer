@@ -50,6 +50,21 @@ typedef struct xc_extract_opts {
      */
     xc_err (*file_done)(void *ctx, size_t index, uint32_t crc32);
     void *file_done_ctx;
+    /*
+     * ADR 0011: inside a file larger than `checkpoint_every` bytes, every time
+     * that many more bytes are written, the extractor writes out its buffer,
+     * calls sink->sync, then `checkpoint` with the bytes so far and their CRC-32
+     * (ctx: file_done_ctx). 0 or a sink without sync: no checkpoints.
+     */
+    uint32_t checkpoint_every;
+    xc_err (*checkpoint)(void *ctx, size_t index, uint32_t bytes, uint32_t crc32);
+    /*
+     * Resume inside files: [file index] bytes already on disk (0 = write from the
+     * start) and their CRC-32. Such a file is reopened with sink->resume_file and
+     * only the rest is read. May be NULL.
+     */
+    const uint32_t *resume_bytes;
+    const uint32_t *resume_crc;
 } xc_extract_opts;
 
 typedef struct xc_extract_stats {

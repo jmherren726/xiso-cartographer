@@ -25,9 +25,10 @@ extern "C" {
 #endif
 
 #define XC_INSTALL_MARKER ".xcat-installed"
-#define XC_INSTALL_MAX_PATH 1024   /* folder paths this module builds */
-#define XC_INSTALL_MAX_PROBLEMS 8  /* FATX problems reported (all are counted) */
-#define XC_INSTALL_MAX_NUMBERED 99 /* "Title (2)" ... "Title (99)" (ADR 0008) */
+#define XC_INSTALL_MAX_PATH 1024                    /* folder paths this module builds */
+#define XC_INSTALL_MAX_PROBLEMS 8                   /* FATX problems reported (all are counted) */
+#define XC_INSTALL_MAX_NUMBERED 99                  /* "Title (2)" ... "Title (99)" (ADR 0008) */
+#define XC_INSTALL_CHECKPOINT (64U * 1024U * 1024U) /* bytes between checkpoints (ADR 0011) */
 
 /*
  * File access for the install, in the platform's own path syntax: the module
@@ -92,6 +93,7 @@ typedef struct xc_install_req {
     size_t buf_size;
     uint32_t cluster_size;           /* for the free-space estimate; 0 = none (exact sizes) */
     uint64_t coalesce_gap;           /* 0 = XC_EXTRACT_DEFAULT_GAP */
+    uint32_t checkpoint_bytes;       /* 0 = XC_INSTALL_CHECKPOINT; tests use small values */
     xc_install_progress_fn progress; /* may be NULL */
     void *progress_ctx;
 } xc_install_req;
@@ -101,6 +103,8 @@ typedef struct xc_install_result {
     bool resumed;                     /* an unfinished install in `folder` was continued */
     const char *other_folder_reason;  /* why an existing folder of that name wasn't used, or NULL */
     size_t files_skipped;             /* already there from an earlier attempt */
+    size_t files_continued;           /* resumed inside the file from a checkpoint (ADR 0011) */
+    uint64_t bytes_continued;         /* bytes those files already had */
     size_t files_written;
     size_t file_count;
     uint64_t bytes_written;

@@ -46,7 +46,7 @@ static int usage(void)
         "                    <url> <file>\n"
         "       xcat-cli map [--credentials <file>] <map-file>\n"
         "       xcat-cli install [--timeout <ms>] [--attempts <n>] [--credentials <file>]\n"
-        "                        <url|image> <games-dir> [title]\n",
+        "                        [--checkpoint <bytes>] <url|image> <games-dir> [title]\n",
         xc_version_string());
     return 2;
 }
@@ -130,8 +130,11 @@ static int cmd_extract(const char *image, const char *out)
     xc_extract_stats st;
     memset(&st, 0, sizeof st);
     if (err == XC_OK) {
-        xc_extract_opts opts = {buf, IO_BUFFER_SIZE, XC_EXTRACT_DEFAULT_GAP, NULL, NULL, NULL, NULL,
-                                NULL};
+        xc_extract_opts opts;
+        memset(&opts, 0, sizeof opts);
+        opts.buf = buf;
+        opts.buf_size = IO_BUFFER_SIZE;
+        opts.coalesce_gap = XC_EXTRACT_DEFAULT_GAP;
         err = xc_extract(&src, &l, &sink, &opts, &st);
         xc_host_dir_sink_close(&ds);
     }
@@ -433,6 +436,7 @@ static int get_fail(const xc_http_client *c, const char *url, xc_err err)
 typedef struct net_opts {
     unsigned long timeout_ms;
     unsigned long attempts;
+    unsigned long checkpoint; /* install only: bytes between checkpoints (ADR 0011), 0 = default */
     const char *cred_path;
 } net_opts;
 
@@ -450,6 +454,8 @@ static int parse_net_opts(int argc, char **argv, net_opts *o)
             ok = parse_uint(argv[i + 1], 3600000UL, &o->timeout_ms) && o->timeout_ms > 0;
         } else if (strcmp(argv[i], "--attempts") == 0) {
             ok = parse_uint(argv[i + 1], 1000UL, &o->attempts) && o->attempts > 0;
+        } else if (strcmp(argv[i], "--checkpoint") == 0) {
+            ok = parse_uint(argv[i + 1], 0x7FFFFFFFUL, &o->checkpoint) && o->checkpoint >= 4096U;
         }
         if (!ok) {
             return -1;
@@ -878,6 +884,7 @@ static int cmd_install(int argc, char **argv)
     req.buf = buf;
     req.buf_size = IO_BUFFER_SIZE;
     req.cluster_size = 16384U; /* a retail E: partition, like the console's estimate */
+    req.checkpoint_bytes = (uint32_t)o.checkpoint;
     req.progress = install_progress;
     req.progress_ctx = &ui;
     static xc_install_result r;
@@ -895,6 +902,10 @@ static int cmd_install(int argc, char **argv)
                      r.file_count, r.folder, r.files_written, r.files_skipped,
                      r.resumed ? ", resumed" : "", r.bytes_written, r.bytes_read,
                      (double)ms / 1000.0, mb_per_s(r.bytes_read, ms));
+        if (r.files_continued > 0) {
+            (void)printf("%zu file%s continued from a checkpoint (%" PRIu64 " bytes kept)\n",
+                         r.files_continued, r.files_continued == 1 ? "" : "s", r.bytes_continued);
+        }
     } else {
         if (r.resumed || r.files_written > 0) {
             (void)fprintf(stderr,

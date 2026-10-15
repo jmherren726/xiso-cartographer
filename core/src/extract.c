@@ -27,13 +27,24 @@ typedef struct run {
     bool open;  /* files[cur] has been begun */
     uint32_t written;
     uint32_t crc;
-    bool direct; /* bytes arrive in opts->buf (read_at): write them straight through */
-    size_t wlen; /* bytes waiting in opts->buf (read_stream) */
+    bool direct;        /* bytes arrive in opts->buf (read_at): write them straight through */
+    bool keep_on_error; /* the open file has a checkpoint (or was resumed): never delete it */
+    size_t wlen;        /* bytes waiting in opts->buf (read_stream) */
 } run;
 
 static bool skipped(const run *r, size_t i)
 {
     return r->opts->skip != NULL && r->opts->skip[i];
+}
+
+/* ADR 0011: bytes of file i already on disk from an earlier attempt (0: none). */
+static uint32_t resumed(const run *r, size_t i)
+{
+    if (r->opts->resume_bytes == NULL || r->sink->resume_file == NULL) {
+        return 0;
+    }
+    uint32_t keep = r->opts->resume_bytes[i];
+    return keep < r->l->files[i].size ? keep : 0;
 }
 
 static xc_err report(run *r)
@@ -90,11 +101,14 @@ static xc_err begin(run *r)
 {
     const xc_xdvdfs_entry *f = &r->l->files[r->cur];
     r->p.current = f->path;
-    xc_err err = r->sink->begin_file(r->sink->ctx, f->path, f->size);
+    uint32_t keep = resumed(r, r->cur);
+    xc_err err = keep > 0 ? r->sink->resume_file(r->sink->ctx, f->path, f->size, keep)
+                          : r->sink->begin_file(r->sink->ctx, f->path, f->size);
     if (err == XC_OK) {
         r->open = true;
-        r->written = 0;
-        r->crc = 0;
+        r->written = keep;
+        r->crc = keep > 0 ? r->opts->resume_crc[r->cur] : 0;
+        r->keep_on_error = keep > 0;
     }
     return err;
 }
@@ -172,6 +186,12 @@ static xc_err route(void *ctx, uint64_t offset, const uint8_t *data, size_t len)
             return XC_ERR_INVALID_ARG; /* the source skipped bytes: never write a hole */
         }
         uint32_t left = f->size - r->written;
+        uint32_t every = r->opts->checkpoint_every;
+        bool checkpoints =
+            every > 0 && f->size > every && r->sink->sync != NULL && r->opts->checkpoint != NULL;
+        if (checkpoints && every - r->written % every < left) {
+            left = every - r->written % every; /* stop exactly at the next checkpoint */
+        }
         size_t n = left < len ? (size_t)left : len;
         r->crc = xc_crc32(r->crc, data, n);
         err = put(r, data, n);
@@ -187,6 +207,16 @@ static xc_err route(void *ctx, uint64_t offset, const uint8_t *data, size_t len)
         if (err == XC_OK && r->written == f->size) {
             err = finish(r);
             r->cur++;
+        } else if (err == XC_OK && checkpoints && r->written % every == 0) {
+            /* ADR 0011: the bytes so far go to the disk before the journal says so. */
+            err = flush(r);
+            if (err == XC_OK) {
+                err = r->sink->sync(r->sink->ctx);
+            }
+            if (err == XC_OK) {
+                err = r->opts->checkpoint(r->opts->file_done_ctx, r->cur, r->written, r->crc);
+                r->keep_on_error = r->keep_on_error || err == XC_OK;
+            }
         }
         if (err != XC_OK) {
             return err;
@@ -230,7 +260,11 @@ static xc_err read_span(run *r, size_t first, size_t last, uint64_t start, uint6
     }
     if (err != XC_OK && r->open) {
         r->open = false;
-        (void)r->sink->end_file(r->sink->ctx, false);
+        if (r->keep_on_error && r->sink->suspend_file != NULL) {
+            (void)r->sink->suspend_file(r->sink->ctx); /* ADR 0011: the next attempt continues */
+        } else {
+            (void)r->sink->end_file(r->sink->ctx, false);
+        }
     }
     return err;
 }
@@ -263,6 +297,8 @@ xc_err xc_extract(const xc_source *src, const xc_xdvdfs_listing *listing, const 
             r.st.files_skipped++;
             r.p.files_done++;
             r.p.bytes_done += listing->files[i].size;
+        } else {
+            r.p.bytes_done += resumed(&r, i);
         }
     }
 
@@ -291,7 +327,7 @@ xc_err xc_extract(const xc_source *src, const xc_xdvdfs_listing *listing, const 
         }
         /* A span: following files whose gap from the span's end is small. A file that starts
            before the end (overlapping data already read) starts a new span. */
-        uint64_t start = f->offset;
+        uint64_t start = f->offset + resumed(&r, i); /* only the rest of a resumed file */
         uint64_t end = f->offset + f->size;
         size_t last = i + 1;
         while (last < listing->file_count) {

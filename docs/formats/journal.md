@@ -1,4 +1,4 @@
-# Install journal format (`xcat-journal`), version 1
+# Install journal format (`xcat-journal`), version 1.1
 
 **Status:** Normative. Implemented by `xcat/journal.h` (format, reading) and `xcat/install.h` (the life cycle of §2, §6 and §7), M4. The reasons behind it are in [ADR 0004](../adr/0004-streaming-install.md) §4: installs must survive cable pulls and power cuts, and resume without downloading finished files again.
 
@@ -9,10 +9,12 @@ The words **must**, **must not**, **should** and **may** are used as in RFC 2119
 ## 1. Example
 
 ```
-# xcat-journal v1 *5B6A2C1E
+# xcat-journal v1.1 *5B6A2C1E
 image 4610330624 0 2D84F0A7 21 *0C59D2B1
 validators "5e1f-61a2c3"  Wed,%2014%20Oct%202026%2010:00:00%20GMT *A33E1F09
 source http://192.168.1.20:8080/xbox/Game%20(Europe).xiso.iso *7F10B2C4
+part 67108864 3C1A88E2 data/big.dat *2A09BC17
+part 134217728 0B7F4D10 data/big.dat *61C3E5A2
 done 4294965248 9A0C3B71 data/big.dat *E1D24A80
 done 1 5E1E4C5F a%20b/one-byte.bin *3BC0A912
 ```
@@ -53,11 +55,13 @@ The journal **matches** an image when the image size, partition offset, listing 
 
 ```
 done <size> <crc32> <path>
+part <bytes> <crc32> <path>            (v1.1)
 ```
 
-- `size` is the file's size and `crc32` the CRC-32 of its content, as received and written.
+- `done`: the whole file is on disk. `size` is the file's size and `crc32` the CRC-32 of its content, as received and written.
+- `part` ([ADR 0011](../adr/0011-checkpoints-inside-large-files.md)): a checkpoint inside a file still being written. Its first `bytes` bytes are on disk (the file was flushed before this line), and `crc32` is the CRC-32 of exactly those bytes. `bytes` is greater than 0 and less than the file's size. Installers write one every 64 MiB of a large file.
 - `path` is the file's listing path, percent-encoded.
-- Each file has at most one `done` line. A reader that finds a second one for the same path treats the journal as invalid (§6).
+- Each file has at most one `done` line, and no `part` line after its `done` line. If a file has several `part` lines, the last one counts. (They can go down: a file that couldn't continue from its checkpoint is written again from the start, with new, smaller checkpoints.) A reader that finds anything else treats the journal as invalid (§6).
 
 Later minor versions may add record types (for example hash state for whole-image verification, M5).
 
@@ -65,9 +69,10 @@ Later minor versions may add record types (for example hash state for whole-imag
 
 1. Read the lines in order and stop at the first torn line (§3.2): it and everything after it are ignored. That's what a power cut during an append leaves behind.
 2. If the header is missing or malformed, the major version is newer than the reader's, or the identity lines are missing, torn or malformed, the journal is **invalid**.
-3. A `done` line that is malformed, names a path that isn't in the image's listing, or gives a size that doesn't match the listing makes the journal **invalid**. These can't come from a power cut, so something else wrote or damaged the file.
+3. A `done` or `part` line that is malformed, names a path that isn't in the image's listing, gives a size that doesn't match the listing (`done`) or a byte count of 0 or at least the file's size (`part`), or comes after the file's `done` line makes the journal **invalid**. These can't come from a power cut, so something else wrote or damaged the file.
 4. **Invalid, or not matching (§4):** the folder belongs to another image or can't be trusted. The installer **must not** reuse or delete its files; it installs into a new folder instead, named as for an existing folder ([ADR 0008](../adr/0008-refuse-games-fatx-cant-store.md)), and says so.
 5. **Valid and matching:** the `done` files are skipped. Before trusting one, the installer checks that the file exists with the recorded size; if it doesn't, the file is written again.
+6. A file with `part` lines but no `done` line resumes at its last checkpoint, if the file on disk is at least that long: the installer cuts it back to `bytes`, continues the CRC-32 from `crc32`, and downloads only the rest. Otherwise the file is written again from the start. A v1.0 reader skips `part` lines (§3.3), which also just rewrites the file.
 
 ## 7. Verification
 
@@ -78,3 +83,4 @@ When every file is done, the installer reads each one back from the disk and com
 | Version | Date | Change |
 |---|---|---|
 | 1.0 | 2026-10-15 | First version. |
+| 1.1 | 2026-10-15 | `part` checkpoint records inside large files ([ADR 0011](../adr/0011-checkpoints-inside-large-files.md)); §6.6. |

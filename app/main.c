@@ -446,6 +446,11 @@ static bool install(const xc_source *src, const char *name, const char *etag,
             (unsigned)result.files_written, (unsigned)result.files_skipped,
             (unsigned long long)(result.bytes_written >> 20U), (unsigned long long)(ms / 1000U),
             speed);
+        if (result.files_continued > 0) {
+            out("  %u file(s) continued from a checkpoint (%llu MiB were already there)\n",
+                (unsigned)result.files_continued,
+                (unsigned long long)(result.bytes_continued >> 20U));
+        }
         return true;
     }
     out("  NOT INSTALLED: %s\n", xc_err_str(err));
