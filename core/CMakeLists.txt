@@ -4,6 +4,7 @@ add_library(xcat
   src/extract.c
   src/fatx.c
   src/http.c
+  src/http_client.c
   src/source.c
   src/url.c
   src/version.c

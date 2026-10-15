@@ -31,6 +31,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - HTTP client profile (docs/formats/http.md): the strict HTTP/1.1 subset the console speaks, with limits, status handling, retries, resume and per-hop credentials.
 - URL parser (`xcat/url.h`) and HTTP response parser (`xcat/http.h`): `http`/`https` URLs with percent-encoding and redirect resolution; response heads, `Content-Range` and chunked bodies, rejecting anything ambiguous. Both are fuzzed in CI.
 - Stream-order report (`xc_xdvdfs_stream_order`, `xcat-cli layout`): shows whether every directory table precedes the files it describes, i.e. whether an image can be installed from a sequential (Deflate) stream in one pass (ADR 0009 open question).
+- HTTP client (`xcat/http_client.h`) over the new `xc_net`/`xc_clock` platform interfaces (`xcat/net.h`): `Range` requests for one remote file, up to 5 redirects with per-hop credentials, keep-alive, timeouts, retries with jittered backoff and `Retry-After`, and resume after a dropped connection without delivering any byte twice. Detects servers that ignore `Range` and files that change mid-download. `xc_http_source` exposes a remote file as an `xc_source`. New error codes for network and HTTP failures.
 
 ### Changed
 

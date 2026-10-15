@@ -89,6 +89,7 @@ xcat_add_test(test_extract)
 xcat_add_test(test_fatx)
 xcat_add_test(test_url)
 xcat_add_test(test_http)
+xcat_add_test(test_http_client)
 
 # FATX installability (ADR 0008): every fixture can be installed except "deep", whose names
 # of 43 and 255 characters can't be stored on FATX; `xcat-cli check` must refuse it (exit 3).
