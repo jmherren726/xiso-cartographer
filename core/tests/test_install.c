@@ -203,6 +203,39 @@ static xc_err s_end(void *ctx, bool complete)
     return XC_OK;
 }
 
+static int syncs;
+
+static xc_err s_sync(void *ctx)
+{
+    (void)ctx;
+    TEST_ASSERT_NOT_NULL(fs.open);
+    syncs++;
+    return XC_OK;
+}
+
+static xc_err s_resume(void *ctx, const char *path, uint32_t size, uint32_t keep)
+{
+    (void)ctx;
+    (void)size;
+    char full[XC_INSTALL_MAX_PATH];
+    sink_path(full, path);
+    node *n = find(full);
+    if (n == NULL || n->dir || n->len < keep) {
+        return XC_ERR_IO;
+    }
+    n->len = keep; /* cut back to the checkpoint */
+    fs.open = n;
+    return XC_OK;
+}
+
+static xc_err s_suspend(void *ctx)
+{
+    (void)ctx;
+    TEST_ASSERT_NOT_NULL(fs.open);
+    fs.open = NULL; /* closed, contents kept */
+    return XC_OK;
+}
+
 static xc_err f_open_sink(void *ctx, const char *root, xc_sink *sink, void **handle)
 {
     (void)ctx;
@@ -215,6 +248,9 @@ static xc_err f_open_sink(void *ctx, const char *root, xc_sink *sink, void **han
     sink->write = s_write;
     sink->end_file = s_end;
     sink->ctx = NULL;
+    sink->sync = s_sync;
+    sink->resume_file = s_resume;
+    sink->suspend_file = s_suspend;
     *handle = NULL;
     return XC_OK;
 }
@@ -255,11 +291,17 @@ static xc_source image;
 static uint8_t buf[256 * 1024];
 static xc_install_req req;
 static xc_install_result res;
-static int cancel_after; /* progress reports while writing before cancelling; < 0: never */
+static int cancel_after;      /* progress reports while writing before cancelling; < 0: never */
+static const char *cancel_in; /* or: cancel inside this file ... */
+static int cancel_in_reports; /* ... after this many reports on it */
 
 static bool on_progress(void *ctx, const xc_install_progress *p)
 {
     (void)ctx;
+    if (cancel_in != NULL && p->phase == XC_INSTALL_WRITING && p->current != NULL &&
+        strcmp(p->current, cancel_in) == 0 && cancel_in_reports-- <= 0) {
+        return false;
+    }
     if (p->phase == XC_INSTALL_WRITING && cancel_after >= 0) {
         if (cancel_after == 0) {
             return false;
@@ -278,6 +320,8 @@ void setUp(void)
     fs.free_bytes = UINT64_MAX;
     fs.appends_before_failure = -1;
     cancel_after = -1;
+    cancel_in = NULL;
+    syncs = 0;
     memset(&req, 0, sizeof req);
     req.src = &image;
     req.source_name = "small.iso";
@@ -408,6 +452,66 @@ static void test_other_folders_are_never_touched(void)
     TEST_ASSERT_NOT_NULL(find("E:/Games/Small Game (2)/save.dat"));
 }
 
+/* Journal lines that start with `prefix` and mention `name` (NULL: any). */
+static size_t count_lines(const char *path, const char *prefix, const char *name)
+{
+    node *n = find(path);
+    TEST_ASSERT_NOT_NULL(n);
+    size_t count = 0;
+    const char *p = (const char *)n->data;
+    const char *end = p + n->len;
+    while (p < end) {
+        const char *nl = memchr(p, '\n', (size_t)(end - p));
+        const char *stop = nl != NULL ? nl : end;
+        size_t n_len = name != NULL ? strlen(name) : 0;
+        bool named = name == NULL;
+        for (const char *q = p; !named && q + n_len <= stop; q++) {
+            named = memcmp(q, name, n_len) == 0;
+        }
+        if (strncmp(p, prefix, strlen(prefix)) == 0 && named) {
+            count++;
+        }
+        p = nl != NULL ? nl + 1 : end;
+    }
+    return count;
+}
+
+static void test_resume_inside_a_file(void)
+{
+    req.checkpoint_bytes = 16384;
+    cancel_in = "media/intro.xmv"; /* 100,000 bytes: checkpoints at 16 KiB, 32 KiB, ... */
+    cancel_in_reports = 3;
+    TEST_ASSERT_EQUAL_INT(XC_ERR_CANCELLED, xc_install(&req, &res));
+    TEST_ASSERT_TRUE(syncs > 0);
+    const char *journal = "E:/Games/Small Game/.xcat-journal";
+    size_t parts = count_lines(journal, "part ", "media/intro.xmv");
+    TEST_ASSERT_TRUE(parts >= 1);
+    TEST_ASSERT_NOT_NULL(strstr((char *)find(journal)->data, "part 16384 "));
+    TEST_ASSERT_NOT_NULL(strstr((char *)find(journal)->data, "# xcat-journal v1.1 *"));
+    cancel_in = NULL;
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_install(&req, &res));
+    TEST_ASSERT_TRUE(res.resumed);
+    TEST_ASSERT_EQUAL_size_t(1, res.files_continued);
+    TEST_ASSERT_EQUAL_UINT64(16384U * parts, res.bytes_continued);
+    /* The CRC carried across the checkpoint covers the whole file: the read-back passed. */
+    TEST_ASSERT_NOT_NULL(find("E:/Games/Small Game/.xcat-installed"));
+}
+
+static void test_checkpoint_ignored_if_file_is_short(void)
+{
+    req.checkpoint_bytes = 16384;
+    cancel_in = "media/intro.xmv";
+    cancel_in_reports = 3;
+    TEST_ASSERT_EQUAL_INT(XC_ERR_CANCELLED, xc_install(&req, &res));
+    node *f = find("E:/Games/Small Game/media/intro.xmv");
+    TEST_ASSERT_NOT_NULL(f);
+    f->len = 100; /* shorter than any checkpoint, as if the disk lost the tail */
+    cancel_in = NULL;
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_install(&req, &res));
+    TEST_ASSERT_EQUAL_size_t(0, res.files_continued); /* written again from the start */
+    TEST_ASSERT_NOT_NULL(find("E:/Games/Small Game/.xcat-installed"));
+}
+
 static void test_invalid_arguments(void)
 {
     req.buf_size = 1000;
@@ -434,6 +538,8 @@ int main(int argc, char **argv)
     RUN_TEST(test_missing_done_file_is_rewritten);
     RUN_TEST(test_journal_failure_stops);
     RUN_TEST(test_other_folders_are_never_touched);
+    RUN_TEST(test_resume_inside_a_file);
+    RUN_TEST(test_checkpoint_ignored_if_file_is_short);
     RUN_TEST(test_invalid_arguments);
     int rc = UNITY_END();
     setUp(); /* frees the file system */

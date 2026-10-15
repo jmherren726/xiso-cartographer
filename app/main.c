@@ -1,71 +1,389 @@
 /*
- * xiso-cartographer XBE, milestone M2: install an image that is already on the hard disk.
+ * xiso-cartographer XBE, milestone M4: install games over the network, resumably.
  *
- * Looks for images in E:\xcat\isos\. If there are none, it first copies the bundled
- * synthetic test image there (D:\samples\*.iso: dummy data from tools/fixtures, never a
- * game). Each image is checked (FATX rules, ADR 0008; free space), extracted to
- * E:\Games\<title>, verified by reading every installed file back and comparing it with
- * the image, and marked with .xcat-installed. The real UI replaces this in M8.
+ * What it installs, in this order:
+ *   1. every entry of the map E:\xcat\map.txt (docs/formats/map.md), downloaded over HTTP
+ *      with Range and installed while it streams in (ADR 0004);
+ *   2. every image in E:\xcat\isos\ (the M2 local install);
+ *   3. if there is neither, the bundled synthetic test image (D:\samples\*.iso).
+ * Each one goes through xc_install (xcat/install.h): FATX check, free space, a journal so a
+ * pulled cable or a power cut resumes instead of starting over, a read-back check of every
+ * file, and the .xcat-installed marker. Logins come from E:\Apps\xcat\credentials
+ * (docs/formats/credentials.md). Everything shown is also appended to E:\xcat\install.log.
+ * The real UI replaces this in M8.
  */
+#include <SDL.h>
 #include <hal/debug.h>
 #include <hal/video.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <windows.h>
+#include <xboxkrnl/xboxkrnl.h>
 
-#include "xcat/extract.h"
-#include "xcat/fatx.h"
+#include "xcat/credentials.h"
+#include "xcat/http_client.h"
+#include "xcat/install.h"
+#include "xcat/map.h"
 #include "xcat/nxdk.h"
 #include "xcat/version.h"
-#include "xcat/xdvdfs.h"
 
-#define ISO_DIR "E:\\xcat\\isos"
+#define XCAT_DIR "E:\\xcat"
+#define MAP_FILE XCAT_DIR "\\map.txt"
+#define ISO_DIR XCAT_DIR "\\isos"
+#define LOG_FILE XCAT_DIR "\\install.log"
+#define CRED_FILE "E:\\Apps\\xcat\\credentials"
 #define SAMPLE_DIR "D:\\samples"
 #define GAMES_DIR "E:\\Games"
 #define IO_BUF_SIZE ((size_t)1024 * 1024)
+#define RECV_BUF_SIZE ((size_t)256 * 1024)
 #define CLUSTER 16384U /* FATX cluster size on a retail E: partition; for the space estimate */
-#define MAX_IMAGES 16
-#define MAX_PROBLEMS 8
+#define ATTEMPTS 40U   /* consecutive failures before giving up: about half an hour */
+#define MAX_LOCAL 16
+#define LOG_MAX_BYTES (1024U * 1024U)
+#define REPORT_EVERY_MS 5000U
 
 static uint8_t *io_buf;
-static uint8_t *cmp_buf;
+static uint8_t *recv_buf;
+static HANDLE log_file = INVALID_HANDLE_VALUE;
+
+/* --- screen and log ---------------------------------------------------------------- */
+
+__attribute__((format(printf, 1, 2))) static void out(const char *fmt, ...)
+{
+    char line[512];
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(line, sizeof line, fmt, ap);
+    va_end(ap);
+    if (n < 0) {
+        return;
+    }
+    if ((size_t)n >= sizeof line) {
+        n = (int)sizeof line - 1;
+    }
+    debugPrint("%s", line);
+    if (log_file != INVALID_HANDLE_VALUE) {
+        DWORD put = 0;
+        (void)WriteFile(log_file, line, (DWORD)n, &put, NULL);
+        IO_STATUS_BLOCK io; /* flushed: the run usually ends at the power switch */
+        (void)NtFlushBuffersFile(log_file, &io);
+    }
+}
+
+static void open_log(void)
+{
+    log_file =
+        CreateFileA(LOG_FILE, GENERIC_WRITE, 0, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (log_file == INVALID_HANDLE_VALUE) {
+        return;
+    }
+    DWORD end = SetFilePointer(log_file, 0, NULL, FILE_END);
+    if (end == INVALID_SET_FILE_POINTER || end > LOG_MAX_BYTES) {
+        SetFilePointer(log_file, 0, NULL, FILE_BEGIN);
+        SetEndOfFile(log_file);
+    } else if (end > 0) {
+        DWORD put = 0;
+        (void)WriteFile(log_file, "\n", 1, &put, NULL);
+    }
+}
+
+/* --- controllers: LT + RT + Back + Black returns to the dashboard ------------------- */
+
+#define MAX_PADS 4
+#define PAD_POLL_MS 100U
+#define TRIGGER_DOWN 16384 /* of 32767 */
+
+static bool pads_ok;
+static SDL_GameController *pads[MAX_PADS];
+static DWORD next_pad_poll;
+static bool exit_requested;
+
+static void pads_init(void)
+{
+    pads_ok = SDL_Init(SDL_INIT_GAMECONTROLLER) == 0;
+}
+
+/* True once LT + RT + Back + Black (the rocky5 shortcut) is held on any controller. Cheap to
+   call often: it looks at the controllers at most every 100 ms. */
+static bool exit_combo(void)
+{
+    if (!pads_ok || exit_requested || GetTickCount() - next_pad_poll > 0x80000000U) {
+        return exit_requested;
+    }
+    next_pad_poll = GetTickCount() + PAD_POLL_MS;
+    SDL_Event e;
+    while (SDL_PollEvent(&e)) {
+        if (e.type == SDL_CONTROLLERDEVICEADDED) {
+            for (int i = 0; i < MAX_PADS; i++) {
+                if (pads[i] == NULL) {
+                    pads[i] = SDL_GameControllerOpen(e.cdevice.which);
+                    break;
+                }
+            }
+        } else if (e.type == SDL_CONTROLLERDEVICEREMOVED) {
+            SDL_GameController *gone = SDL_GameControllerFromInstanceID(e.cdevice.which);
+            for (int i = 0; i < MAX_PADS; i++) {
+                if (pads[i] != NULL && pads[i] == gone) {
+                    SDL_GameControllerClose(pads[i]);
+                    pads[i] = NULL;
+                }
+            }
+        }
+    }
+    SDL_GameControllerUpdate();
+    for (int i = 0; i < MAX_PADS; i++) {
+        SDL_GameController *c = pads[i];
+        if (c != NULL &&
+            SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_TRIGGERLEFT) > TRIGGER_DOWN &&
+            SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_TRIGGERRIGHT) > TRIGGER_DOWN &&
+            SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_BACK) &&
+            SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER)) { /* Black */
+            exit_requested = true;
+        }
+    }
+    return exit_requested;
+}
+
+static void close_log(void)
+{
+    if (log_file != INVALID_HANDLE_VALUE) {
+        CloseHandle(log_file);
+        log_file = INVALID_HANDLE_VALUE;
+    }
+}
+
+/* Back to the dashboard. Everything written so far is on the disk already (journal and
+   checkpoints are flushed as they go), so an unfinished install resumes next time. */
+static void to_dashboard(void)
+{
+    out("\nReturning to the dashboard...\n");
+    close_log();
+    HalReturnToFirmware(HalQuickRebootRoutine);
+}
 
 static void halt(void)
 {
+    close_log();
     for (;;) {
-        Sleep(1000);
-    }
-}
-
-/* If E:\xcat\isos has no images, copies the bundled samples there. */
-static void seed_samples(void)
-{
-    WIN32_FIND_DATAA fd;
-    HANDLE h = FindFirstFileA(ISO_DIR "\\*.iso", &fd);
-    if (h != INVALID_HANDLE_VALUE) {
-        FindClose(h);
-        return;
-    }
-    h = FindFirstFileA(SAMPLE_DIR "\\*.iso", &fd);
-    if (h == INVALID_HANDLE_VALUE) {
-        debugPrint("No images in " ISO_DIR " and no bundled samples.\n");
-        return;
-    }
-    do {
-        char from[XC_NX_PATH_MAX];
-        char to[XC_NX_PATH_MAX];
-        snprintf(from, sizeof from, SAMPLE_DIR "\\%s", fd.cFileName);
-        snprintf(to, sizeof to, ISO_DIR "\\%s", fd.cFileName);
-        debugPrint("Copying bundled test image %s to the HDD\n", fd.cFileName);
-        if (!CopyFileA(from, to, TRUE)) {
-            debugPrint("  copy failed (error %lu)\n", (unsigned long)GetLastError());
+        if (exit_combo()) {
+            to_dashboard();
         }
-    } while (FindNextFileA(h, &fd));
-    FindClose(h);
+        Sleep(PAD_POLL_MS);
+    }
 }
 
-/* True if the `n` bytes before s[len] equal `suffix`, ignoring ASCII case. */
+/* "12.3" from tenths: PDCLib's printf has no floating point. */
+static void tenths(char *buf, size_t size, uint64_t t)
+{
+    (void)snprintf(buf, size, "%llu.%llu", (unsigned long long)(t / 10U),
+                   (unsigned long long)(t % 10U));
+}
+
+/* --- network, on first use ------------------------------------------------------------ */
+
+static bool net_tried;
+static bool net_up;
+static xc_net net;
+static xc_clock clk;
+static xc_credentials creds;
+static xc_http_auth auth;
+static bool have_creds;
+static xc_http_client client;
+static uint64_t run_start_ms;
+
+static uint64_t now_ms(void)
+{
+    return clk.now_ms(clk.ctx);
+}
+
+static bool on_retry(void *ctx, const xc_http_retry *r)
+{
+    (void)ctx;
+    xc_nx_net_stats st;
+    xc_nx_net_last(&st);
+    char delay[24];
+    tenths(delay, sizeof delay, r->delay_ms / 100U);
+    unsigned long long t = (unsigned long long)((now_ms() - run_start_ms) / 1000U);
+    if (r->status != 0) {
+        out("  %4llu s  HTTP %d, retrying in %s s (failure %u of %u)\n", t, r->status, delay,
+            r->failures, r->max_attempts);
+    } else {
+        out("  %4llu s  %s, retrying in %s s (failure %u of %u)\n", t, xc_err_str(r->err), delay,
+            r->failures, r->max_attempts);
+    }
+    /* Which step was slow (diagnosis for the first-request timeout seen in M3). */
+    out("           last connect: lookup %lu ms, handshake %lu ms, %s\n", (unsigned long)st.dns_ms,
+        (unsigned long)st.connect_ms, xc_err_str(st.result));
+    return !exit_combo(); /* the shortcut also works while waiting out an outage */
+}
+
+static void load_credentials(void)
+{
+    if (!xc_nx_exists(CRED_FILE)) {
+        return;
+    }
+    xc_nx_file f = {NULL};
+    xc_source src;
+    char *data = NULL;
+    xc_err err = xc_nx_file_open(&src, &f, CRED_FILE);
+    if (err == XC_OK && src.size > XC_CRED_MAX_FILE) {
+        err = XC_ERR_LIMIT;
+    }
+    if (err == XC_OK) {
+        data = malloc((size_t)src.size + 1);
+        err = data != NULL ? xc_source_read(&src, 0, data, (size_t)src.size) : XC_ERR_NOMEM;
+    }
+    xc_cred_error cerr;
+    memset(&cerr, 0, sizeof cerr);
+    if (err == XC_OK) {
+        err = xc_cred_parse(data, (size_t)src.size, &creds, &cerr);
+    }
+    free(data);
+    xc_nx_file_close(&f);
+    if (err == XC_OK) {
+        have_creds = true;
+        out("Credentials: %u section(s) from %s\n", (unsigned)creds.section_count, CRED_FILE);
+    } else if (err == XC_ERR_CREDENTIALS) {
+        out("%s line %u: %s; installing without credentials\n", CRED_FILE, (unsigned)cerr.line,
+            cerr.message);
+    } else {
+        out("%s: %s; installing without credentials\n", CRED_FILE, xc_err_str(err));
+    }
+}
+
+static bool network(void)
+{
+    if (net_tried) {
+        return net_up;
+    }
+    net_tried = true;
+    char ip[32] = "";
+    out("Starting the network (dashboard settings)...\n");
+    if (xc_nx_net_startup(ip, sizeof ip) != XC_OK) {
+        out("No network: check the cable and the dashboard's network settings.\n");
+        return false;
+    }
+    out("Console IP %s\n", ip);
+    xc_nx_net(&net);
+    xc_http_config cfg;
+    memset(&cfg, 0, sizeof cfg);
+    cfg.net = &net;
+    cfg.clock = &clk;
+    cfg.buf = recv_buf;
+    cfg.buf_size = RECV_BUF_SIZE;
+    cfg.max_attempts = ATTEMPTS;
+    cfg.seed = (uint32_t)now_ms();
+    cfg.on_retry = on_retry;
+    if (have_creds) {
+        xc_cred_http_auth(&auth, &creds);
+        cfg.auth = &auth;
+    }
+    net_up = xc_http_client_init(&client, &cfg) == XC_OK;
+    return net_up;
+}
+
+/* --- the map ------------------------------------------------------------------------------ */
+
+static xc_err read_local(const char *path, size_t max_len, char **data, size_t *len)
+{
+    xc_nx_file f = {NULL};
+    xc_source src;
+    xc_err err = xc_nx_file_open(&src, &f, path);
+    if (err == XC_OK && src.size > max_len) {
+        err = XC_ERR_LIMIT;
+    }
+    char *buf = NULL;
+    if (err == XC_OK) {
+        buf = malloc((size_t)src.size + 1);
+        err = buf != NULL ? xc_source_read(&src, 0, buf, (size_t)src.size) : XC_ERR_NOMEM;
+    }
+    xc_nx_file_close(&f);
+    if (err != XC_OK) {
+        free(buf);
+        return err;
+    }
+    *data = buf;
+    *len = (size_t)src.size;
+    return XC_OK;
+}
+
+typedef struct mem_ctx {
+    char *buf;
+} mem_ctx;
+
+static xc_err to_mem(void *ctx, uint64_t offset, const uint8_t *data, size_t len)
+{
+    memcpy(((mem_ctx *)ctx)->buf + (size_t)offset, data, len);
+    return XC_OK;
+}
+
+static xc_http_resource res; /* large: one at a time */
+
+/* xc_map_fetch_fn: includes from the HDD or over HTTP. */
+static xc_err map_fetch(void *ctx, const char *location, bool is_url, size_t max_len, char **data,
+                        size_t *len)
+{
+    (void)ctx;
+    if (!is_url) {
+        return read_local(location, max_len, data, len);
+    }
+    if (!network()) {
+        return XC_ERR_NET_CONNECT;
+    }
+    xc_err err = xc_http_resource_init(&res, location, strlen(location));
+    if (err == XC_OK) {
+        err = xc_http_probe(&client, &res);
+    }
+    if (err == XC_OK && res.size > max_len) {
+        err = XC_ERR_LIMIT;
+    }
+    mem_ctx m = {NULL};
+    if (err == XC_OK) {
+        m.buf = malloc((size_t)res.size + 1);
+        err = m.buf != NULL ? xc_http_read(&client, &res, 0, res.size, to_mem, &m) : XC_ERR_NOMEM;
+    }
+    if (err != XC_OK) {
+        free(m.buf);
+        return err;
+    }
+    *data = m.buf;
+    *len = (size_t)res.size;
+    return XC_OK;
+}
+
+static bool load_map(xc_map *map)
+{
+    memset(map, 0, sizeof *map);
+    if (!xc_nx_exists(MAP_FILE)) {
+        return false;
+    }
+    char *data = NULL;
+    size_t len = 0;
+    xc_err err = read_local(MAP_FILE, XC_MAP_MAX_FILE, &data, &len);
+    if (err != XC_OK) {
+        out("%s: %s\n", MAP_FILE, err == XC_ERR_LIMIT ? "larger than 1 MiB" : xc_err_str(err));
+        return false;
+    }
+    xc_map_loader loader = {map_fetch, NULL};
+    err = xc_map_load(data, len, MAP_FILE, &loader, map);
+    free(data);
+    for (size_t i = 0; i < map->problem_count; i++) {
+        const xc_map_problem *p = &map->problems[i];
+        out("%s:%u: %s: %s\n", map->sources[p->source], (unsigned)p->line,
+            p->severity == XC_MAP_ERROR ? "error" : "warning", p->message);
+    }
+    if (map->problems_dropped > 0) {
+        out("... and %u more map problems\n", (unsigned)map->problems_dropped);
+    }
+    out("Map: %u entr%s from %u file(s)\n", (unsigned)map->entry_count,
+        map->entry_count == 1 ? "y" : "ies", (unsigned)map->source_count);
+    return err == XC_OK;
+}
+
+/* --- installing --------------------------------------------------------------------------- */
+
 static bool ends_with_ci(const char *s, size_t len, const char *suffix)
 {
     size_t n = strlen(suffix);
@@ -74,103 +392,110 @@ static bool ends_with_ci(const char *s, size_t len, const char *suffix)
     }
     for (size_t i = 0; i < n; i++) {
         char a = s[len - n + i];
-        char b = suffix[i];
         if (a >= 'A' && a <= 'Z') {
             a = (char)(a - 'A' + 'a');
         }
-        if (a != b) {
+        if (a != suffix[i]) {
             return false;
         }
     }
     return true;
 }
 
-/* "Halo (USA).xiso.iso" -> "Halo (USA)" */
-static void title_from_file(const char *file, char *out, size_t size)
+static int hexval(char c)
 {
-    size_t len = strlen(file);
-    if (ends_with_ci(file, len, ".iso")) {
-        len -= 4;
-    }
-    if (ends_with_ci(file, len, ".xiso")) {
-        len -= 5;
-    }
-    if (len >= size) {
-        len = size - 1;
-    }
-    memcpy(out, file, len);
-    out[len] = '\0';
+    return c >= '0' && c <= '9'   ? c - '0'
+           : c >= 'a' && c <= 'f' ? c - 'a' + 10
+           : c >= 'A' && c <= 'F' ? c - 'A' + 10
+                                  : -1;
 }
 
-typedef struct progress {
-    int last_tenth;
-} progress;
-
-static bool on_progress(void *ctx, const xc_extract_progress *p)
+/* "dir/Halo%20(USA).xiso.iso?x" -> "Halo (USA)" */
+static void title_from(const char *name, char *out_title, size_t size)
 {
-    progress *pr = ctx;
-    int pct = p->bytes_total > 0 ? (int)(p->bytes_done * 100U / p->bytes_total) : 100;
-    if (pct / 10 > pr->last_tenth) {
-        pr->last_tenth = pct / 10;
-        debugPrint(" %d%%", pct);
+    const char *end = name + strcspn(name, "?#");
+    const char *p = end;
+    while (p > name && p[-1] != '/' && p[-1] != '\\') {
+        p--;
     }
-    return true;
+    size_t n = 0;
+    while (p < end && n + 1 < size) {
+        int hi = p[0] == '%' && end - p >= 3 ? hexval(p[1]) : -1;
+        int lo = hi >= 0 ? hexval(p[2]) : -1;
+        out_title[n++] = lo >= 0 ? (char)(hi * 16 + lo) : *p;
+        p += lo >= 0 ? 3 : 1;
+    }
+    if (ends_with_ci(out_title, n, ".iso")) {
+        n -= 4;
+    }
+    if (ends_with_ci(out_title, n, ".xiso")) {
+        n -= 5;
+    }
+    out_title[n] = '\0';
 }
 
-/* Reads every installed file back and compares it with the image. */
-static size_t verify(const xc_source *img, const xc_xdvdfs_listing *l, const char *dir)
+typedef struct ui {
+    int phase;
+    uint64_t next_ms;
+    uint64_t phase_ms;    /* when the current phase began */
+    uint64_t phase_bytes; /* bytes_done when it began: a resumed install starts above 0 */
+    uint64_t write_ms;    /* how long writing took, once it's over */
+    uint64_t write_bytes; /* bytes written in this run */
+    uint64_t verify_ms;
+    uint64_t verify_bytes;
+} ui;
+
+/* Decimal MB/s in tenths. */
+static uint64_t mbps_tenths(uint64_t bytes, uint64_t ms)
 {
-    size_t bad = 0;
-    for (size_t i = 0; i < l->file_count; i++) {
-        const xc_xdvdfs_entry *e = &l->files[i];
-        char path[XC_NX_PATH_MAX];
-        snprintf(path, sizeof path, "%s\\%s", dir, e->path);
-        for (char *c = path; *c != '\0'; c++) {
-            if (*c == '/') {
-                *c = '\\';
-            }
-        }
-        xc_nx_file f = {NULL};
-        xc_source out;
-        if (xc_nx_file_open(&out, &f, path) != XC_OK || out.size != e->size) {
-            debugPrint("  MISSING or wrong size: %s\n", e->path);
-            xc_nx_file_close(&f);
-            bad++;
-            continue;
-        }
-        for (uint64_t pos = 0; pos < e->size;) {
-            size_t n = e->size - pos < IO_BUF_SIZE ? (size_t)(e->size - pos) : IO_BUF_SIZE;
-            if (xc_source_read(img, e->offset + pos, io_buf, n) != XC_OK ||
-                xc_source_read(&out, pos, cmp_buf, n) != XC_OK || memcmp(io_buf, cmp_buf, n) != 0) {
-                debugPrint("  CONTENT MISMATCH: %s\n", e->path);
-                bad++;
-                break;
-            }
-            pos += n;
-        }
-        xc_nx_file_close(&f);
-    }
-    return bad;
+    return ms > 0 ? bytes / ms / 100U : 0;
 }
 
-static void write_marker(const char *dir, const char *image, const xc_xdvdfs_listing *l)
+static void end_phase(ui *u, uint64_t now, uint64_t bytes_done)
 {
-    char path[XC_NX_PATH_MAX];
-    snprintf(path, sizeof path, "%s\\.xcat-installed", dir);
-    char text[512];
-    int n = snprintf(text, sizeof text,
-                     "xiso-cartographer %s\nimage=%s\nfiles=%u\nbytes=%llu\nverified=yes\n",
-                     xc_version_string(), image, (unsigned)l->file_count,
-                     (unsigned long long)l->total_file_bytes);
-    HANDLE h =
-        CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    DWORD put = 0;
-    if (h == INVALID_HANDLE_VALUE || n <= 0 || !WriteFile(h, text, (DWORD)n, &put, NULL)) {
-        debugPrint("  warning: could not write .xcat-installed\n");
+    if (u->phase == XC_INSTALL_WRITING) {
+        u->write_ms = now - u->phase_ms;
+        u->write_bytes = bytes_done - u->phase_bytes;
+    } else if (u->phase == XC_INSTALL_VERIFYING) {
+        u->verify_ms = now - u->phase_ms;
+        u->verify_bytes = bytes_done - u->phase_bytes;
     }
-    if (h != INVALID_HANDLE_VALUE) {
-        CloseHandle(h);
+}
+
+static uint64_t last_bytes_done;
+
+static bool on_progress(void *ctx, const xc_install_progress *p)
+{
+    ui *u = ctx;
+    uint64_t now = now_ms();
+    if ((int)p->phase != u->phase) {
+        end_phase(u, now, last_bytes_done);
+        u->phase = (int)p->phase;
+        u->next_ms = 0;
+        u->phase_ms = now;
+        u->phase_bytes = p->bytes_done;
+        out("  %s\n", p->phase == XC_INSTALL_WRITING     ? "writing files"
+                      : p->phase == XC_INSTALL_VERIFYING ? "verifying (reading every file back)"
+                                                         : "reading the directory tables");
     }
+    last_bytes_done = p->bytes_done;
+    if (now >= u->next_ms && p->bytes_total > 0) {
+        u->next_ms = now + REPORT_EVERY_MS;
+        char speed[24] = "-";
+        if (now > u->phase_ms + 1000U) {
+            /* this run's bytes only: what a resume found on the disk isn't speed */
+            tenths(speed, sizeof speed,
+                   mbps_tenths(p->bytes_done - u->phase_bytes, now - u->phase_ms));
+        }
+        /* The file being worked on (1-based), not the number finished: one big file would
+           otherwise read "0 of N" for most of an install. */
+        size_t current = p->files_done < p->file_count ? p->files_done + 1 : p->file_count;
+        out("  %4llu s  %llu of %llu MiB, file %u of %u, %s MB/s\n",
+            (unsigned long long)((now - run_start_ms) / 1000U),
+            (unsigned long long)(p->bytes_done >> 20U), (unsigned long long)(p->bytes_total >> 20U),
+            (unsigned)current, (unsigned)p->file_count, speed);
+    }
+    return !exit_combo();
 }
 
 static const char *problem_text(const xc_fatx_problem *p)
@@ -182,124 +507,183 @@ static const char *problem_text(const xc_fatx_problem *p)
         return "path over 250 characters";
     case XC_FATX_PROBLEM_TOO_MANY_ENTRIES:
         return "over 4096 entries in one folder";
+    case XC_FATX_PROBLEM_FILE_TOO_BIG:
+        return "file over 4 GiB - 16 KiB (FATX can't grow a file further)";
     }
     return "problem";
 }
 
-/* Returns true if the image was installed and verified. */
-static bool install(const char *file)
-{
-    char image[XC_NX_PATH_MAX];
-    snprintf(image, sizeof image, ISO_DIR "\\%s", file);
-    debugPrint("\n%s\n", file);
+static xc_install_result result;
 
-    xc_nx_file f = {NULL};
-    xc_source src;
-    xc_xdvdfs_volume vol;
-    xc_xdvdfs_listing l;
-    memset(&l, 0, sizeof l);
-    xc_err err = xc_nx_file_open(&src, &f, image);
-    if (err == XC_OK) {
-        err = xc_xdvdfs_open(&src, &vol);
+/* Installs one image; true if it ended installed and verified. */
+static bool install(const xc_source *src, const char *name, const char *etag,
+                    const char *last_modified)
+{
+    char title[128];
+    title_from(name, title, sizeof title);
+    out("\n%s\n", name);
+    xc_install_io io;
+    xc_nx_install_io(&io);
+    ui u;
+    memset(&u, 0, sizeof u);
+    u.phase = -1;
+    last_bytes_done = 0;
+    xc_install_req req;
+    memset(&req, 0, sizeof req);
+    req.src = src;
+    req.etag = etag;
+    req.last_modified = last_modified;
+    req.source_name = name;
+    req.games_dir = GAMES_DIR;
+    req.title = title;
+    req.io = &io;
+    req.buf = io_buf;
+    req.buf_size = IO_BUF_SIZE;
+    req.cluster_size = CLUSTER;
+    req.progress = on_progress;
+    req.progress_ctx = &u;
+    xc_err err = xc_install(&req, &result);
+    end_phase(&u, now_ms(), last_bytes_done);
+    if (result.other_folder_reason != NULL) {
+        out("  (not the existing folder of that name: %s)\n", result.other_folder_reason);
     }
     if (err == XC_OK) {
-        err = xc_xdvdfs_list(&src, &vol, NULL, &l);
+        char wspeed[24];
+        char vspeed[24];
+        tenths(wspeed, sizeof wspeed, mbps_tenths(u.write_bytes, u.write_ms));
+        tenths(vspeed, sizeof vspeed, mbps_tenths(u.verify_bytes, u.verify_ms));
+        out("  OK: %u files in %s, verified%s\n", (unsigned)result.file_count, result.folder,
+            result.resumed ? " (resumed)" : "");
+        out("  %u written, %u kept from an earlier attempt\n", (unsigned)result.files_written,
+            (unsigned)result.files_skipped);
+        out("  wrote %llu MiB in %llu s (%s MB/s); read back %llu MiB in %llu s (%s MB/s)\n",
+            (unsigned long long)(u.write_bytes >> 20U), (unsigned long long)(u.write_ms / 1000U),
+            wspeed, (unsigned long long)(u.verify_bytes >> 20U),
+            (unsigned long long)(u.verify_ms / 1000U), vspeed);
+        if (result.files_continued > 0) {
+            out("  %u file(s) continued from a checkpoint (%llu MiB were already there)\n",
+                (unsigned)result.files_continued,
+                (unsigned long long)(result.bytes_continued >> 20U));
+        }
+        return true;
     }
-    if (err != XC_OK) {
-        debugPrint("  can't read image: %s\n", xc_err_str(err));
-        xc_nx_file_close(&f);
+    out("  NOT INSTALLED: %s\n", xc_err_str(err));
+    if (result.current_file[0] != '\0') {
+        out("   at %s\n", result.current_file);
+    }
+    const char *op = NULL;
+    unsigned long code = 0;
+    xc_nx_last_io_error(&op, &code);
+    if (err == XC_ERR_IO && op != NULL) {
+        out("   the disk %s failed (error 0x%08lX)\n", op, code);
+    }
+    if (err == XC_ERR_NOT_INSTALLABLE) {
+        for (size_t i = 0; i < result.problem_count && i < XC_INSTALL_MAX_PROBLEMS; i++) {
+            out("   %.48s: %s\n", result.problems[i].path, problem_text(&result.problems[i]));
+        }
+    } else if (err == XC_ERR_NO_SPACE) {
+        out("   needs %llu MiB, %llu MiB free\n", (unsigned long long)(result.space_needed >> 20U),
+            (unsigned long long)(result.space_free >> 20U));
+    } else if (err == XC_ERR_VERIFY) {
+        out("   %s was removed; start again to rewrite it\n", result.bad_file);
+    } else if (err == XC_ERR_HTTP_DENIED && client.last_section != NULL) {
+        out("   login missing or expired for [%s]\n", client.last_section);
+    } else if (client.last_status != 0 && (err == XC_ERR_HTTP_STATUS || err == XC_ERR_HTTP_DENIED ||
+                                           err == XC_ERR_HTTP_NOT_FOUND)) {
+        out("   HTTP %d\n", client.last_status);
+    }
+    if (result.files_written + result.files_skipped > 0) {
+        out("   %u files are done in %s; start again to resume\n",
+            (unsigned)(result.files_written + result.files_skipped), result.folder);
+    }
+    return false;
+}
+
+static bool install_url(const char *url)
+{
+    if (!network()) {
+        out("\n%s\n  NOT INSTALLED: no network\n", url);
         return false;
     }
-    debugPrint("  %u files, %u folders, %llu KB\n", (unsigned)l.file_count, (unsigned)l.dir_count,
-               (unsigned long long)(l.total_file_bytes / 1024U));
-
-    /* Install folder: from the file name, numbered if already taken (ADR 0008). */
-    char title[128];
-    title_from_file(file, title, sizeof title);
-    char base[XC_FATX_MAX_NAME + 1];
-    char folder[XC_FATX_MAX_NAME + 1];
-    xc_fatx_title_name(title, base, XC_FATX_MAX_NAME);
-    memcpy(folder, base, strlen(base) + 1);
-    char dir[XC_NX_PATH_MAX];
-    snprintf(dir, sizeof dir, GAMES_DIR "\\%s", folder);
-    for (unsigned k = 2; xc_nx_exists(dir) && k < 100; k++) {
-        xc_fatx_numbered_name(base, k, folder);
-        snprintf(dir, sizeof dir, GAMES_DIR "\\%s", folder);
-    }
-
-    bool ok = false;
-    xc_fatx_problem problems[MAX_PROBLEMS];
-    size_t count = 0;
-    err = xc_fatx_check_listing(&l, strlen("\\Games\\") + strlen(folder), problems, MAX_PROBLEMS,
-                                &count);
-    if (err != XC_OK || count > 0) {
-        debugPrint("  NOT INSTALLED: %s\n",
-                   err != XC_OK ? xc_err_str(err) : xc_err_str(XC_ERR_NOT_INSTALLABLE));
-        for (size_t i = 0; i < count && i < MAX_PROBLEMS; i++) {
-            debugPrint("   %.48s: %s\n", problems[i].path, problem_text(&problems[i]));
-        }
-        goto done;
-    }
-
-    /* Free space: every file rounded up to whole clusters, plus a cluster per folder. */
-    uint64_t need = (uint64_t)(l.dir_count + 2U) * CLUSTER;
-    for (size_t i = 0; i < l.file_count; i++) {
-        need += ((uint64_t)l.files[i].size + CLUSTER - 1U) / CLUSTER * CLUSTER;
-    }
-    uint64_t free_bytes = 0;
-    if (xc_nx_free_space("E:\\", &free_bytes) != XC_OK || free_bytes < need) {
-        debugPrint("  NOT INSTALLED: needs %llu KB, %llu KB free\n",
-                   (unsigned long long)(need / 1024U), (unsigned long long)(free_bytes / 1024U));
-        goto done;
-    }
-
-    debugPrint("  -> %s\n  extracting:", dir);
-    xc_sink sink;
-    xc_nx_dir_sink ds;
-    err = xc_nx_dir_sink_open(&sink, &ds, dir);
-    xc_extract_stats st;
-    memset(&st, 0, sizeof st);
-    DWORD start = GetTickCount();
+    static xc_http_source hs;
+    xc_source src;
+    xc_err err = xc_http_resource_init(&res, url, strlen(url));
     if (err == XC_OK) {
-        progress pr = {-1};
-        xc_extract_opts opts = {io_buf, IO_BUF_SIZE, XC_EXTRACT_DEFAULT_GAP, on_progress, &pr, NULL,
-                                NULL,   NULL};
-        err = xc_extract(&src, &l, &sink, &opts, &st);
-        xc_nx_dir_sink_close(&ds);
+        err = xc_http_source_open(&src, &hs, &client, &res);
     }
-    DWORD ms = GetTickCount() - start;
     if (err != XC_OK) {
-        debugPrint("\n  FAILED: %s\n", xc_err_str(err));
-        goto done;
+        out("\n%s\n  NOT INSTALLED: %s\n", url, xc_err_str(err));
+        return false;
     }
-    debugPrint("\n  wrote %u files in %lu ms", (unsigned)st.files_written, (unsigned long)ms);
-    if (ms > 0) {
-        debugPrint(" (%llu KB/s)", (unsigned long long)(st.bytes_written / ms * 1000U / 1024U));
-    }
-    debugPrint("\n  verifying...\n");
-    size_t bad = verify(&src, &l, dir);
-    if (bad > 0) {
-        debugPrint("  VERIFY FAILED: %u files differ\n", (unsigned)bad);
-        goto done;
-    }
-    write_marker(dir, file, &l);
-    debugPrint("  OK: all %u files match the image\n", (unsigned)l.file_count);
-    ok = true;
+    bool ok = install(&src, url, res.etag[0] != '\0' ? res.etag : NULL,
+                      res.last_modified[0] != '\0' ? res.last_modified : NULL);
+    xc_http_client_close(&client);
+    return ok;
+}
 
-done:
-    xc_xdvdfs_listing_free(&l);
+static bool install_file(const char *path)
+{
+    xc_nx_file f = {NULL};
+    xc_source src;
+    xc_err err = xc_nx_file_open(&src, &f, path);
+    if (err != XC_OK) {
+        out("\n%s\n  can't read it: %s\n", path, xc_err_str(err));
+        return false;
+    }
+    bool ok = install(&src, path, NULL, NULL);
     xc_nx_file_close(&f);
     return ok;
+}
+
+/* If there is nothing to install, copies the bundled samples to E:\xcat\isos (M2). */
+static void seed_samples(void)
+{
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA(SAMPLE_DIR "\\*.iso", &fd);
+    if (h == INVALID_HANDLE_VALUE) {
+        out("Nothing to install: put a map in " MAP_FILE " or images in " ISO_DIR "\n");
+        return;
+    }
+    do {
+        char from[XC_NX_PATH_MAX];
+        char to[XC_NX_PATH_MAX];
+        snprintf(from, sizeof from, SAMPLE_DIR "\\%s", fd.cFileName);
+        snprintf(to, sizeof to, ISO_DIR "\\%s", fd.cFileName);
+        out("Copying the bundled test image %s to the HDD\n", fd.cFileName);
+        if (!CopyFileA(from, to, TRUE)) {
+            out("  copy failed (error %lu)\n", (unsigned long)GetLastError());
+        }
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+}
+
+static int list_local(char names[MAX_LOCAL][XC_NX_PATH_MAX])
+{
+    int count = 0;
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA(ISO_DIR "\\*.iso", &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do {
+            if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && count < MAX_LOCAL) {
+                snprintf(names[count++], XC_NX_PATH_MAX, ISO_DIR "\\%s", fd.cFileName);
+            }
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+    }
+    return count;
 }
 
 int main(void)
 {
     XVideoSetMode(640, 480, 32, REFRESH_DEFAULT);
-    debugPrint("xiso-cartographer %s - local install (M2)\n", xc_version_string());
-
+    debugPrint("xiso-cartographer %s - install (M4)\n", xc_version_string());
+    xc_nx_clock(&clk);
+    run_start_ms = now_ms();
+    pads_init();
+    debugPrint("Hold LT + RT + Back + Black to return to the dashboard.\n");
     io_buf = malloc(IO_BUF_SIZE);
-    cmp_buf = malloc(IO_BUF_SIZE);
-    if (io_buf == NULL || cmp_buf == NULL || !xc_nx_mount_e()) {
+    recv_buf = malloc(RECV_BUF_SIZE);
+    if (io_buf == NULL || recv_buf == NULL || !xc_nx_mount_e()) {
         debugPrint("Startup failed (memory or E: drive)\n");
         halt();
     }
@@ -307,28 +691,32 @@ int main(void)
         debugPrint("Could not create " ISO_DIR " or " GAMES_DIR "\n");
         halt();
     }
-    seed_samples();
+    open_log();
+    out("==== xiso-cartographer %s install ====\n", xc_version_string());
+    load_credentials();
 
-    char names[MAX_IMAGES][XC_NX_PATH_MAX];
-    int count = 0;
-    WIN32_FIND_DATAA fd;
-    HANDLE h = FindFirstFileA(ISO_DIR "\\*.iso", &fd);
-    if (h != INVALID_HANDLE_VALUE) {
-        do {
-            if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && count < MAX_IMAGES) {
-                snprintf(names[count++], XC_NX_PATH_MAX, "%s", fd.cFileName);
-            }
-        } while (FindNextFileA(h, &fd));
-        FindClose(h);
+    static xc_map map;
+    bool have_map = load_map(&map);
+    static char local[MAX_LOCAL][XC_NX_PATH_MAX];
+    int nlocal = list_local(local);
+    if ((!have_map || map.entry_count == 0) && nlocal == 0) {
+        seed_samples();
+        nlocal = list_local(local);
     }
-    if (count == 0) {
-        debugPrint("Nothing to install. Put .iso files in " ISO_DIR "\n");
-        halt();
-    }
+
     int installed = 0;
-    for (int i = 0; i < count; i++) {
-        installed += install(names[i]) ? 1 : 0;
+    int total = 0;
+    for (size_t i = 0; have_map && i < map.entry_count && !exit_combo(); i++, total++) {
+        installed += install_url(map.entries[i].url) ? 1 : 0;
     }
-    debugPrint("\nDone: %d of %d image(s) installed and verified.\n", installed, count);
+    for (int i = 0; i < nlocal && !exit_combo(); i++, total++) {
+        installed += install_file(local[i]) ? 1 : 0;
+    }
+    if (exit_combo()) {
+        xc_map_free(&map);
+        to_dashboard();
+    }
+    xc_map_free(&map);
+    out("\nDone: %d of %d image(s) installed and verified.\n", installed, total);
     halt();
 }

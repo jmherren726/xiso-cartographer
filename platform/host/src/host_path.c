@@ -140,6 +140,15 @@ bool xc_host_sync(FILE *f)
     return fflush(f) == 0 && _commit(_fileno(f)) == 0;
 }
 
+bool xc_host_truncate(FILE *f, uint64_t keep)
+{
+    if (fflush(f) != 0 || _fseeki64(f, 0, SEEK_END) != 0) {
+        return false;
+    }
+    long long size = _ftelli64(f);
+    return size >= 0 && (uint64_t)size >= keep && _chsize_s(_fileno(f), (long long)keep) == 0;
+}
+
 #else
 
 #include <sys/stat.h>
@@ -206,6 +215,15 @@ bool xc_host_dir_free_space(const char *path, uint64_t *bytes)
 bool xc_host_sync(FILE *f)
 {
     return fflush(f) == 0 && fsync(fileno(f)) == 0;
+}
+
+bool xc_host_truncate(FILE *f, uint64_t keep)
+{
+    if (fflush(f) != 0 || fseek(f, 0, SEEK_END) != 0) {
+        return false;
+    }
+    long size = ftell(f);
+    return size >= 0 && (uint64_t)size >= keep && ftruncate(fileno(f), (off_t)keep) == 0;
 }
 
 #endif

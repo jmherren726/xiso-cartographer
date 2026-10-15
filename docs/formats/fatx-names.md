@@ -5,7 +5,7 @@
 **Source of truth:** no complete, authoritative list of FATX naming rules is published. Third-party references agree on the limits but not on the characters. So the probe created files directly through the kernel (`NtCreateFile`) and recorded what it accepted:
 
 - **xemu v0.8.136**, kernel **1.0.4627.1** (the owner's BIOS), probe v2;
-- **the owner's console**, reported identical.
+- **the owner's console**, kernel **1.0.5838.1**, probe v4 (2026-10-15, full report). It agrees on every limit, and adds the file-size limit (§4b). It accepts more name bytes (§2).
 
 The full results are in [testing.md](../testing.md#fatx-probe-m2). If a later kernel or a probe run disagrees, update the table in `fatx.c`, its test, and this document together.
 
@@ -28,6 +28,8 @@ A name may contain any byte the kernel accepts. The kernel accepted 171 of the 2
 
 Everything else is accepted, including space, `!#$%&'()-.@[]^_` and backtick `{}~`, 0x7F, and the remaining bytes ≥ 0x80. The high-byte pattern has no obvious rule (it's probably the kernel's character table), so it's encoded as measured, not derived. `test_fatx.c` compares the code's table with this list byte for byte.
 
+**Kernels differ on high bytes.** Kernel 1.0.5838.1 (the owner's console, probe v4) accepts **every** byte ≥ 0x80, including the 40 above, and agrees with kernel 1.0.4627.1 on everything below 0x80. A hard disk can move between consoles, so the code keeps rejecting the 40 bytes: the union of what any measured kernel rejects. Game file names are plain ASCII in practice, so this refuses nothing real.
+
 ## 3. Paths
 
 - **At most 250 bytes**, counted from the first `\` after the drive. For example, `\Games\Halo\default.xbe` is 23. Directories of exactly 250 were created, and 251 was rejected.
@@ -38,9 +40,15 @@ Everything else is accepted, including space, `!#$%&'()-.@[]^_` and backtick `{}
 
 - **At most 4,096 entries** (files plus subdirectories) per directory. The 4,097th was rejected.
 
+## 4b. File size
+
+- **At most 4,294,950,912 bytes per file on E:** (4 GiB − 16 KiB, i.e. 4 GiB minus one 16 KiB cluster): `XC_FATX_MAX_FILE_SIZE`. Measured on hardware with probe v4: a file grows by writing to exactly that size, and every larger size fails as soon as the write crosses it, with `0xC0000102` (`STATUS_FILE_CORRUPT_ERROR`). Setting a larger end of file directly "succeeds", but the file can't actually be written that far.
+- Found when the M4 install of a 4,294,965,248-byte test file failed in its last 16 KiB on the console, while the same install works on a PC.
+- XDVDFS allows files up to 4 GiB − 1, so an image can contain a file FATX can't store. Such a game is refused like any other §5 problem. Partitions with bigger clusters (some F:/G: setups) would have a lower limit (2^32 − cluster); installs only go to E: today.
+
 ## 5. Installing a game
 
-1. **The game's files keep their names.** A game opens its files by name, so renaming one breaks it. If any entry of the image breaks §1–§4 under the chosen install folder, the install is **refused** (`XC_ERR_NOT_INSTALLABLE`), and every problem is listed (`xc_fatx_check_listing`). Nothing is written.
+1. **The game's files keep their names.** A game opens its files by name, so renaming one breaks it. If any entry of the image breaks §1–§4b under the chosen install folder, the install is **refused** (`XC_ERR_NOT_INSTALLABLE`), and every problem is listed (`xc_fatx_check_listing`). Nothing is written.
 2. **The install folder name is ours to choose,** and is made valid by `xc_fatx_title_name()`:
    - `": "` becomes `" - "` (so "Halo: Combat Evolved" becomes "Halo - Combat Evolved");
    - each run of other bytes that aren't printable ASCII accepted by §2 becomes one `_`;

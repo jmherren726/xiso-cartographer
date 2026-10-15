@@ -351,10 +351,100 @@ static void probe_entries(void)
                NT_SUCCESS(st) ? " (no limit hit)" : ", then rejected");
 }
 
+/*
+ * Largest file FATX stores. An install of a 4,294,965,248-byte file (2 KiB under 4 GiB) failed
+ * at its very end on hardware, while the same install works on a PC. In whole 16 KiB clusters
+ * that file needs exactly 4 GiB, so the suspicion is a 32-bit allocation limit. Each size is
+ * tried two ways: setting the end of file directly, and growing the file across the boundary by
+ * writing its last 1 MiB (what an install does). Needs about 4.1 GB free on E:.
+ */
+static NTSTATUS k_write_at(HANDLE h, uint64_t offset, const void *buf, ULONG len)
+{
+    IO_STATUS_BLOCK iosb;
+    LARGE_INTEGER at;
+    at.QuadPart = (LONGLONG)offset;
+    return NtWriteFile(h, NULL, NULL, NULL, &iosb, (PVOID)buf, len, &at);
+}
+
+static NTSTATUS k_set_size(HANDLE h, uint64_t size)
+{
+    IO_STATUS_BLOCK iosb;
+    FILE_END_OF_FILE_INFORMATION eof;
+    eof.EndOfFile.QuadPart = (LONGLONG)size;
+    return NtSetInformationFile(h, &iosb, &eof, sizeof eof, FileEndOfFileInformation);
+}
+
+static NTSTATUS k_create_open(const char *path, HANDLE *h)
+{
+    ANSI_STRING name;
+    OBJECT_ATTRIBUTES attr;
+    IO_STATUS_BLOCK iosb;
+    object_attributes(&attr, &name, path);
+    return NtCreateFile(h, GENERIC_WRITE | SYNCHRONIZE, &attr, &iosb, NULL, FILE_ATTRIBUTE_NORMAL,
+                        0, FILE_OVERWRITE_IF,
+                        FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT);
+}
+
+static void probe_file_sizes(void)
+{
+    static uint8_t block[65536];
+    rep("\n[file size] NTSTATUS of setting the size directly / of writing the last 1 MiB\n");
+    DWORD spc = 0;
+    DWORD bps = 0;
+    DWORD free_clusters = 0;
+    DWORD total = 0;
+    if (!GetDiskFreeSpaceA("E:\\", &spc, &bps, &free_clusters, &total)) {
+        rep("could not read the E: geometry\n");
+        return;
+    }
+    uint64_t cluster = (uint64_t)spc * bps;
+    uint64_t free_bytes = (uint64_t)free_clusters * cluster;
+    rep("cluster %llu bytes, free %llu MiB\n", (unsigned long long)cluster,
+        (unsigned long long)(free_bytes >> 20));
+    debugPrint("\n[file size] cluster %llu bytes\n", (unsigned long long)cluster);
+    if (free_bytes < 4400ULL * 1024 * 1024) {
+        rep("skipped: needs about 4.1 GB free\n");
+        debugPrint("  skipped: needs about 4.1 GB free on E:\n");
+        return;
+    }
+    const uint64_t g4 = 1ULL << 32;
+    const uint64_t sizes[] = {g4 - 2 * cluster, g4 - cluster, g4 - cluster + 1, g4 - 2048, g4 - 1};
+    char path[64];
+    snprintf(path, sizeof path, ROOT "\\big.bin");
+    for (size_t i = 0; i < sizeof sizes / sizeof sizes[0]; i++) {
+        uint64_t size = sizes[i];
+        HANDLE h;
+        /* 1. Set the size directly. */
+        NTSTATUS direct = k_create_open(path, &h);
+        if (NT_SUCCESS(direct)) {
+            direct = k_set_size(h, size);
+            NtClose(h);
+        }
+        k_delete(path, FALSE);
+        /* 2. Grow across the boundary: size - 1 MiB first, then write the last 1 MiB. */
+        NTSTATUS grow = k_create_open(path, &h);
+        if (NT_SUCCESS(grow)) {
+            grow = k_set_size(h, size - (1u << 20));
+            for (uint64_t pos = size - (1u << 20); NT_SUCCESS(grow) && pos < size;) {
+                ULONG n = size - pos < sizeof block ? (ULONG)(size - pos) : (ULONG)sizeof block;
+                grow = k_write_at(h, pos, block, n);
+                pos += n;
+            }
+            NtClose(h);
+        }
+        k_delete(path, FALSE);
+        rep("size %llu (4 GiB - %llu): direct %s (0x%08lX), grow %s (0x%08lX)\n",
+            (unsigned long long)size, (unsigned long long)(g4 - size), verdict(direct),
+            (unsigned long)direct, verdict(grow), (unsigned long)grow);
+        debugPrint("  4 GiB - %llu: direct %s, grow %s\n", (unsigned long long)(g4 - size),
+                   verdict(direct), verdict(grow));
+    }
+}
+
 int main(void)
 {
     XVideoSetMode(640, 480, 32, REFRESH_DEFAULT);
-    debugPrint("xiso-cartographer FATX probe (v3)\n");
+    debugPrint("xiso-cartographer FATX probe (v4)\n");
     if (!nxMountDrive('E', "\\Device\\Harddisk0\\Partition1\\")) {
         debugPrint("Could not mount E:\n");
         for (;;) {
@@ -372,7 +462,7 @@ int main(void)
             Sleep(1000);
         }
     }
-    rep("xiso-cartographer FATX probe v3\nkernel %u.%u.%u.%u\n", XboxKrnlVersion.Major,
+    rep("xiso-cartographer FATX probe v4\nkernel %u.%u.%u.%u\n", XboxKrnlVersion.Major,
         XboxKrnlVersion.Minor, XboxKrnlVersion.Build, XboxKrnlVersion.Qfe);
     debugPrint("Kernel %u.%u.%u.%u\n", XboxKrnlVersion.Major, XboxKrnlVersion.Minor,
                XboxKrnlVersion.Build, XboxKrnlVersion.Qfe);
@@ -384,6 +474,7 @@ int main(void)
     probe_case();
     probe_path_length();
     probe_entries();
+    probe_file_sizes();
 
     debugPrint("Cleaning up...\n");
     k_delete_tree(ROOT);

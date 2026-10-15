@@ -46,7 +46,7 @@ static int usage(void)
         "                    <url> <file>\n"
         "       xcat-cli map [--credentials <file>] <map-file>\n"
         "       xcat-cli install [--timeout <ms>] [--attempts <n>] [--credentials <file>]\n"
-        "                        <url|image> <games-dir> [title]\n",
+        "                        [--checkpoint <bytes>] <url|image> <games-dir> [title]\n",
         xc_version_string());
     return 2;
 }
@@ -130,8 +130,11 @@ static int cmd_extract(const char *image, const char *out)
     xc_extract_stats st;
     memset(&st, 0, sizeof st);
     if (err == XC_OK) {
-        xc_extract_opts opts = {buf, IO_BUFFER_SIZE, XC_EXTRACT_DEFAULT_GAP, NULL, NULL, NULL, NULL,
-                                NULL};
+        xc_extract_opts opts;
+        memset(&opts, 0, sizeof opts);
+        opts.buf = buf;
+        opts.buf_size = IO_BUFFER_SIZE;
+        opts.coalesce_gap = XC_EXTRACT_DEFAULT_GAP;
         err = xc_extract(&src, &l, &sink, &opts, &st);
         xc_host_dir_sink_close(&ds);
     }
@@ -243,6 +246,10 @@ static int cmd_check(const char *image, const char *title)
         case XC_FATX_PROBLEM_TOO_MANY_ENTRIES:
             (void)printf("  %s/: %zu entries in one folder (limit %d)\n",
                          p->path[0] != '\0' ? p->path : ".", p->value, XC_FATX_MAX_DIR_ENTRIES);
+            break;
+        case XC_FATX_PROBLEM_FILE_TOO_BIG:
+            (void)printf("  %s: %zu bytes; FATX stores at most %u per file\n", p->path, p->value,
+                         XC_FATX_MAX_FILE_SIZE);
             break;
         }
     }
@@ -433,6 +440,7 @@ static int get_fail(const xc_http_client *c, const char *url, xc_err err)
 typedef struct net_opts {
     unsigned long timeout_ms;
     unsigned long attempts;
+    unsigned long checkpoint; /* install only: bytes between checkpoints (ADR 0011), 0 = default */
     const char *cred_path;
 } net_opts;
 
@@ -450,6 +458,8 @@ static int parse_net_opts(int argc, char **argv, net_opts *o)
             ok = parse_uint(argv[i + 1], 3600000UL, &o->timeout_ms) && o->timeout_ms > 0;
         } else if (strcmp(argv[i], "--attempts") == 0) {
             ok = parse_uint(argv[i + 1], 1000UL, &o->attempts) && o->attempts > 0;
+        } else if (strcmp(argv[i], "--checkpoint") == 0) {
+            ok = parse_uint(argv[i + 1], 0x7FFFFFFFUL, &o->checkpoint) && o->checkpoint >= 4096U;
         }
         if (!ok) {
             return -1;
@@ -767,8 +777,10 @@ static bool install_progress(void *ctx, const xc_install_progress *p)
     }
     if (now >= ui->next_ms && p->bytes_total > 0) {
         ui->next_ms = now + 2000U;
+        /* the file being worked on (1-based), as on the console */
+        size_t current = p->files_done < p->file_count ? p->files_done + 1 : p->file_count;
         (void)fprintf(stderr, "  %.1f of %.1f MiB, file %zu of %zu\n", mib(p->bytes_done),
-                      mib(p->bytes_total), p->files_done, p->file_count);
+                      mib(p->bytes_total), current, p->file_count);
     }
     return true;
 }
@@ -785,6 +797,7 @@ static int install_fail(const xc_install_result *r, const http_env *env, const c
             (void)printf("  %s: %s\n", p->path,
                          p->kind == XC_FATX_PROBLEM_NAME            ? name_problem(p->name)
                          : p->kind == XC_FATX_PROBLEM_PATH_TOO_LONG ? "path too long"
+                         : p->kind == XC_FATX_PROBLEM_FILE_TOO_BIG  ? "file too big for FATX"
                                                                     : "too many entries");
         }
         return 3;
@@ -878,6 +891,7 @@ static int cmd_install(int argc, char **argv)
     req.buf = buf;
     req.buf_size = IO_BUFFER_SIZE;
     req.cluster_size = 16384U; /* a retail E: partition, like the console's estimate */
+    req.checkpoint_bytes = (uint32_t)o.checkpoint;
     req.progress = install_progress;
     req.progress_ctx = &ui;
     static xc_install_result r;
@@ -895,6 +909,10 @@ static int cmd_install(int argc, char **argv)
                      r.file_count, r.folder, r.files_written, r.files_skipped,
                      r.resumed ? ", resumed" : "", r.bytes_written, r.bytes_read,
                      (double)ms / 1000.0, mb_per_s(r.bytes_read, ms));
+        if (r.files_continued > 0) {
+            (void)printf("%zu file%s continued from a checkpoint (%" PRIu64 " bytes kept)\n",
+                         r.files_continued, r.files_continued == 1 ? "" : "s", r.bytes_continued);
+        }
     } else {
         if (r.resumed || r.files_written > 0) {
             (void)fprintf(stderr,

@@ -24,6 +24,7 @@ extern "C" {
 #define XC_JOURNAL_MAX_LINE 8192                      /* §3.1, without the LF */
 #define XC_JOURNAL_MAX_VALIDATOR 127                  /* as xc_http_resource's (http.md §4.3) */
 #define XC_JOURNAL_VERSION_MAJOR 1
+#define XC_JOURNAL_VERSION_MINOR 1 /* 1.1: part checkpoints (ADR 0011) */
 
 /* §4: what an install is from. */
 typedef struct xc_journal_id {
@@ -57,13 +58,20 @@ xc_err xc_journal_format_start(const xc_journal_id *id, const char *source_url, 
 xc_err xc_journal_format_done(const char *path, uint32_t size, uint32_t crc, char *out, size_t cap,
                               size_t *len);
 
+/* One `part` checkpoint line (§5, v1.1): the first `bytes` bytes, with CRC-32 `crc`, are on disk.
+ */
+xc_err xc_journal_format_part(const char *path, uint32_t bytes, uint32_t crc, char *out, size_t cap,
+                              size_t *len);
+
 /* What a journal says about the image it's read against (§6). */
 typedef struct xc_journal_state {
-    bool valid;       /* false: invalid or another image; don't reuse the folder (§6.4) */
-    const char *why;  /* when !valid: a short reason for messages */
-    xc_journal_id id; /* as read (when the identity lines were readable) */
-    bool *done;       /* [listing file index]: a valid done line exists */
-    uint32_t *crc;    /* [listing file index]: its CRC-32, when done */
+    bool valid;           /* false: invalid or another image; don't reuse the folder (§6.4) */
+    const char *why;      /* when !valid: a short reason for messages */
+    xc_journal_id id;     /* as read (when the identity lines were readable) */
+    bool *done;           /* [listing file index]: a valid done line exists */
+    uint32_t *crc;        /* [listing file index]: its CRC-32, when done */
+    uint32_t *part_bytes; /* [listing file index]: last checkpoint of an unfinished file, or 0 */
+    uint32_t *part_crc;   /* [listing file index]: CRC-32 of those bytes */
     size_t done_count;
     bool torn; /* reading stopped at a torn line (a power cut during an append) */
 } xc_journal_state;

@@ -154,7 +154,7 @@ xc_err xc_journal_format_start(const xc_journal_id *id, const char *source_url, 
         return XC_ERR_INVALID_ARG;
     }
     wbuf w = {out, cap, 0, 0, false};
-    w_str(&w, "# xcat-journal v1");
+    w_str(&w, "# xcat-journal v1.1");
     w_end_line(&w);
     w_str(&w, "image ");
     w_fmt(&w, "%" PRIu64, id->image_size);
@@ -185,6 +185,23 @@ xc_err xc_journal_format_done(const char *path, uint32_t size, uint32_t crc, cha
     wbuf w = {out, cap, 0, 0, false};
     w_str(&w, "done ");
     w_fmt(&w, "%" PRIu64, size);
+    w_str(&w, " ");
+    w_hex32(&w, crc);
+    w_str(&w, " ");
+    w_enc(&w, path);
+    w_end_line(&w);
+    return w_result(&w, len);
+}
+
+xc_err xc_journal_format_part(const char *path, uint32_t bytes, uint32_t crc, char *out, size_t cap,
+                              size_t *len)
+{
+    if (path == NULL || path[0] == '\0' || bytes == 0 || out == NULL || len == NULL) {
+        return XC_ERR_INVALID_ARG;
+    }
+    wbuf w = {out, cap, 0, 0, false};
+    w_str(&w, "part ");
+    w_fmt(&w, "%" PRIu64, bytes);
     w_str(&w, " ");
     w_hex32(&w, crc);
     w_str(&w, " ");
@@ -382,7 +399,9 @@ static xc_err invalid(xc_journal_state *st, size_t files, const char *why)
     st->valid = false;
     st->why = why;
     st->done_count = 0;
-    memset(st->done, 0, sizeof *st->done * (files > 0 ? files : 1));
+    size_t n = files > 0 ? files : 1;
+    memset(st->done, 0, sizeof *st->done * n);
+    memset(st->part_bytes, 0, sizeof *st->part_bytes * n);
     return XC_OK;
 }
 
@@ -424,14 +443,16 @@ xc_err xc_journal_read(const char *data, size_t len, const xc_xdvdfs_listing *li
     size_t files = listing->file_count;
     st->done = calloc(files > 0 ? files : 1, sizeof *st->done);
     st->crc = calloc(files > 0 ? files : 1, sizeof *st->crc);
+    st->part_bytes = calloc(files > 0 ? files : 1, sizeof *st->part_bytes);
+    st->part_crc = calloc(files > 0 ? files : 1, sizeof *st->part_crc);
     const xc_xdvdfs_entry **sorted =
         (const xc_xdvdfs_entry **)malloc((files > 0 ? files : 1) * sizeof *sorted);
     reader r = {NULL, len, 0};
     if (len <= XC_JOURNAL_MAX_FILE) {
         r.text = malloc(len + 1);
     }
-    if (st->done == NULL || st->crc == NULL || sorted == NULL ||
-        (len <= XC_JOURNAL_MAX_FILE && r.text == NULL)) {
+    if (st->done == NULL || st->crc == NULL || st->part_bytes == NULL || st->part_crc == NULL ||
+        sorted == NULL || (len <= XC_JOURNAL_MAX_FILE && r.text == NULL)) {
         free((void *)sorted);
         free(r.text);
         xc_journal_state_free(st);
@@ -465,8 +486,10 @@ xc_err xc_journal_read(const char *data, size_t len, const xc_xdvdfs_listing *li
         while (st->valid && (rec = next_record(&r, &torn, &too_long)) != NULL) {
             char *f[5];
             size_t nf = split_fields(rec, f, 5);
-            if (nf >= 1 && strcmp(f[0], "done") != 0) {
-                if (minor == 0) {
+            bool is_done = nf >= 1 && strcmp(f[0], "done") == 0;
+            bool is_part = nf >= 1 && strcmp(f[0], "part") == 0;
+            if (nf >= 1 && !is_done && !is_part) {
+                if (minor <= XC_JOURNAL_VERSION_MINOR) {
                     err = invalid(st, files, "journal has an unknown record");
                 }
                 continue; /* a newer minor version's record (§3.3) */
@@ -479,7 +502,7 @@ xc_err xc_journal_read(const char *data, size_t len, const xc_xdvdfs_listing *li
                 break;
             }
             const xc_xdvdfs_entry *e = find_path(sorted, files, f[3]);
-            if (e == NULL || e->size != size) {
+            if (e == NULL || (is_done && e->size != size)) {
                 err = invalid(st, files, "journal names a file the image doesn't have");
                 break;
             }
@@ -488,8 +511,20 @@ xc_err xc_journal_read(const char *data, size_t len, const xc_xdvdfs_listing *li
                 err = invalid(st, files, "journal lists a file twice");
                 break;
             }
+            if (is_part) {
+                /* §5: 0 < bytes < size; the last one counts (a file written again from the
+                   start after a failed resume records smaller checkpoints again). */
+                if (size == 0 || size >= e->size) {
+                    err = invalid(st, files, "journal has a checkpoint outside its file");
+                    break;
+                }
+                st->part_bytes[idx] = (uint32_t)size;
+                st->part_crc[idx] = crc;
+                continue;
+            }
             st->done[idx] = true;
             st->crc[idx] = crc;
+            st->part_bytes[idx] = 0;
             st->done_count++;
         }
         if (st->valid && too_long) {
@@ -507,8 +542,12 @@ void xc_journal_state_free(xc_journal_state *st)
     if (st != NULL) {
         free(st->done);
         free(st->crc);
+        free(st->part_bytes);
+        free(st->part_crc);
         st->done = NULL;
         st->crc = NULL;
+        st->part_bytes = NULL;
+        st->part_crc = NULL;
         st->done_count = 0;
     }
 }

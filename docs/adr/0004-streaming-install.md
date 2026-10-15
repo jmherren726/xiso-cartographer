@@ -1,6 +1,6 @@
 # 0004. Install by stream-extracting the image over HTTP Range
 
-- **Status:** Accepted
+- **Status:** Accepted; §4 amended by [ADR 0011](0011-checkpoints-inside-large-files.md) (resume inside large files from 64 MiB checkpoints)
 - **Date:** 2026-10-13
 
 ## Context

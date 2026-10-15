@@ -103,7 +103,11 @@ static uint8_t buf[1000]; /* deliberately small: forces several chunks per file 
 
 static xc_extract_opts opts(uint64_t gap)
 {
-    xc_extract_opts o = {buf, sizeof buf, gap, NULL, NULL, NULL, NULL, NULL};
+    xc_extract_opts o;
+    memset(&o, 0, sizeof o);
+    o.buf = buf;
+    o.buf_size = sizeof buf;
+    o.coalesce_gap = gap;
     return o;
 }
 
@@ -130,7 +134,7 @@ static xc_err extract(xc_xdvdfs_entry *files, size_t nfiles, xc_xdvdfs_entry *di
     }
     memset(&ms, 0, sizeof ms);
     ms.writes_before_failure = SIZE_MAX;
-    xc_sink sink = {m_make_dir, m_begin, m_write, m_end, &ms};
+    xc_sink sink = {m_make_dir, m_begin, m_write, m_end, &ms, NULL, NULL, NULL};
     return xc_extract(&src, &l, &sink, o, st);
 }
 
@@ -264,7 +268,7 @@ static void test_sink_write_error_stops_and_ends_incomplete(void)
     l.file_count = 1;
     memset(&ms, 0, sizeof ms);
     ms.writes_before_failure = 1; /* second write fails */
-    xc_sink sink = {m_make_dir, m_begin, m_write, m_end, &ms};
+    xc_sink sink = {m_make_dir, m_begin, m_write, m_end, &ms, NULL, NULL, NULL};
     xc_extract_opts o = opts(XC_EXTRACT_DEFAULT_GAP);
     TEST_ASSERT_EQUAL_INT(XC_ERR_IO, xc_extract(&src, &l, &sink, &o, NULL));
     TEST_ASSERT_TRUE(ms.files[0].ended);
@@ -446,7 +450,7 @@ static xc_err extract_streamed(xc_xdvdfs_entry *files, size_t nfiles, const xc_e
     }
     memset(&ms, 0, sizeof ms);
     ms.writes_before_failure = SIZE_MAX;
-    xc_sink sink = {m_make_dir, m_begin, m_write, m_end, &ms};
+    xc_sink sink = {m_make_dir, m_begin, m_write, m_end, &ms, NULL, NULL, NULL};
     return xc_extract(&src, &l, &sink, o, st);
 }
 

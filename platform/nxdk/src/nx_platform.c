@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <windows.h>
+#include <xboxkrnl/xboxkrnl.h>
 
 #include "xcat/nxdk.h"
 
@@ -66,6 +67,21 @@ void xc_nx_file_close(xc_nx_file *f)
 
 /* --- sink ---------------------------------------------------------------------- */
 
+static const char *last_op;
+static unsigned long last_code;
+
+static void io_failed(const char *op, unsigned long code)
+{
+    last_op = op;
+    last_code = code;
+}
+
+void xc_nx_last_io_error(const char **op, unsigned long *code)
+{
+    *op = last_op;
+    *code = last_code;
+}
+
 /* root + "\" + rel (with '/' -> '\'); false if it doesn't fit. */
 static bool join(char *out, const char *root, const char *rel)
 {
@@ -106,6 +122,7 @@ static xc_err sink_begin_file(void *ctx, const char *path, uint32_t size)
     HANDLE h = CreateFileA(ds->open_path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
                            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, NULL);
     if (h == INVALID_HANDLE_VALUE) {
+        io_failed("create", (unsigned long)GetLastError());
         return XC_ERR_IO;
     }
     ds->handle = h;
@@ -125,6 +142,7 @@ static xc_err sink_write(void *ctx, const void *buf, size_t len)
         DWORD chunk = len > 0x40000000U ? 0x40000000U : (DWORD)len;
         DWORD put = 0;
         if (!WriteFile(ds->handle, p, chunk, &put, NULL) || put != chunk) {
+            io_failed("write", (unsigned long)GetLastError());
             return XC_ERR_IO; /* e.g. disk full */
         }
         p += put;
@@ -140,7 +158,19 @@ static xc_err sink_end_file(void *ctx, bool complete)
     if (ds->handle == NULL) {
         return XC_ERR_INVALID_ARG;
     }
-    bool ok = CloseHandle(ds->handle) != 0;
+    /* A completed file is on the disk before end_file returns: the install journal records it
+       next (docs/formats/journal.md §2.3). */
+    IO_STATUS_BLOCK io;
+    NTSTATUS flushed = complete ? NtFlushBuffersFile(ds->handle, &io) : STATUS_SUCCESS;
+    bool synced = NT_SUCCESS(flushed);
+    if (!synced) {
+        io_failed("flush", (unsigned long)flushed);
+    }
+    bool closed = CloseHandle(ds->handle) != 0;
+    if (!closed && synced) {
+        io_failed("close", (unsigned long)GetLastError());
+    }
+    bool ok = closed && synced;
     ds->handle = NULL;
     ok = ok && complete && ds->written == ds->expected;
     if (!ok) {
@@ -149,6 +179,65 @@ static xc_err sink_end_file(void *ctx, bool complete)
     if (!complete) {
         return XC_OK;
     }
+    return ok ? XC_OK : XC_ERR_IO;
+}
+
+/* ADR 0011: a checkpoint needs the bytes so far on the disk. */
+static xc_err sink_sync(void *ctx)
+{
+    xc_nx_dir_sink *ds = ctx;
+    if (ds->handle == NULL) {
+        return XC_ERR_INVALID_ARG;
+    }
+    IO_STATUS_BLOCK io;
+    NTSTATUS st = NtFlushBuffersFile(ds->handle, &io);
+    if (!NT_SUCCESS(st)) {
+        io_failed("flush", (unsigned long)st);
+        return XC_ERR_IO;
+    }
+    return XC_OK;
+}
+
+/* ADR 0011: reopens a partly written file, cut back to its last checkpoint. */
+static xc_err sink_resume_file(void *ctx, const char *path, uint32_t size, uint32_t keep)
+{
+    xc_nx_dir_sink *ds = ctx;
+    if (ds->handle != NULL || keep > size) {
+        return XC_ERR_INVALID_ARG;
+    }
+    if (!join(ds->open_path, ds->root, path)) {
+        return XC_ERR_LIMIT;
+    }
+    HANDLE h = CreateFileA(ds->open_path, GENERIC_WRITE, 0, NULL, OPEN_EXISTING,
+                           FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, NULL);
+    if (h == INVALID_HANDLE_VALUE) {
+        io_failed("reopen", (unsigned long)GetLastError());
+        return XC_ERR_IO;
+    }
+    LARGE_INTEGER have;
+    LARGE_INTEGER at;
+    at.QuadPart = (LONGLONG)keep;
+    if (!GetFileSizeEx(h, &have) || have.QuadPart < (LONGLONG)keep ||
+        !SetFilePointerEx(h, at, NULL, FILE_BEGIN) || !SetEndOfFile(h)) {
+        io_failed("truncate", (unsigned long)GetLastError());
+        CloseHandle(h);
+        return XC_ERR_IO;
+    }
+    ds->handle = h;
+    ds->expected = size;
+    ds->written = keep;
+    return XC_OK;
+}
+
+/* ADR 0011: closes an unfinished file that has a checkpoint, keeping it for the next attempt. */
+static xc_err sink_suspend_file(void *ctx)
+{
+    xc_nx_dir_sink *ds = ctx;
+    if (ds->handle == NULL) {
+        return XC_ERR_INVALID_ARG;
+    }
+    bool ok = CloseHandle(ds->handle) != 0;
+    ds->handle = NULL;
     return ok ? XC_OK : XC_ERR_IO;
 }
 
@@ -167,6 +256,9 @@ xc_err xc_nx_dir_sink_open(xc_sink *sink, xc_nx_dir_sink *ds, const char *root)
     sink->write = sink_write;
     sink->end_file = sink_end_file;
     sink->ctx = ds;
+    sink->sync = sink_sync;
+    sink->resume_file = sink_resume_file;
+    sink->suspend_file = sink_suspend_file;
     return XC_OK;
 }
 

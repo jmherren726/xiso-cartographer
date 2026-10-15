@@ -17,5 +17,7 @@ bool xc_host_exists(const char *path);
 bool xc_host_dir_free_space(const char *path, uint64_t *bytes);
 /* Flushes a stream to the device (survives a power cut, not only a crash). */
 bool xc_host_sync(FILE *f);
+/* Cuts a file opened for update back to `keep` bytes; false if it's shorter than that. */
+bool xc_host_truncate(FILE *f, uint64_t keep);
 
 #endif /* XCAT_HOST_PATH_H */

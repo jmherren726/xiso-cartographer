@@ -48,6 +48,14 @@ static void done(size_t i, uint32_t crc)
     used += n;
 }
 
+static void part(size_t i, uint32_t bytes, uint32_t crc)
+{
+    size_t n = 0;
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_journal_format_part(entries[i].path, bytes, crc, buf + used,
+                                                        sizeof buf - used, &n));
+    used += n;
+}
+
 static void read_back(size_t len)
 {
     xc_journal_state_free(&st);
@@ -94,7 +102,7 @@ static void test_round_trip(void)
     TEST_ASSERT_EQUAL_UINT64(0x18300000U, st.id.partition_offset);
     /* The lines look as journal.md §1 shows them. */
     buf[used] = '\0';
-    TEST_ASSERT_EQUAL_INT(0, strncmp(buf, "# xcat-journal v1 *", 19));
+    TEST_ASSERT_EQUAL_INT(0, strncmp(buf, "# xcat-journal v1.1 *", 21));
     TEST_ASSERT_NOT_NULL(strstr(buf, "\nimage 7825162240 405798912 "));
     TEST_ASSERT_NOT_NULL(strstr(buf, "\nvalidators \"5e1f-61a2c3\" Wed,%2014%20Oct%202026"));
     TEST_ASSERT_NOT_NULL(strstr(buf, "\nsource http://192.168.1.20:8080/x%20y.iso *"));
@@ -274,14 +282,14 @@ static void test_invalid_records(void)
 static void test_newer_minor_records_are_skipped(void)
 {
     start();
-    /* Rewrite the header as v1.1, then add a record type a v1.0 reader doesn't know. */
+    /* Rewrite the header as v1.2, then add a record type a v1.1 reader doesn't know. */
     char rest[4096];
     char *nl = memchr(buf, '\n', used);
     TEST_ASSERT_NOT_NULL(nl);
     size_t tail = used - (size_t)(nl + 1 - buf);
     memcpy(rest, nl + 1, tail);
     used = 0;
-    raw_line("# xcat-journal v1.1");
+    raw_line("# xcat-journal v1.2");
     memcpy(buf + used, rest, tail);
     used += tail;
     raw_line("hash sha1 0123");
@@ -328,6 +336,62 @@ static void test_bad_headers_and_sizes(void)
     expect_invalid("overlong");
 }
 
+static void test_part_records(void)
+{
+    start();
+    part(1, 67108864U, 0xAAAAAAAAU);
+    part(1, 134217728U, 0xBBBBBBBBU);
+    part(0, 4096U, 0x0000000CU);
+    read_back(used);
+    TEST_ASSERT_TRUE(st.valid);
+    TEST_ASSERT_EQUAL_size_t(0, st.done_count);
+    TEST_ASSERT_EQUAL_UINT32(134217728U, st.part_bytes[1]); /* the last checkpoint counts */
+    TEST_ASSERT_EQUAL_HEX32(0xBBBBBBBBU, st.part_crc[1]);
+    TEST_ASSERT_EQUAL_UINT32(4096U, st.part_bytes[0]);
+    TEST_ASSERT_EQUAL_UINT32(0, st.part_bytes[2]);
+    buf[used] = '\0';
+    TEST_ASSERT_NOT_NULL(strstr(buf, "\npart 134217728 BBBBBBBB media/a%20b.bik *"));
+    /* Finishing the file replaces its checkpoints. */
+    done(1, 0x12345678U);
+    read_back(used);
+    TEST_ASSERT_TRUE(st.valid);
+    TEST_ASSERT_TRUE(st.done[1]);
+    TEST_ASSERT_EQUAL_UINT32(0, st.part_bytes[1]);
+    TEST_ASSERT_EQUAL_UINT32(4096U, st.part_bytes[0]);
+
+    static const char *const bad[] = {
+        "part 0 0000000C default.xbe",     /* nothing yet: not a checkpoint */
+        "part 12345 0000000C default.xbe", /* the whole file: that's a done line */
+        "part 99999 0000000C default.xbe", /* past the end */
+    };
+    for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+        used = 0;
+        start();
+        raw_line(bad[i]);
+        expect_invalid("checkpoint outside its file");
+    }
+    /* Going down is fine: a file written again from the start after a failed resume. */
+    used = 0;
+    start();
+    part(0, 8192U, 1U);
+    part(0, 4096U, 2U);
+    read_back(used);
+    TEST_ASSERT_TRUE(st.valid);
+    TEST_ASSERT_EQUAL_UINT32(4096U, st.part_bytes[0]);
+    TEST_ASSERT_EQUAL_HEX32(2U, st.part_crc[0]);
+    used = 0;
+    start();
+    done(0, 1U);
+    part(0, 4096U, 1U); /* after the file was done */
+    expect_invalid("twice");
+    used = 0;
+    start();
+    raw_line("part 10 0000000C nowhere.bin");
+    expect_invalid("doesn't have");
+    TEST_ASSERT_EQUAL_INT(XC_ERR_INVALID_ARG,
+                          xc_journal_format_part("a", 0, 1, buf, sizeof buf, &used));
+}
+
 static void test_format_limits(void)
 {
     char small[32];
@@ -356,6 +420,7 @@ int main(void)
     RUN_TEST(test_invalid_records);
     RUN_TEST(test_newer_minor_records_are_skipped);
     RUN_TEST(test_bad_headers_and_sizes);
+    RUN_TEST(test_part_records);
     RUN_TEST(test_format_limits);
     return UNITY_END();
 }

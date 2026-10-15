@@ -23,6 +23,11 @@ extern "C" {
 /* bytes of a path counted from the first '\' after the drive, e.g. "\Games\Halo\default.xbe" */
 #define XC_FATX_MAX_PATH 250
 #define XC_FATX_MAX_DIR_ENTRIES 4096 /* files + directories in one directory */
+/*
+ * Largest file the kernel lets a file grow to on E: (16 KiB clusters): 4 GiB minus one
+ * cluster. Writing past it fails with STATUS_FILE_CORRUPT_ERROR (fatx-names.md §4b).
+ */
+#define XC_FATX_MAX_FILE_SIZE 4294950912U
 
 /* True if the kernel accepts byte `c` in a name (fatx-names.md §2). */
 bool xc_fatx_byte_ok(uint8_t c);
@@ -39,9 +44,10 @@ typedef enum xc_fatx_name_check {
 xc_fatx_name_check xc_fatx_check_name(const char *name, size_t len, size_t *bad_index);
 
 typedef enum xc_fatx_problem_kind {
-    XC_FATX_PROBLEM_NAME,            /* `name` says why; `value` = bad byte index if any */
-    XC_FATX_PROBLEM_PATH_TOO_LONG,   /* `value` = the full path length on the drive */
-    XC_FATX_PROBLEM_TOO_MANY_ENTRIES /* `path` = directory ("" = root); `value` = count */
+    XC_FATX_PROBLEM_NAME,             /* `name` says why; `value` = bad byte index if any */
+    XC_FATX_PROBLEM_PATH_TOO_LONG,    /* `value` = the full path length on the drive */
+    XC_FATX_PROBLEM_TOO_MANY_ENTRIES, /* `path` = directory ("" = root); `value` = count */
+    XC_FATX_PROBLEM_FILE_TOO_BIG      /* `value` = the file's size (over XC_FATX_MAX_FILE_SIZE) */
 } xc_fatx_problem_kind;
 
 typedef struct xc_fatx_problem {
