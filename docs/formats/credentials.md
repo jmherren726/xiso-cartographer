@@ -1,6 +1,6 @@
 # Credentials file format (`xcat-credentials`), version 1
 
-**Status:** Normative design. Implemented with the HTTP client (M3/M5) and the archive.org source (M6). The reasons behind it are in [ADR 0007](../adr/0007-scoped-user-credentials.md).
+**Status:** Normative. §3–§7 are implemented by `xcat/credentials.h` (M3) and used by `xcat-cli get --credentials`; the console loads the file with the install job (M4), and `tools/xcat-login` comes with the archive.org source (M6). The reasons behind it are in [ADR 0007](../adr/0007-scoped-user-credentials.md).
 
 The credentials file holds login tokens for sources that need them, and says exactly which hosts may receive each one. It is separate from the [map](map.md) on purpose: maps are shared and included, and credentials never are.
 
@@ -44,7 +44,7 @@ Placeholders in `<…>` stand for real values. Never commit or share a real cred
 
 | Key | Required | Repeatable | Meaning |
 |---|---|---|---|
-| `hosts` | yes | no | Comma-separated host patterns that may receive this section's credentials (§5) |
+| `hosts` | yes | no | Comma-separated host patterns, at most **16**, that may receive this section's credentials (§5) |
 | `cookie` | one of `cookie`/`header` | no | Value sent in the `Cookie` request header, e.g. `a=1; b=2` |
 | `header` | one of `cookie`/`header` | yes, up to 16 | `Name: value`, sent as a request header |
 | `allow_http` | no | no | `yes` or `no` (default `no`). See §6 |
@@ -105,3 +105,4 @@ An HTTP `401` or `403` from a host that had credentials attached is reported as 
 | Version | Date | Change |
 |---|---|---|
 | 1.0 | 2026-10-13 | First version (design). |
+| 1.0 | 2026-10-15 | Implemented. The limit of 16 host patterns per section is now stated (§4); nothing else changed. |

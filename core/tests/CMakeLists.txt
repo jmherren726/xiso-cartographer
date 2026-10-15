@@ -84,6 +84,7 @@ endfunction()
 xcat_add_test(test_version)
 xcat_add_test(test_bytes)
 xcat_add_test(test_crc32)
+xcat_add_test(test_credentials)
 xcat_add_test(test_xdvdfs ARGS ${XCAT_FIXTURES_DIR} ${XCAT_FIXTURES})
 add_dependencies(test_xdvdfs xcat_fixtures)
 xcat_add_test(test_extract)
@@ -155,3 +156,7 @@ add_dependencies(fuzz_xdvdfs_replay xcat_fuzz_seeds)
 # HTTP parser and URL seeds are committed (exact bytes; see .gitattributes).
 file(GLOB _http_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/http/*.seed)
 xcat_add_fuzzer(fuzz_http SEEDS ${_http_seeds})
+
+# Credentials file seeds are committed too.
+file(GLOB _cred_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/credentials/*.seed)
+xcat_add_fuzzer(fuzz_credentials SEEDS ${_cred_seeds})
