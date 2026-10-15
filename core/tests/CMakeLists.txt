@@ -83,6 +83,7 @@ endfunction()
 
 xcat_add_test(test_version)
 xcat_add_test(test_bytes)
+xcat_add_test(test_crc32)
 xcat_add_test(test_xdvdfs ARGS ${XCAT_FIXTURES_DIR} ${XCAT_FIXTURES})
 add_dependencies(test_xdvdfs xcat_fixtures)
 xcat_add_test(test_extract)

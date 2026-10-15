@@ -27,6 +27,10 @@ xcat-cli get "http://127.0.0.1:8080/<file>?drop=100000&times=3" <out>     # surv
 
 A fault counts down only on the responses it actually affects: `drop=1000` skips the 1-byte probe (`Range: bytes=0-0`) and hits the first body longer than 1000 bytes. Counters are per URL (ignoring `redirect`) and last as long as the server runs.
 
+## Console test file
+
+`make_test_file.py --out <dir> [--size 1G]` writes `xcat-test-<bytes>.bin`: pseudo-random bytes from a fixed seed, so a given size always gives the same file and CRC-32 on every machine. It prints the `url=`, `size=` and `crc32=` lines for the console's network test (`app/net-test`, [docs/testing.md](../../docs/testing.md#m3-network-download-test)). `xcat-cli get` prints the CRC-32 of what it downloaded too, for comparison.
+
 ## Tests
 
 `test_get.py` runs one scenario per CTest test (`get_<scenario>`, e.g. `ctest --preset host-debug -R get_`). Each starts the server in-process on a free port, serving freshly generated pseudo-random files, runs `xcat-cli get` and checks the exit status, the messages, and that the download is byte-identical to the served file, or that a failed download left no file behind. A few also check the requests the client sent (headers, the resumed range, one kept-alive connection). `python3 tools/testserver/test_get.py --list` prints the scenarios.

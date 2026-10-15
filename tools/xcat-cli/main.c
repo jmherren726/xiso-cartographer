@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "xcat/crc32.h"
 #include "xcat/extract.h"
 #include "xcat/fatx.h"
 #include "xcat/host.h"
@@ -312,6 +313,7 @@ typedef struct get_ctx {
     const xc_clock *clock;
     uint64_t size;
     uint64_t done;
+    uint32_t crc;
     uint64_t start_ms;
     uint64_t next_report_ms;
 } get_ctx;
@@ -329,6 +331,7 @@ static xc_err get_write(void *ctx, uint64_t offset, const uint8_t *data, size_t 
     if (fwrite(data, 1, len, g->f) != len) {
         return XC_ERR_IO;
     }
+    g->crc = xc_crc32(g->crc, data, len);
     g->done += len;
     uint64_t now = g->clock->now_ms(g->clock->ctx);
     if (now >= g->next_report_ms) {
@@ -457,8 +460,8 @@ static int cmd_get(int argc, char **argv)
     free(buf);
     xc_host_net_cleanup();
     if (rc == 0) {
-        (void)printf("downloaded %" PRIu64 " bytes in %.1f s (%.1f MB/s)\n", g.done,
-                     (double)ms / 1000.0, mb_per_s(g.done, ms));
+        (void)printf("downloaded %" PRIu64 " bytes in %.1f s (%.1f MB/s), crc32 %08" PRIx32 "\n",
+                     g.done, (double)ms / 1000.0, mb_per_s(g.done, ms), g.crc);
     }
     return rc;
 }

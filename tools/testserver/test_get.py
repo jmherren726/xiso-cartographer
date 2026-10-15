@@ -21,6 +21,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import zlib
 from dataclasses import dataclass, field
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -156,6 +157,10 @@ def run(cli: str, work: str, name: str) -> int:
     if sc.ok and result.returncode == 0:
         if not os.path.isfile(out) or sha256(out) != sha256(os.path.join(root, sc.file)):
             problems.append("download differs from the served file")
+        with open(os.path.join(root, sc.file), "rb") as f:
+            want = f"crc32 {zlib.crc32(f.read()):08x}"
+        if want not in result.stdout:
+            problems.append(f"expected {want!r} in the summary")
     if not sc.ok and os.path.exists(out):
         problems.append("a failed download left a file behind")
     if sc.check is not None:

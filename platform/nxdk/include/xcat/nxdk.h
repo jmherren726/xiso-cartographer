@@ -3,15 +3,17 @@
 
 /*
  * Xbox (nxdk) platform adapters: a file-backed xc_source, a FATX directory
- * xc_sink and drive helpers (docs/ARCHITECTURE.md §2, §4). Built only into the
- * XBE (app/Makefile). Paths are DOS-style ("E:\Games\Title"); FATX limits paths
- * to 250 bytes after the drive (docs/formats/fatx-names.md §3), so 256-byte
+ * xc_sink, drive helpers, and lwIP networking with a clock (docs/ARCHITECTURE.md §2, §4). Built
+ * only into XBEs (app/Makefile, app/net-test/Makefile). Paths are DOS-style ("E:\Games\Title");
+ * FATX limits paths to 250 bytes after the drive (docs/formats/fatx-names.md §3), so 256-byte
  * buffers always suffice once xc_fatx_check_listing() has passed.
  */
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
+#include "xcat/net.h"
 #include "xcat/sink.h"
 #include "xcat/source.h"
 
@@ -48,5 +50,18 @@ bool xc_nx_exists(const char *path);
 
 /* Creates `path` and any missing parents. */
 bool xc_nx_mkdirs(const char *path);
+
+/*
+ * Networking (xcat/net.h) over nxdk's lwIP (nx_net.c). xc_nx_net_startup()
+ * brings the network up with the dashboard's settings (DHCP or static) and
+ * writes the console's IPv4 address as text into ip[0, ip_size). It fails with
+ * XC_ERR_NET_CONNECT if the settings can't be read or DHCP gets no address
+ * (cable unplugged?). Call it once, before using `net`.
+ */
+xc_err xc_nx_net_startup(char *ip, size_t ip_size);
+void xc_nx_net(xc_net *net);
+
+/* Monotonic milliseconds from the CPU's performance counter, and sleep. */
+void xc_nx_clock(xc_clock *clock);
 
 #endif /* XCAT_NXDK_H */

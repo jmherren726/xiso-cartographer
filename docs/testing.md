@@ -7,7 +7,7 @@ Every change climbs as far up this ladder as it affects (see [HANDOFF.md §4](HA
 1. **Host unit tests:** `ctest --preset host-debug`. Run by CI on Linux and Windows for every pull request.
    - Parser and extractor tests use the synthetic xiso fixtures from [tools/fixtures/](../tools/fixtures/README.md) (small, deep, XGD1/XGD2/XGD3 full-disc, and >4 GiB with `-DXCAT_LARGE_FIXTURES=ON`; CMake generates them at build time). CI checks the fixtures themselves against extract-xiso.
    - Every parser also has a libFuzzer target. CTest replays its seeds on every build, and CI fuzzes each parser for 60 s per run ([CONTRIBUTING.md#fuzzing](../CONTRIBUTING.md#fuzzing)).
-2. **Host integration tests:** `xcat-cli` against the fake HTTP/HTTPS server and fixture images. Arrives with M1/M3.
+2. **Host integration tests:** `xcat-cli` against the fixture images (`extract_*`, `check_*`, `layout_*`) and against the Range test server with scripted faults (`get_*`, [tools/testserver/](../tools/testserver/README.md)). Also run by CTest; HTTPS joins in M5.
 3. **xemu:** manual for now. Needs your own BIOS/MCPX/HDD files, which can't go in CI. See [build-xbox.md](build-xbox.md#run-in-xemu).
 4. **Real hardware:** manual. See [build-xbox.md](build-xbox.md#run-on-hardware).
 
@@ -25,6 +25,8 @@ Newest first. "Build" is the commit or CI artifact tested.
 
 | Date | Milestone | Build | Where | Result | Notes |
 |---|---|---|---|---|---|
+| 2026-10-15 | M3 (step 3) | #35 CI artifact (`e6b5977`) | Hardware: main console (see bench), same LAN and PC | ✅ Pass | Same 1 GiB file. Network cable pulled at ~31 s (~340 MiB) and plugged back in: no data for 15 s, then "The server stopped responding, retrying in 0.9 s", and the download **resumed at ~347 MiB, not 0**. Finished in 108 s (9.9 MB/s average including the outage), 2 retries, longest pause 16.3 s, **CRC-32 `6775e853` matches**. The cable was back in before the first retry, so the reconnect worked on the first try; a longer outage (several failed connects with backoff) wasn't exercised. **M3 exit test met** (1 GB over the LAN, CRC match, MB/s recorded, survives a cable pull). Side note: in 2 of the 4 runs today, the very first request after startup timed out once (15 s) before working on the retry; worth a look before M4. |
+| 2026-10-15 | M3 (step 2) | #35 CI artifact (`c208e95`) | Hardware: main console (see bench), LAN to a Windows PC running `rangeserver.py` | ✅ Pass | 1 GiB test file (`make_test_file.py --size 1G`) downloaded twice: **1,073,741,824 bytes in 90 s, 11.8 MB/s average** (steady 11.8 MB/s throughout), 0 retries, CRC-32 `6775e853` matches both times. About the same as the console's FTP upload (~11.7 MB/s), so the HTTP client isn't the bottleneck. A power cut mid-download restarted the test from 0 on the next boot, as expected: the test keeps progress in memory only (resume across power cuts is M4). |
 | 2026-10-14 | M2 (step 3) | `main` after #25 (local Docker build) | Hardware: main console (see bench) | ✅ Pass | One of the owner's retail games, full-disc dump trimmed with `extract-xiso -r` to a 3,112,328,144-byte xiso, copied by FTP to `E:\xcat\isos\` (~11.7 MB/s), installed: **21 files in 211,952 ms (~14,340 KB/s, ~14.7 MB/s)**. Read-back verify: all 21 files match. **The installed game launches and plays from the dashboard.** M2 exit test met. |
 | 2026-10-14 | M2 (step 2) | `main` after #25 (local Docker build) | Hardware: main console (see bench) | ✅ Pass | `app/bin/` (XBE + `samples/`) copied by FTP. Bundled `small.iso` installed to `E:\Games\small`: 9 files in 19 ms (10,141 KB/s; tiny image, so not a throughput figure). Read-back verify: all 9 files match. |
 | 2026-10-14 | M2 (step 1) | `feat/onbox-extract` (local Docker build) | xemu v0.8.136, kernel 1.0.4627.1 | ✅ Pass | Bundled `small.iso` copied to `E:\xcat\isos\`, installed to `E:\Games\small`: 9 files, 3 folders, 192 KB in 62 ms (3,107 KB/s, emulated disk). Read-back verify: all 9 files match the image. "Done: 1 of 1 image(s) installed and verified." |
@@ -43,6 +45,37 @@ Newest first. "Build" is the commit or CI artifact tested.
 | 3 | One of your own games as a trimmed xiso under 4 GiB | Hardware | FTP it to `E:\xcat\isos\`, launch; then launch the installed game from the dashboard |
 
 A run passes when the screen ends with "Done: N of N image(s) installed and verified." Record the summary lines (files, KB/s) in the results log above.
+
+## M3: network download test
+
+**Exit test** ([HANDOFF.md §5](HANDOFF.md)): a 1 GB download over the LAN whose CRC-32 matches, with MB/s recorded, that survives a pulled cable. `app/net-test` downloads one file with the core HTTP client (the same code `xcat-cli get` uses) over the console's own network stack (lwIP, `platform/nxdk/src/nx_net.c`), and reports progress, every retry, the average MB/s and the CRC-32.
+
+**On the PC:**
+
+1. Make the test file (pseudo-random test data, never a game): `python3 tools/testserver/make_test_file.py --out C:\xcat-net --size 1G`. It prints `url=`, `size=` and `crc32=` lines.
+2. Serve it to the LAN: `python3 tools/testserver/rangeserver.py --root C:\xcat-net --bind 0.0.0.0`. Allow Python through the Windows firewall (private networks) when asked. Optional check from the PC: `xcat-cli get http://127.0.0.1:8080/xcat-test-1073741824.bin <file>` prints the same CRC-32.
+3. Write `net-test.txt` from the printed lines, with `<pc-ip>` replaced by the PC's LAN address (`ipconfig`):
+
+   ```
+   url=http://192.168.1.10:8080/xcat-test-1073741824.bin
+   size=1073741824
+   crc32=<printed by make_test_file.py>
+   ```
+
+   Optional lines: `save=yes` also writes the file to `E:\xcat\net-test.bin` (network and disk together, like a real install; delete the file afterwards), and `attempts=N` (default 40, about half an hour of outage) sets how many consecutive failures end the test.
+
+**On the console:**
+
+| Step | Where | How |
+|---|---|---|
+| 1 | xemu (optional) | Enable networking (**Settings → Network**, NAT). The PC is then usually `10.0.2.2`. Put `net-test.txt` on the E: partition of the HDD image, then **Load Disc →** `app/net-test/xcat-net-test.iso`. A small `--size 100M` file is enough here. |
+| 2 | Hardware | FTP `net-test.txt` to `E:\xcat\` and `app/net-test/bin/default.xbe` to e.g. `E:\Apps\xcat-net-test\`. Launch it. Let it run to the end once without touching anything. |
+| 3 | Hardware | Launch it again. After about 30 s, **pull the network cable** for 30–60 s, then plug it back in. The screen should show retries ("The server stopped responding" or "network connection failed"), then progress resuming from where it stopped, never from 0. |
+| 4 | Hardware (optional) | Once more with `save=yes`, for the speed with the disk writes included. |
+
+The cable pull tests a lost connection within one run. A power cut or reboot can't be resumed by this test: it keeps its progress in memory only, so the next launch starts from 0. Resuming an install after a power cut is M4's exit test (a journal on disk).
+
+A run passes when the screen ends with "CRC-32 … matches, PASS". Each run is appended to `E:\xcat\net-test.log` (it starts over past 1 MiB); fetch it over FTP and record in the results log: the average MB/s, the retries and the longest pause (step 3), and the disk-write line (step 4). The MB/s figure also sizes the install buffers ([ARCHITECTURE.md §6](ARCHITECTURE.md)).
 
 ## FATX probe (M2)
 
