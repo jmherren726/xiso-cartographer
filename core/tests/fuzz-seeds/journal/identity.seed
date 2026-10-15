@@ -1,0 +1,4 @@
+# xcat-journal v1
+image 7825162240 0 8649D58F 4
+validators "e" -
+source http://192.168.1.20:8080/x%20y.iso

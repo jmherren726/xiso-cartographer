@@ -70,7 +70,7 @@ static xc_err fail(parser *p, const char *fmt, ...)
 static xc_err check_header(parser *p, const char *line)
 {
     unsigned long major = 0;
-    switch (xc_text_check_header(line, "xcat-credentials", XC_CRED_VERSION_MAJOR, &major)) {
+    switch (xc_text_check_header(line, "xcat-credentials", XC_CRED_VERSION_MAJOR, &major, NULL)) {
     case XC_TEXT_HEADER_OK:
         return XC_OK;
     case XC_TEXT_HEADER_NEWER:

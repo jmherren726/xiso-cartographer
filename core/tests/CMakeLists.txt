@@ -86,6 +86,7 @@ xcat_add_test(test_bytes)
 xcat_add_test(test_crc32)
 xcat_add_test(test_credentials)
 xcat_add_test(test_map)
+xcat_add_test(test_journal)
 xcat_add_test(test_xdvdfs ARGS ${XCAT_FIXTURES_DIR} ${XCAT_FIXTURES})
 add_dependencies(test_xdvdfs xcat_fixtures)
 xcat_add_test(test_extract)
@@ -171,3 +172,7 @@ xcat_add_fuzzer(fuzz_credentials SEEDS ${_cred_seeds})
 # Map seeds are committed: NUL-separated parts, see fuzz_map.c.
 file(GLOB _map_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/map/*.seed)
 xcat_add_fuzzer(fuzz_map SEEDS ${_map_seeds})
+
+# Journal seeds are committed, without their line CRCs (fuzz_journal.c adds them).
+file(GLOB _journal_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/journal/*.seed)
+xcat_add_fuzzer(fuzz_journal SEEDS ${_journal_seeds})
