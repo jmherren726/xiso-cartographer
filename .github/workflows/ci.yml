@@ -176,6 +176,12 @@ jobs:
           ./build/fuzz/core/tests/fuzz_xdvdfs -max_total_time=60 -max_len=65536 \
             -print_final_stats=1 -artifact_prefix=build/fuzz/artifacts/ \
             build/fuzz/corpus build/fuzz/fuzz-seeds
+      - name: Fuzz the HTTP response, chunked and URL parsers (60 s)
+        run: |
+          mkdir -p build/fuzz/corpus-http build/fuzz/artifacts
+          ./build/fuzz/core/tests/fuzz_http -max_total_time=60 -max_len=65536 \
+            -print_final_stats=1 -artifact_prefix=build/fuzz/artifacts/ \
+            build/fuzz/corpus-http core/tests/fuzz-seeds/http
       - name: Upload crashing inputs
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
