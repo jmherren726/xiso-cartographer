@@ -31,7 +31,7 @@ The user picks a game from the **catalog**, the **map** says where the user's im
 
 | Layer | Path | Contains | Depends on |
 |---|---|---|---|
-| Core (`libxcat`) | `core/` | All parsing and logic. Portable C11, no platform headers. | C standard library only, plus BearSSL from M5 |
+| Core (`libxcat`) | `core/` | All parsing and logic. Portable C11, no platform headers. | C standard library only, plus BearSSL from M5 (pinned submodule `third_party/bearssl`, [ADR 0012](adr/0012-tls-trust-time-and-entropy.md)) |
 | Platform | `platform/` | Thin adapters that implement the core's interfaces (§4). `nxdk/` for the Xbox: file source, FATX directory sink, free space, drive mounting ([`xcat/nxdk.h`](../platform/nxdk/include/xcat/nxdk.h)). `host/` for POSIX/Windows: file source and directory sink, for tests and the CLI. | Core interfaces; nxdk or the host OS |
 | App | `app/` | The XBE: UI, screens, job orchestration. No parsing. Currently (M4) it installs every entry of `E:\xcat\map.txt` over HTTP and every image in `E:\xcat\isos\`, resumably, and verifies them ([build-xbox.md](build-xbox.md#what-the-app-does-m4)). | Core, platform/nxdk |
 | Tools | `tools/` | `xcat-cli` (runs the core on a PC), the fixture generator ([`tools/fixtures/`](../tools/fixtures/README.md), Python), catalog pipeline. | Core, platform/host (the fixture generator is standalone Python) |
@@ -60,9 +60,9 @@ Status: ✅ exists · 🔜 next milestone · ⏳ later.
 | `url` | Parse `http`/`https` URLs, build percent-encoded request targets, resolve redirect `Location`s ([http.md §2](formats/http.md#2-urls), `xcat/url.h`) | M3 | ✅ |
 | `http` | HTTP/1.1 response parsing: status line, headers, `Content-Range`, chunked bodies, with hard limits ([http.md §4–§5](formats/http.md#4-response-head), `xcat/http.h`). The client on top: `Range`, cross-host redirects (max 5), timeouts, backoff, resume; asks `credentials` what to attach **on every redirect hop** ([http.md §3, §6–§9](formats/http.md#3-requests)) | M3 | ✅ parser · ✅ client (`xcat/http_client.h`) |
 | `credentials` | Parse the credentials file and decide, per request hop, which scoped cookie/headers may be attached ([credentials.md](formats/credentials.md), [ADR 0007](adr/0007-scoped-user-credentials.md)) | M3 (LAN), M6 (archive.org) | ✅ parser and per-hop decision (`xcat/credentials.h`, used by `xcat-cli get --credentials`); loaded on the console with the install job (M4); on-box login writes a section (M8, [ADR 0010](adr/0010-on-box-login-required-for-beta.md)) |
-| `tls` | BearSSL wrapper: TLS 1.2, SNI, CA bundle, time from `xc_clock` ([ADR 0005](adr/0005-bearssl-for-tls.md)) | M5 | ⏳ |
-| `ntp` | Minimal SNTP client, so certificate checks have a correct clock | M5 | ⏳ |
-| `hash` | MD5/SHA-1 with exportable state (from BearSSL) | M5 | ⏳ |
+| `tls` | BearSSL wrapper: an `xc_net` around the plain TCP `xc_net`, plugged into the HTTP client's `tls` slot. TLS 1.2 only, SNI, ECDHE + AEAD suites (ChaCha20-Poly1305 first), validation always on; trust anchors from the built-in Mozilla bundle or `E:\Apps\xcat\cacert.pem`, which replaces it; randomness from `xc_entropy` ([ADR 0005](adr/0005-bearssl-for-tls.md), [ADR 0012](adr/0012-tls-trust-time-and-entropy.md)) | M5 | 🔜 |
+| `ntp` | Minimal SNTP client, so certificate checks have a correct clock; falls back to the console's clock if it isn't earlier than the build time ([ADR 0012](adr/0012-tls-trust-time-and-entropy.md) §5) | M5 | 🔜 |
+| `hash` | MD5/SHA-1 with exportable state (from BearSSL). Whole-image hashes of trimmed xisos, with the state kept in the journal across resumes; compared when an expected value is given, logged otherwise, filled in from archive.org metadata in M6 ([ADR 0004](adr/0004-streaming-install.md) §5) | M5 | 🔜 |
 | `map` | Parse map files: entries, `@include` (fetched through a caller callback), `@archiveorg` ([map.md](formats/map.md), `xcat/map.h`) | M4 (the console installs from a map); `@archiveorg` in M6 | ✅ |
 | `zip` | Read zip archives over `Range` (Zip64); stream stored and Deflate members (miniz) into the extractor; checkpoints for resume and the second pass over files that precede their directory tables; CRC-32 verification ([ADR 0009](adr/0009-install-from-zip-archives.md)) | M5b | ⏳ |
 | `sources/archiveorg` | Metadata API client (streaming JSON); builds map entries, supplies sizes and hashes | M6 | ⏳ |
@@ -78,7 +78,9 @@ The core reaches the outside world only through small structs of function pointe
 |---|---|---|
 | [`xc_install_io`](../core/include/xcat/install.h) | what an install needs: exists, size, small reads, durable appends and writes, remove, free space, a sink for a folder, a source for an installed file | host ([`xc_host_install_io`](../platform/host/include/xcat/host.h)) ✅; nxdk ([`xc_nx_install_io`](../platform/nxdk/include/xcat/nxdk.h): FATX, `NtFlushBuffersFile`) ✅ |
 | [`xc_net`](../core/include/xcat/net.h) | TCP connect/send/recv/close with timeouts, DNS | host ([`xc_host_net`](../platform/host/include/xcat/host.h): Winsock/BSD sockets) ✅; nxdk ([`xc_nx_net`](../platform/nxdk/include/xcat/nxdk.h): lwIP) ✅, on hardware in the M3 network test |
-| [`xc_clock`](../core/include/xcat/net.h) | a monotonic clock and sleep (for timeouts and backoff); wall-clock time for TLS is added in M5 | nxdk (`xc_nx_clock`: CPU performance counter; NTP for wall-clock time in M5), host (`xc_host_clock`) |
+| [`xc_clock`](../core/include/xcat/net.h) | a monotonic clock and sleep (for timeouts and backoff); wall-clock time (the console's clock, used only as the NTP fallback) is added in M5 | nxdk (`xc_nx_clock`: CPU performance counter), host (`xc_host_clock`) |
+| UDP exchange (M5) | send one datagram and wait for one reply, for SNTP; its exact shape comes with the `ntp` module | nxdk (lwIP), host (sockets) |
+| `xc_entropy` (M5) | seed material for the TLS random generator ([ADR 0012](adr/0012-tls-trust-time-and-entropy.md) §6) | nxdk (timestamp-counter jitter around network, disk and input events, MAC, clock, `E:\Apps\xcat\random-seed`), host (the OS generator) |
 | `xc_log` | levelled logging | nxdk (`E:\Apps\xcat\xcat.log`, rotated), host (stderr) |
 
 The streaming abstractions used by `extract`:
@@ -110,6 +112,7 @@ On resume, journaled files that are still on disk with their size are skipped, a
 |---|---|---|
 | I/O buffer | 256 KB–1 MB | One per stage. Final size set by the M3 benchmark. |
 | TLS buffer | ~33 KB per connection | BearSSL bidirectional buffer; at most 2 connections |
+| CA trust anchors | ~100–150 KB | The built-in Mozilla set is in the XBE image; an override file (≤ 1 MiB, ≤ 512 certificates) is decoded once at startup |
 | Directory list | Proportional to file count | Bounded by an entry-count limit in `xdvdfs` |
 | Catalog | < 2 MB text + indices | Thumbnails loaded on demand from the HDD |
 

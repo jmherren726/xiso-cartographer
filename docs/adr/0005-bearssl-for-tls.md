@@ -1,6 +1,6 @@
 # 0005. Use BearSSL for on-box TLS
 
-- **Status:** Accepted
+- **Status:** Accepted; amended by [ADR 0012](0012-tls-trust-time-and-entropy.md) (CA bundle source and override, randomness on the Xbox, and the console's clock as the fallback when NTP is unreachable)
 - **Date:** 2026-10-13
 
 ## Context
