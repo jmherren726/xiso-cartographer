@@ -52,6 +52,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - On a PC, connections try IPv4 addresses first, like the console: `localhost` resolving to `::1` first no longer costs Windows' ~2 s refused-connect delay per connection.
 - HTTPS in the console's network test (`app/net-test`, M5): https URLs work with the built-in roots, or `E:\Apps\xcat\cacert.pem` instead. Before downloading it measures the CPU's ChaCha20-Poly1305 and AES-128-GCM speed with no network (`xc_tls_measure_ciphers`), shows the console's clock and the randomness it gathered, then reports the connect time and the TLS suite the server chose. `limit=` downloads only the start of a large file. The console's clock is refused if it's earlier than the XBE's build (`xc_nx_wallclock`). Randomness comes from timer-interrupt jitter, hashed in a new core entropy pool with the MAC, the clock and a seed file renewed on every start (`xc_entropy_pool`, `xc_nx_entropy_gather`; ADR 0012 §6). BearSSL and `tls.c` are built with `-O2` for the Xbox (`app/tls.mk`); nxdk otherwise compiles without optimisation.
 - `tools/testserver/make_lan_cert.sh` makes a throwaway certificate for HTTPS from the PC to the console over the LAN; `rangeserver.py --tls-ciphers` sets which suite the server prefers (default: ChaCha20 first, like the console). The certificate scripts work in Git Bash.
+- TCP tuning for downloads over the internet (M5): over a 60 ms path one connection to archive.org ran at 0.3 MB/s, while HTTPS on the LAN ran at 6.7 MB/s. Our `platform/nxdk/lwip/lwipopts.h` now goes ahead of nxdk's lwIP options:
+  - a 120-segment (~168 KB) receive window with window scaling, up from 64 KB without;
+  - 192 receive buffers in the network driver, up from 64;
+  - SACK, so a lost segment is resent without waiting for a timeout;
+  - 32-bit statistics counters.
+
+  The Docker image builds nxdk's network library with these options (named build context `xcat-lwip`), and `app/lwip.mk` applies them to our sources. The network test ends each run with lwIP's counters (`xc_nx_tcp_counters_get`): window, frames and segments in and out, drops, bad segments, memory shortages.
+- A server that answers plain HTTP on an https URL now gets "The server didn't answer in HTTPS (is it a plain http:// server?)" (`XC_ERR_TLS_NOT_TLS`) instead of a generic TLS failure. On Windows, `rangeserver.py` claims its port exclusively, so a second server can't start on a port that a stale one still answers.
 - FATX probe v4 measures the largest file the console can store, and a failed install names the file it was on and, on the Xbox, which disk call failed with its error code. Both came out of the first M4 hardware run, where a 4,294,965,248-byte file failed at its end on the console but installs on a PC.
 
 ### Changed

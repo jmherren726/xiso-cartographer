@@ -415,6 +415,9 @@ static xc_err map_error(int e)
     if (e == BR_ERR_NO_RANDOM) {
         return XC_ERR_TLS_NO_RANDOM;
     }
+    if (e == BR_ERR_UNSUPPORTED_VERSION) {
+        return XC_ERR_TLS_NOT_TLS; /* a record header that isn't TLS: e.g. "HTTP/1.0 400" */
+    }
     return XC_ERR_TLS;
 }
 

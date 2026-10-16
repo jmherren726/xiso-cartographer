@@ -425,7 +425,7 @@ static bool load_credentials(const char *path, xc_credentials *c)
 
 static int get_fail(const xc_http_client *c, const xc_tls *tls, const char *url, xc_err err)
 {
-    if (err >= XC_ERR_TLS && err <= XC_ERR_TLS_NO_RANDOM && xc_tls_last_error(tls) != 0) {
+    if (err >= XC_ERR_TLS && err <= XC_ERR_TLS_NOT_TLS && xc_tls_last_error(tls) != 0) {
         (void)fprintf(stderr, "xcat-cli: %s: %s (TLS error %d)\n", url, xc_err_str(err),
                       xc_tls_last_error(tls));
         return 1;

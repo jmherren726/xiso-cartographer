@@ -40,6 +40,9 @@ NXDK_SDL = y
 
 NXDK_DIR ?= $(ROOT_DIR)/third_party/nxdk
 
+# TCP tuning shared by every XBE (lwIP options).
+include $(ROOT_DIR)/app/lwip.mk
+
 include $(NXDK_DIR)/Makefile
 
 # Bundled synthetic test image (the tools/fixtures "small" fixture: dummy data, never a

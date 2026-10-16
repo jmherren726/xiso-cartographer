@@ -55,7 +55,14 @@ RANGE_RE = re.compile(r"bytes=(\d+)-(\d*)\Z")
 
 class RangeServer(ThreadingHTTPServer):
     daemon_threads = True
-    allow_reuse_address = True
+    # On Windows, SO_REUSEADDR lets a second server bind a port that's already in use, and
+    # the old one may keep answering (an M5 hardware run hit that). Claim it exclusively there.
+    allow_reuse_address = sys.platform != "win32"
+
+    def server_bind(self) -> None:
+        if sys.platform == "win32":
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
 
     def __init__(self, root: str, bind: str = "127.0.0.1", port: int = 0, verbose: bool = False,
                  tls: ssl.SSLContext | None = None):

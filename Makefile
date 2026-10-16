@@ -32,7 +32,8 @@ xbe:
 	$(MAKE) -C app/net-test
 
 docker-image:
-	$(DOCKER) build -f docker/nxdk.Dockerfile -t $(NXDK_IMAGE) third_party/nxdk
+	$(DOCKER) build -f docker/nxdk.Dockerfile -t $(NXDK_IMAGE) \
+		--build-context xcat-lwip=platform/nxdk/lwip third_party/nxdk
 
 docker-xbe: docker-image
 	$(DOCKER) run --rm $(DOCKER_USER) -v "$(CURDIR):/usr/src/app" $(NXDK_IMAGE) \
