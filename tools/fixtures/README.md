@@ -62,6 +62,10 @@ The structures, the name ordering (bytewise, `a`–`z` folded to upper case) and
 
 A reader must accept any valid placement, not just this one. Real images differ.
 
+## TLS test certificates (`tls/`)
+
+[`tls/make_certs.sh`](tls/make_certs.sh) makes a small test PKI with OpenSSL: an EC and an RSA test CA, a leaf for `test.example` and `localhost` from each (valid 2026-01-01 to 2036-01-01), and an unrelated CA for "unknown issuer" tests. The output is committed so the tests are deterministic. The leaf keys are stored as binary DER (`*.key.der`), so secret scanners don't take them for leaked keys. **They are test-only and public:** nothing outside the tests may trust these CAs. `core/tests/test_tls.c` uses them against an in-process BearSSL server; the HTTPS test server (M5) will too.
+
 ## Fuzz seeds
 
 `fuzz_seeds.py` turns xiso fixtures into seeds for `core/tests/fuzz_xdvdfs.c`. A seed is a small header followed by the image's directory tables, without file data. CMake runs it at build time into `build/<preset>/fuzz-seeds/`.

@@ -5,6 +5,7 @@ Every dependency is a pinned git submodule under `third_party/` (or vendored wit
 | Component | Version | Licence | Path | Used for | Ships in release |
 |---|---|---|---|---|---|
 | [Unity](https://github.com/ThrowTheSwitch/Unity) | v2.7.0 | MIT | `third_party/unity` | Host unit tests ([ADR 0003](docs/adr/0003-unit-test-framework.md)) | No |
+| [BearSSL](https://www.bearssl.org/) | `7bea48e` (master, 2026-04-06; v0.6 plus fixes) | MIT | `third_party/bearssl` | TLS 1.2, X.509, hashes ([ADR 0005](docs/adr/0005-bearssl-for-tls.md), [ADR 0012](docs/adr/0012-tls-trust-time-and-entropy.md)). Fetched from bearssl.org, so Dependabot can't track it: check upstream and CVE feeds at each release | Yes (from M5) |
 | [nxdk](https://github.com/XboxDev/nxdk) | `14d5ee9` (2026-09-30) | Mixed; see below | `third_party/nxdk` | XBE toolchain and runtime libraries | Linked parts only |
 
 ## nxdk components

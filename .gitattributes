@@ -27,3 +27,4 @@
 
 # Fuzz seeds are exact bytes (CRLF matters).
 *.seed   binary
+*.der    binary

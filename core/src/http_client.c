@@ -197,7 +197,10 @@ static xc_err exchange(xc_http_client *c, const xc_url *u, attempt *a, size_t *n
         bool reused = false;
         xc_err err = ensure_conn(c, u, &reused);
         if (err != XC_OK) {
-            a->retryable = err != XC_ERR_UNSUPPORTED;
+            /* §7.2: only network errors; a rejected certificate or a missing clock won't
+             * change on a retry (ADR 0012). */
+            a->retryable = err == XC_ERR_NET_DNS || err == XC_ERR_NET_CONNECT ||
+                           err == XC_ERR_NET_TIMEOUT || err == XC_ERR_NET_IO;
             return err;
         }
         size_t req_len = 0;
