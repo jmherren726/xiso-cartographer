@@ -96,6 +96,9 @@ xcat_add_test(test_fatx)
 xcat_add_test(test_url)
 xcat_add_test(test_http)
 xcat_add_test(test_http_client)
+# TLS against an in-process BearSSL server, with the committed test certificates.
+xcat_add_test(test_tls ARGS ${PROJECT_SOURCE_DIR}/tools/fixtures/tls)
+target_link_libraries(test_tls PRIVATE bearssl)
 
 # FATX installability (ADR 0008): every fixture can be installed except "deep", whose names
 # of 43 and 255 characters can't be stored on FATX; `xcat-cli check` must refuse it (exit 3).
@@ -193,3 +196,7 @@ xcat_add_fuzzer(fuzz_map SEEDS ${_map_seeds})
 # Journal seeds are committed, without their line CRCs (fuzz_journal.c adds them).
 file(GLOB _journal_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/journal/*.seed)
 xcat_add_fuzzer(fuzz_journal SEEDS ${_journal_seeds})
+
+# Trust-anchor (PEM bundle) seeds are committed: the test certificates and a few broken ones.
+file(GLOB _tls_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/tls/*.seed)
+xcat_add_fuzzer(fuzz_tls_anchors SEEDS ${_tls_seeds})

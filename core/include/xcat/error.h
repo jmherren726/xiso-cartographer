@@ -35,6 +35,11 @@ typedef enum xc_err {
     XC_ERR_NO_SPACE,        /* not enough free space for the install */
     XC_ERR_VERIFY,          /* an installed file doesn't match what was received */
     XC_ERR_FOLDER,          /* no free install folder name (ADR 0008 numbering ran out) */
+    XC_ERR_TLS,             /* the TLS handshake or a TLS record failed (not retried) */
+    XC_ERR_TLS_CERT,        /* the server's certificate isn't trusted for this host */
+    XC_ERR_TLS_CERT_TIME,   /* the certificate isn't valid at the current time (clock?) */
+    XC_ERR_TLS_NO_TIME,     /* no acceptable time for certificate checks (ADR 0012 §5) */
+    XC_ERR_TLS_NO_RANDOM,   /* not enough randomness to start TLS (ADR 0012 §6) */
     XC_ERR_COUNT_           /* number of codes; not an error */
 } xc_err;
 

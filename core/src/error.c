@@ -59,6 +59,16 @@ const char *xc_err_str(xc_err err)
         return "An installed file doesn't match what was downloaded";
     case XC_ERR_FOLDER:
         return "No free install folder name left for this title";
+    case XC_ERR_TLS:
+        return "The secure (HTTPS) connection failed";
+    case XC_ERR_TLS_CERT:
+        return "The server's certificate isn't trusted (unknown issuer or wrong name)";
+    case XC_ERR_TLS_CERT_TIME:
+        return "The server's certificate isn't valid at the current time (is the clock right?)";
+    case XC_ERR_TLS_NO_TIME:
+        return "Couldn't get the correct time, so HTTPS certificates can't be checked";
+    case XC_ERR_TLS_NO_RANDOM:
+        return "Couldn't gather enough randomness for a secure connection";
     case XC_ERR_COUNT_:
         break;
     }

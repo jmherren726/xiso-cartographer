@@ -125,7 +125,7 @@ Connecting (including DNS) and each wait for data have a timeout (default 15 s).
 
 ### 7.2 Retries
 
-- Network errors (DNS, connect, timeout, a connection closed before the body is complete) and the temporary statuses of §6 are retried. Protocol errors, `200` instead of `206`, denied and not-found are not.
+- Network errors (DNS, connect, timeout, a connection closed before the body is complete) and the temporary statuses of §6 are retried. Protocol errors, `200` instead of `206`, denied and not-found are not. Neither are TLS failures while connecting (a rejected certificate, no acceptable time, no randomness, a failed handshake; [ADR 0012](../adr/0012-tls-trust-time-and-entropy.md)): a retry can't change them.
 - The delay before retry *n* (1, 2, …) is `min(base × 2^(n−1), max)` with base 1 s and max 30 s, then a random value between half of that and all of it ("jitter"). A `Retry-After` from the server replaces it, capped at 120 s.
 - A request gives up after a fixed number of consecutive failed attempts (default 8; the console's network test uses more). The count starts again whenever bytes arrive, so a long download survives any number of short outages, such as a pulled cable.
 
@@ -141,6 +141,7 @@ Before every request hop, including each redirect target, the client asks the cr
 
 ## 9. Connections
 
+- `https` connections run TLS 1.2 over the plain connection ([`xcat/tls.h`](../../core/include/xcat/tls.h)); the URL's host is the SNI name and the name the certificate must carry. Certificate checks can't be turned off.
 - One connection at a time. It is reused for the next request to the same scheme, host and port when the previous response was read completely, was a `2xx`, and didn't say `Connection: close`. Otherwise it is closed.
 - Any bytes after the end of a body (the client never pipelines) mean the response can't be trusted to have ended where it says, so the connection is closed.
 
@@ -149,3 +150,4 @@ Before every request hop, including each redirect target, the client asks the cr
 | Version | Date | Change |
 |---|---|---|
 | 1 | 2026-10-14 | First version. |
+| 1 | 2026-10-16 | Clarified for M5: TLS failures aren't retried (§7.2); how `https` connects (§9). No change for plain HTTP. |
