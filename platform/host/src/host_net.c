@@ -226,18 +226,24 @@ static xc_err net_connect(void *ctx, const char *host, uint16_t port, uint32_t t
         freeaddrinfo(list);
         return XC_ERR_NOMEM;
     }
-    /* Try each address in turn ("localhost" may list ::1 before 127.0.0.1), within one budget. */
+    /* Try each address in turn within one budget, IPv4 first like the console (IPv4 only):
+     * "localhost" may list ::1 first, and Windows takes ~2 s to report a refused connect. */
     uint64_t deadline = clock_now_ms(NULL) + timeout_ms;
     xc_err err = XC_ERR_NET_CONNECT;
-    for (const struct addrinfo *ai = list; ai != NULL; ai = ai->ai_next) {
-        uint64_t now = clock_now_ms(NULL);
-        if (now >= deadline) {
-            err = XC_ERR_NET_TIMEOUT;
-            break;
-        }
-        err = connect_one(ai, (uint32_t)(deadline - now), &conn->s);
-        if (err == XC_OK) {
-            break;
+    for (int pass = 0; pass < 2 && err != XC_OK; pass++) {
+        for (const struct addrinfo *ai = list; ai != NULL; ai = ai->ai_next) {
+            if ((ai->ai_family == AF_INET) != (pass == 0)) {
+                continue;
+            }
+            uint64_t now = clock_now_ms(NULL);
+            if (now >= deadline) {
+                err = XC_ERR_NET_TIMEOUT;
+                break;
+            }
+            err = connect_one(ai, (uint32_t)(deadline - now), &conn->s);
+            if (err == XC_OK) {
+                break;
+            }
         }
     }
     freeaddrinfo(list);

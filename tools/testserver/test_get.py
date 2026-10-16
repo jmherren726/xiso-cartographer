@@ -28,6 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import rangeserver  # noqa: E402
 
+TLS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "fixtures", "tls")
 BIG = 3 * 1024 * 1024 + 12345  # several receive buffers, not a round number
 
 
@@ -40,6 +41,8 @@ class Scenario:
     file: str = "big.bin"  # which served file a success must match
     check: str | None = None  # name of an extra check on the server's request log
     creds: str | None = None  # credentials file to pass with --credentials ("-": a missing file)
+    tls: bool = False  # serve HTTPS with the test PKI; a path URL becomes https://localhost:<port>
+    ca: str | None = "ca.pem"  # with tls: the --ca-file from tools/fixtures/tls/ (None: built-in)
 
 
 # A LAN-style section for the test server. 127.0.0.1 isn't a private range (credentials.md §6),
@@ -78,7 +81,24 @@ SCENARIOS: dict[str, Scenario] = {
                         args=["--attempts", "2"], stderr="Couldn't connect"),
     "dns": Scenario("http://xcat-test.invalid/big.bin", ok=False, args=["--attempts", "1"],
                     stderr="name lookup failed"),
-    "https": Scenario("https://127.0.0.1:{port}/big.bin", ok=False, stderr="Not supported by this version"),
+    # HTTPS (xcat/tls.h, ADR 0012) against the test PKI: certificate for test.example and localhost.
+    "https": Scenario("/big.bin", tls=True, check="one_connection"),
+    "https_redirects": Scenario("/big.bin?redirect=3", tls=True),
+    "https_drop_resumes": Scenario("/big.bin?drop=1500000", tls=True, check="resumed_range"),
+    "https_chunked": Scenario("/big.bin?chunked=1", tls=True),
+    "https_unknown_ca": Scenario("/big.bin", tls=True, ca="other-ca.pem", ok=False,
+                                 stderr=r"certificate isn't trusted .*TLS error \d+", check="not_retried"),
+    "https_builtin_ca": Scenario("/big.bin", tls=True, ca=None, ok=False, stderr="certificate isn't trusted",
+                                 check="not_retried"),
+    "https_wrong_name": Scenario("https://127.0.0.1:{port}/big.bin", tls=True, ok=False,
+                                 stderr="certificate isn't trusted", check="not_retried"),
+    "https_clock_reset": Scenario("/big.bin", tls=True, args=["--now", "978307200"], ok=False,
+                                  stderr=r"is the clock right\?", check="not_retried"),
+    "https_expired": Scenario("/big.bin", tls=True, args=["--now", "2082758401"], ok=False,
+                              stderr=r"is the clock right\?"),
+    "https_bad_ca_file": Scenario("/big.bin", tls=True, ca="make_certs.sh", ok=False,
+                                  stderr="make_certs.sh: not a valid PEM certificate bundle"),
+    "http_to_tls_port": Scenario("http://localhost:{port}/big.bin", tls=True, ok=False, args=["--attempts", "1"]),
     "bad_url": Scenario("ftp://127.0.0.1/big.bin", ok=False, stderr="Invalid or unsupported URL"),
     "creds_not_over_http": Scenario("/big.bin?auth=Bearer%20test-token", ok=False, creds=LOOPBACK_CREDS,
                                     stderr=r"Access denied.*HTTP 401", check="no_authorization"),
@@ -133,6 +153,9 @@ def check_requests(name: str, srv: rangeserver.RangeServer) -> str | None:
             return f"unexpected ranges: {ranges}"
     if name == "no_authorization" and any("authorization" in r for r in reqs):
         return "a credential was sent where credentials.md §6 forbids it"
+    if name == "not_retried":
+        if srv.connections != 1 or reqs:
+            return f"a refused certificate must end it: {srv.connections} connections, {len(reqs)} requests"
     return None
 
 
@@ -160,12 +183,18 @@ def run(cli: str, work: str, name: str) -> int:
                 f.write(sc.creds)
         args += ["--credentials", cred_file]
 
-    srv = CountingServer(root)
+    tls = None
+    if sc.tls:
+        tls = rangeserver.tls_context(os.path.join(TLS_DIR, "server-chain.pem"),
+                                      os.path.join(TLS_DIR, "server.key.der"))
+        if sc.ca is not None:
+            args += ["--ca-file", os.path.join(TLS_DIR, sc.ca)]
+    srv = CountingServer(root, tls=tls)
     srv.start()
     try:
         url = sc.url.format(port=srv.port, closed_port=closed_port())
         if url.startswith("/"):
-            url = f"http://127.0.0.1:{srv.port}{url}"
+            url = f"https://localhost:{srv.port}{url}" if sc.tls else f"http://127.0.0.1:{srv.port}{url}"
         result = subprocess.run([cli, "get", *args, url, out], capture_output=True, text=True,
                                 timeout=120, check=False)
     finally:
@@ -186,6 +215,8 @@ def run(cli: str, work: str, name: str) -> int:
             want = f"crc32 {zlib.crc32(f.read()):08x}"
         if want not in result.stdout:
             problems.append(f"expected {want!r} in the summary")
+        if sc.tls and "tls: TLS 1.2, ECDHE-ECDSA-" not in result.stdout:
+            problems.append("expected the negotiated TLS 1.2 ECDHE-ECDSA suite in the summary")
     if not sc.ok and os.path.exists(out):
         problems.append("a failed download left a file behind")
     if sc.check is not None:

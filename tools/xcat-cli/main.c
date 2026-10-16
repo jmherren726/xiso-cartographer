@@ -42,11 +42,13 @@ static int usage(void)
         "       xcat-cli extract <image> <out-dir>\n"
         "       xcat-cli check <image> [title]\n"
         "       xcat-cli layout <image>\n"
-        "       xcat-cli get [--timeout <ms>] [--attempts <n>] [--credentials <file>]\n"
-        "                    <url> <file>\n"
-        "       xcat-cli map [--credentials <file>] <map-file>\n"
-        "       xcat-cli install [--timeout <ms>] [--attempts <n>] [--credentials <file>]\n"
-        "                        [--checkpoint <bytes>] <url|image> <games-dir> [title]\n",
+        "       xcat-cli get [net options] <url> <file>\n"
+        "       xcat-cli map [net options] <map-file>\n"
+        "       xcat-cli install [net options] [--checkpoint <bytes>] <url|image> <games-dir>\n"
+        "                        [title]\n"
+        "net options: --timeout <ms>, --attempts <n>, --credentials <file>,\n"
+        "             --ca-file <pem> (trust these CAs instead of the built-in ones),\n"
+        "             --now <unix-seconds> (for tests: the time certificates are checked at)\n",
         xc_version_string());
     return 2;
 }
@@ -421,8 +423,13 @@ static bool load_credentials(const char *path, xc_credentials *c)
     return err == XC_OK;
 }
 
-static int get_fail(const xc_http_client *c, const char *url, xc_err err)
+static int get_fail(const xc_http_client *c, const xc_tls *tls, const char *url, xc_err err)
 {
+    if (err >= XC_ERR_TLS && err <= XC_ERR_TLS_NO_RANDOM && xc_tls_last_error(tls) != 0) {
+        (void)fprintf(stderr, "xcat-cli: %s: %s (TLS error %d)\n", url, xc_err_str(err),
+                      xc_tls_last_error(tls));
+        return 1;
+    }
     if (err == XC_ERR_HTTP_DENIED && c->last_section != NULL) {
         /* credentials.md §7: name the section, never its values. */
         (void)fprintf(stderr, "xcat-cli: %s: login missing or expired for [%s] (HTTP %d)\n", url,
@@ -442,6 +449,9 @@ typedef struct net_opts {
     unsigned long attempts;
     unsigned long checkpoint; /* install only: bytes between checkpoints (ADR 0011), 0 = default */
     const char *cred_path;
+    const char *ca_path; /* replaces the built-in CA bundle (ADR 0012 §4) */
+    bool has_now;        /* tests only: check certificates at this time instead of the clock's */
+    unsigned long now;
 } net_opts;
 
 /* Parses leading "--name value" options; returns the index of the first other argument or -1. */
@@ -458,6 +468,12 @@ static int parse_net_opts(int argc, char **argv, net_opts *o)
             ok = parse_uint(argv[i + 1], 3600000UL, &o->timeout_ms) && o->timeout_ms > 0;
         } else if (strcmp(argv[i], "--attempts") == 0) {
             ok = parse_uint(argv[i + 1], 1000UL, &o->attempts) && o->attempts > 0;
+        } else if (strcmp(argv[i], "--ca-file") == 0 && o->ca_path == NULL) {
+            o->ca_path = argv[i + 1];
+            ok = true;
+        } else if (strcmp(argv[i], "--now") == 0 && !o->has_now) {
+            ok = parse_uint(argv[i + 1], 0xFFFFFFFFUL, &o->now);
+            o->has_now = true;
         } else if (strcmp(argv[i], "--checkpoint") == 0) {
             ok = parse_uint(argv[i + 1], 0x7FFFFFFFUL, &o->checkpoint) && o->checkpoint >= 4096U;
         }
@@ -468,7 +484,7 @@ static int parse_net_opts(int argc, char **argv, net_opts *o)
     return i;
 }
 
-/* Sockets, clock, credentials and an HTTP client, set up together. */
+/* Sockets, clock, TLS, credentials and an HTTP client, set up together. */
 typedef struct http_env {
     xc_net net;
     xc_clock clock;
@@ -477,11 +493,59 @@ typedef struct http_env {
     xc_http_auth auth;
     xc_http_client client;
     bool net_started;
+    /* https (xcat/tls.h) */
+    xc_tls_anchors *anchors;
+    xc_tls *tls;
+    xc_net tls_net;
+    xc_entropy entropy;
+    xc_wallclock wallclock;
+    int64_t fixed_now; /* --now */
 } http_env;
+
+static xc_err fixed_now(void *ctx, int64_t *unix_s)
+{
+    *unix_s = *(const int64_t *)ctx;
+    return XC_OK;
+}
+
+/* The CA bundle: --ca-file replaces the built-in one, as E:\Apps\xcat\cacert.pem does on the
+ * console (ADR 0012 §4). A file that can't be used is an error, never a silent fallback. */
+static xc_err read_local(const char *path, size_t max_len, char **data, size_t *len);
+
+static xc_err load_anchors(const char *path, xc_tls_anchors **out)
+{
+    if (path == NULL) {
+        return xc_tls_anchors_builtin(out);
+    }
+    char *data = NULL;
+    size_t len = 0;
+    xc_err err = read_local(path, XC_TLS_MAX_ANCHOR_FILE, &data, &len);
+    size_t bad = 0;
+    if (err == XC_OK) {
+        err = xc_tls_anchors_parse(data, len, out, &bad);
+        free(data);
+    }
+    if (err != XC_OK) {
+        const char *why = err == XC_ERR_IO      ? "can't read it"
+                          : err == XC_ERR_LIMIT ? "too large, or too many certificates"
+                          : err == XC_ERR_NOMEM ? xc_err_str(err)
+                                                : "not a valid PEM certificate bundle";
+        if (bad > 0) {
+            (void)fprintf(stderr, "xcat-cli: %s: certificate %zu: %s\n", path, bad, why);
+        } else {
+            (void)fprintf(stderr, "xcat-cli: %s: %s\n", path, why);
+        }
+    }
+    return err;
+}
 
 static void env_close(http_env *e)
 {
     xc_http_client_close(&e->client);
+    xc_tls_destroy(e->tls);
+    e->tls = NULL;
+    xc_tls_anchors_free(e->anchors);
+    e->anchors = NULL;
     xc_cred_free(&e->creds);
     free(e->buf);
     e->buf = NULL;
@@ -506,9 +570,28 @@ static xc_err env_open(http_env *e, const net_opts *o)
         env_close(e);
         return XC_ERR_NOMEM;
     }
+    err = load_anchors(o->ca_path, &e->anchors);
+    if (err != XC_OK) {
+        env_close(e);
+        return XC_ERR_TLS; /* the reason is printed above */
+    }
+    xc_host_entropy(&e->entropy);
+    xc_host_wallclock(&e->wallclock);
+    if (o->has_now) {
+        e->fixed_now = (int64_t)o->now;
+        e->wallclock.now = fixed_now;
+        e->wallclock.ctx = &e->fixed_now;
+    }
+    xc_tls_config tcfg = {&e->net, e->anchors, &e->entropy, &e->wallclock};
+    err = xc_tls_create(&tcfg, &e->tls, &e->tls_net);
+    if (err != XC_OK) {
+        env_close(e);
+        return err;
+    }
     xc_http_config cfg;
     memset(&cfg, 0, sizeof cfg);
     cfg.net = &e->net;
+    cfg.tls = &e->tls_net;
     cfg.clock = &e->clock;
     cfg.buf = e->buf;
     cfg.buf_size = IO_BUFFER_SIZE;
@@ -568,11 +651,18 @@ static int cmd_get(int argc, char **argv)
         }
     }
     uint64_t ms = env.clock.now_ms(env.clock.ctx) - g.start_ms;
-    int rc = err == XC_OK ? 0 : get_fail(&env.client, url, err);
+    int rc = err == XC_OK ? 0 : get_fail(&env.client, env.tls, url, err);
+    xc_tls_info tls;
+    xc_tls_last_info(env.tls, &tls);
     env_close(&env);
     if (rc == 0) {
         (void)printf("downloaded %" PRIu64 " bytes in %.1f s (%.1f MB/s), crc32 %08" PRIx32 "\n",
                      g.done, (double)ms / 1000.0, mb_per_s(g.done, ms), g.crc);
+        if (tls.suite_name != NULL) {
+            /* ADR 0005: record what servers negotiate, to notice a change early. */
+            (void)printf("tls: TLS %u.%u, %s\n", (tls.version >> 8) - 2U,
+                         (tls.version & 0xFFU) - 1U, tls.suite_name);
+        }
     }
     return rc;
 }
@@ -815,7 +905,7 @@ static int install_fail(const xc_install_result *r, const http_env *env, const c
         break;
     }
     if (env != NULL) {
-        return get_fail(&env->client, what, err);
+        return get_fail(&env->client, env->tls, what, err);
     }
     return fail(what, err);
 }
@@ -864,7 +954,7 @@ static int cmd_install(int argc, char **argv)
         }
         err = xc_http_source_open(&src, &hs, &env.client, &res);
         if (err != XC_OK) {
-            int rc = get_fail(&env.client, image, err);
+            int rc = get_fail(&env.client, env.tls, image, err);
             env_close(&env);
             return rc;
         }
