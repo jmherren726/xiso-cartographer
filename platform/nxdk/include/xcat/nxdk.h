@@ -103,6 +103,22 @@ void xc_nx_tcp_counters_get(xc_nx_tcp_counters *out);
 size_t xc_nx_tcp_describe(char *buf, size_t cap);
 
 /*
+ * Where a download's time goes (M5), summed over every recv on xc_nx_net connections: how long
+ * they waited for data, and the state of our receive window as each one began: the bytes
+ * received but not yet read (summed for an average, and the most), and how many found it
+ * closed (zero advertised). Waiting most of the time means the data arrives too slowly
+ * (sender or path); a full window whenever the app reads means the console is too slow.
+ */
+typedef struct xc_nx_recv_counters {
+    uint64_t wait_ms;
+    uint32_t reads;
+    uint32_t reads_window_closed;
+    uint64_t unread_bytes_sum;
+    uint32_t unread_bytes_max;
+} xc_nx_recv_counters;
+void xc_nx_recv_counters_get(xc_nx_recv_counters *out);
+
+/*
  * For TLS (xcat/tls.h, ADR 0012, nx_tls.c). xc_nx_wallclock() is the console's clock, but
  * refused (XC_ERR_TLS_NO_TIME) when it's earlier than this XBE's build time: it was reset.
  * NTP comes in front of it later in M5 (§5). xc_nx_console_time() is the clock's raw value

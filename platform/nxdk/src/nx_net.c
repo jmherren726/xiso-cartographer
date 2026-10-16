@@ -24,9 +24,39 @@ extern struct netif *g_pnetif; /* nxdk/net.c */
 
 struct xc_net_conn {
     int s;
+    uint16_t local_port; /* finds its pcb for recv_counters, 0 if unknown */
 };
 
 static xc_nx_net_stats stats;
+static xc_nx_recv_counters recv_counters;
+
+void xc_nx_recv_counters_get(xc_nx_recv_counters *out)
+{
+    *out = recv_counters;
+}
+
+/* Counts the state of our receive window as a recv on `conn` begins (xc_nx_recv_counters). */
+static void count_window(const xc_net_conn *conn)
+{
+    if (conn->local_port == 0) {
+        return;
+    }
+    LOCK_TCPIP_CORE();
+    for (const struct tcp_pcb *p = tcp_active_pcbs; p != NULL; p = p->next) {
+        if (p->local_port == conn->local_port) {
+            uint32_t unread = TCP_WND > p->rcv_wnd ? (uint32_t)(TCP_WND - p->rcv_wnd) : 0U;
+            recv_counters.unread_bytes_sum += unread;
+            if (unread > recv_counters.unread_bytes_max) {
+                recv_counters.unread_bytes_max = unread;
+            }
+            if (p->rcv_ann_wnd == 0) {
+                recv_counters.reads_window_closed++;
+            }
+            break;
+        }
+    }
+    UNLOCK_TCPIP_CORE();
+}
 
 void xc_nx_net_last(xc_nx_net_stats *out)
 {
@@ -214,6 +244,12 @@ static xc_err net_connect(void *ctx, const char *host, uint16_t port, uint32_t t
         return err;
     }
     conn->s = s;
+    conn->local_port = 0;
+    struct sockaddr_in local;
+    socklen_t local_len = (socklen_t)sizeof local;
+    if (lwip_getsockname(s, (struct sockaddr *)&local, &local_len) == 0) {
+        conn->local_port = lwip_ntohs(local.sin_port);
+    }
     *out = conn;
     return XC_OK;
 }
@@ -249,8 +285,12 @@ static xc_err net_recv(void *ctx, xc_net_conn *conn, void *buf, size_t cap, uint
 {
     (void)ctx;
     *got = 0;
+    recv_counters.reads++;
+    count_window(conn);
     for (;;) {
+        uint64_t t0 = clock_now_ms(NULL);
         xc_err err = wait_sock(conn->s, WAIT_READ, timeout_ms);
+        recv_counters.wait_ms += clock_now_ms(NULL) - t0;
         if (err != XC_OK) {
             return err;
         }
