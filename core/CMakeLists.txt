@@ -21,6 +21,19 @@ add_library(xcat
 )
 add_library(xcat::xcat ALIAS xcat)
 
+# The built-in CA bundle (ADR 0012 §3), embedded from the pinned third_party/cacert/cacert.pem.
+find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
+set(_cacert ${PROJECT_SOURCE_DIR}/third_party/cacert/cacert.pem)
+add_custom_command(
+  OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/cacert_data.c
+  COMMAND ${Python3_EXECUTABLE} -I ${PROJECT_SOURCE_DIR}/tools/cacert/embed_cacert.py
+          --in ${_cacert} --out ${CMAKE_CURRENT_BINARY_DIR}/cacert_data.c
+  DEPENDS ${PROJECT_SOURCE_DIR}/tools/cacert/embed_cacert.py ${_cacert} ${_cacert}.sha256
+  COMMENT "Embedding the CA bundle"
+  VERBATIM)
+target_sources(xcat PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/cacert_data.c)
+target_include_directories(xcat PRIVATE src)
+
 target_include_directories(xcat PUBLIC include)
 target_compile_features(xcat PUBLIC c_std_11)
 xcat_target_warnings(xcat)

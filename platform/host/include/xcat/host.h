@@ -18,6 +18,7 @@
 #include "xcat/net.h"
 #include "xcat/sink.h"
 #include "xcat/source.h"
+#include "xcat/tls.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -63,6 +64,13 @@ void xc_host_net(xc_net *net);
 
 /* Monotonic milliseconds and sleep (xcat/net.h). */
 void xc_host_clock(xc_clock *clock);
+
+/*
+ * For TLS (xcat/tls.h): the OS random generator (BCryptGenRandom, /dev/urandom) and the
+ * OS clock. A PC's clock is trusted as it is; the console gets NTP (ADR 0012 §5).
+ */
+void xc_host_entropy(xc_entropy *e);
+void xc_host_wallclock(xc_wallclock *w);
 
 /*
  * File access for xc_install (xcat/install.h): the host separator, durable

@@ -464,6 +464,26 @@ static void test_anchors_limits(void)
     free(ca);
 }
 
+static void expect_refused(const char *host, xc_err want);
+
+static void test_builtin_bundle(void)
+{
+    xc_tls_anchors *a = NULL;
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_tls_anchors_builtin(&a));
+    /* Mozilla's store has had well over 100 server roots for years (121 in 2026-09). */
+    TEST_ASSERT_TRUE(xc_tls_anchors_count(a) >= 100);
+    xc_tls_anchors_free(a);
+    TEST_ASSERT_NOT_NULL(strstr(xc_tls_builtin_date(), "20"));
+}
+
+static void test_builtin_bundle_does_not_trust_the_test_ca(void)
+{
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_tls_anchors_builtin(&anchors));
+    xc_tls_config cfg = {&tcp, anchors, &entropy, &wallclock};
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_tls_create(&cfg, &tls, &tls_net));
+    expect_refused("test.example", XC_ERR_TLS_CERT);
+}
+
 /* ---- Connections --------------------------------------------------------------------- */
 
 static void test_connect_and_exchange(void)
@@ -686,6 +706,8 @@ int main(int argc, char **argv)
     RUN_TEST(test_anchors_rejected);
     RUN_TEST(test_anchors_second_certificate_bad);
     RUN_TEST(test_anchors_limits);
+    RUN_TEST(test_builtin_bundle);
+    RUN_TEST(test_builtin_bundle_does_not_trust_the_test_ca);
     RUN_TEST(test_connect_and_exchange);
     RUN_TEST(test_rsa_server);
     RUN_TEST(test_aes_gcm_when_the_server_prefers_it);

@@ -47,6 +47,6 @@ cat server.pem ca.pem >server-chain.pem
 # these test keys for leaked ones.
 rm ca.key other-ca.key rsa-ca.key
 for k in server rsa-server; do
-    openssl pkey -in "$k.key" -outform DER -out "$k.key.der"
+    openssl pkcs8 -topk8 -nocrypt -in "$k.key" -outform DER -out "$k.key.der"
     rm "$k.key"
 done

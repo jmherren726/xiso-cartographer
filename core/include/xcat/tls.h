@@ -65,6 +65,15 @@ typedef struct xc_tls_anchors xc_tls_anchors;
  * of the object that was rejected, or 0 if the problem isn't one object's.
  */
 xc_err xc_tls_anchors_parse(const char *pem, size_t len, xc_tls_anchors **out, size_t *bad_cert);
+/*
+ * The built-in bundle (ADR 0012 §3): Mozilla's root store as curl publishes it, pinned in
+ * third_party/cacert/ and decoded here with xc_tls_anchors_parse. A file the user puts in its
+ * place (E:\Apps\xcat\cacert.pem on the console, --ca-file in xcat-cli) replaces it (§4).
+ */
+xc_err xc_tls_anchors_builtin(xc_tls_anchors **out);
+/* When Mozilla's data in the built-in bundle is from, e.g. "Fri Sep 25 03:12:01 2026 GMT". */
+const char *xc_tls_builtin_date(void);
+
 size_t xc_tls_anchors_count(const xc_tls_anchors *a);
 void xc_tls_anchors_free(xc_tls_anchors *a);
 

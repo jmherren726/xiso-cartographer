@@ -9,6 +9,15 @@ xcat-cli get http://127.0.0.1:8080/<file> <out>                           # down
 xcat-cli get "http://127.0.0.1:8080/<file>?drop=100000&times=3" <out>     # survives three dropped connections
 ```
 
+**HTTPS:** add `--tls-cert <chain.pem> --tls-key <key>` (PEM, or DER like the test PKI's keys) and the server speaks TLS 1.2 or newer on the same port, faults and all. With the test PKI in [tools/fixtures/tls/](../fixtures/tls/make_certs.sh), whose certificate names `test.example` and `localhost`:
+
+```sh
+python3 tools/testserver/rangeserver.py --root <dir> --tls-cert tools/fixtures/tls/server-chain.pem --tls-key tools/fixtures/tls/server.key.der
+xcat-cli get --ca-file tools/fixtures/tls/ca.pem https://localhost:8080/<file> <out>
+```
+
+Without `--ca-file`, `xcat-cli` trusts only the built-in Mozilla roots, which don't include the test CA, so it refuses the server (that's tested too).
+
 ## Faults
 
 | Parameter | Effect |

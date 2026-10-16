@@ -1,6 +1,7 @@
 """HTTP/1.1 test server with Range support and scripted faults.
 
     python tools/testserver/rangeserver.py --root DIR [--bind 127.0.0.1] [--port 8080]
+                                           [--tls-cert CHAIN.pem --tls-key KEY]
 
 Serves the files in DIR (read-only, no listings) the way docs/formats/http.md
 expects a good server to: single byte ranges with 206 and Content-Range,
@@ -26,6 +27,9 @@ A fault counts down only on responses it actually affects: drop=1000 skips the
 1-byte probe (`Range: bytes=0-0`) and hits the first body longer than 1000 bytes.
 Counters are per URL (ignoring `redirect`), for the life of the server.
 
+With --tls-cert and --tls-key it serves HTTPS (TLS 1.2 or newer) instead, e.g. with the test
+PKI in tools/fixtures/tls/ (server-chain.pem, server.key.der; names test.example and localhost).
+
 The tests (test_get.py) run it in-process; for the console's network test, run
 it from the command line with --bind 0.0.0.0 so the Xbox can reach it.
 """
@@ -37,7 +41,9 @@ import email.utils
 import os
 import re
 import socket
+import ssl
 import sys
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -51,13 +57,28 @@ class RangeServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, root: str, bind: str = "127.0.0.1", port: int = 0, verbose: bool = False):
+    def __init__(self, root: str, bind: str = "127.0.0.1", port: int = 0, verbose: bool = False,
+                 tls: ssl.SSLContext | None = None):
         self.root = os.path.abspath(root)
         self.verbose = verbose
+        self.tls = tls
         self.lock = threading.Lock()
         self.counters: dict[tuple[str, str], int] = {}
         self.requests: list[dict[str, str]] = []  # every request head, for tests to inspect
+        self.tls_failures = 0  # handshakes the client broke off (e.g. it rejected the certificate)
         super().__init__((bind, port), Handler)
+
+    def get_request(self):  # type: ignore[no-untyped-def]
+        sock, addr = super().get_request()
+        if self.tls is not None:
+            # The handshake runs in the handler's thread (Handler.setup), not here.
+            sock = self.tls.wrap_socket(sock, server_side=True, do_handshake_on_connect=False)
+        return sock, addr
+
+    def handle_error(self, request, client_address):  # type: ignore[no-untyped-def]
+        if isinstance(sys.exc_info()[1], (ssl.SSLError, ConnectionError)):
+            return  # a client that refused our certificate, or hung up: expected in tests
+        super().handle_error(request, client_address)
 
     @property
     def port(self) -> int:
@@ -92,6 +113,17 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: object) -> None:  # noqa: A002 (stdlib name)
         if self.server.verbose:
             super().log_message(format, *args)
+
+    def setup(self) -> None:
+        if isinstance(self.request, ssl.SSLSocket):
+            self.request.settimeout(30)
+            try:
+                self.request.do_handshake()
+            except (ssl.SSLError, OSError):
+                with self.server.lock:
+                    self.server.tls_failures += 1
+                raise
+        super().setup()
 
     # --- helpers ---------------------------------------------------------------------------
 
@@ -219,15 +251,43 @@ class Handler(BaseHTTPRequestHandler):
                 pass
 
 
+def tls_context(cert: str, key: str) -> ssl.SSLContext:
+    """A TLS 1.2+ server context from a PEM chain and a key (PEM, or the DER the test PKI in
+    tools/fixtures/tls/ stores)."""
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    with open(key, "rb") as f:
+        data = f.read()
+    if data.startswith(b"-----"):
+        ctx.load_cert_chain(cert, key)
+        return ctx
+    # ssl only loads keys from PEM files: wrap the DER in a temporary one.
+    pem = ssl.DER_cert_to_PEM_cert(data).replace("CERTIFICATE", "PRIVATE KEY")
+    fd, path = tempfile.mkstemp(suffix=".pem")
+    try:
+        with os.fdopen(fd, "w", encoding="ascii") as f:
+            f.write(pem)
+        ctx.load_cert_chain(cert, path)
+    finally:
+        os.remove(path)
+    return ctx
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--root", required=True, help="directory to serve")
     ap.add_argument("--bind", default="127.0.0.1", help="address to listen on (0.0.0.0: all)")
     ap.add_argument("--port", type=int, default=8080)
+    ap.add_argument("--tls-cert", help="serve HTTPS with this PEM certificate chain")
+    ap.add_argument("--tls-key", help="... and this private key (PEM or DER)")
     ap.add_argument("-q", "--quiet", action="store_true", help="don't log requests")
     args = ap.parse_args(argv)
-    srv = RangeServer(args.root, args.bind, args.port, verbose=not args.quiet)
-    print(f"serving {srv.root} on http://{args.bind}:{srv.port}/ (Ctrl+C to stop)", flush=True)
+    if (args.tls_cert is None) != (args.tls_key is None):
+        ap.error("--tls-cert and --tls-key go together")
+    tls = tls_context(args.tls_cert, args.tls_key) if args.tls_cert else None
+    srv = RangeServer(args.root, args.bind, args.port, verbose=not args.quiet, tls=tls)
+    scheme = "https" if tls else "http"
+    print(f"serving {srv.root} on {scheme}://{args.bind}:{srv.port}/ (Ctrl+C to stop)", flush=True)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

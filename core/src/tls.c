@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include "bearssl.h"
+#include "cacert.h"
 
 /* ---- Trust anchors ------------------------------------------------------------------- */
 
@@ -216,6 +217,16 @@ xc_err xc_tls_anchors_parse(const char *pem, size_t len, xc_tls_anchors **out, s
     }
     *out = a;
     return XC_OK;
+}
+
+xc_err xc_tls_anchors_builtin(xc_tls_anchors **out)
+{
+    return xc_tls_anchors_parse((const char *)xc_cacert_pem, xc_cacert_pem_len, out, NULL);
+}
+
+const char *xc_tls_builtin_date(void)
+{
+    return xc_cacert_date;
 }
 
 /* ---- The TLS net --------------------------------------------------------------------- */

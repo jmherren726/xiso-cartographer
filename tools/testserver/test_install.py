@@ -250,8 +250,31 @@ def s_resume_inside_file(e: Env) -> None:
     e.check_installed("small")
 
 
+TLS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "fixtures", "tls")
+
+
+def s_https(e: Env) -> None:
+    """Installs over HTTPS (ADR 0012) from a TLS server with the test PKI."""
+    tls = rangeserver.tls_context(os.path.join(TLS_DIR, "server-chain.pem"),
+                                  os.path.join(TLS_DIR, "server.key.der"))
+    srv = rangeserver.RangeServer(e.served, tls=tls)
+    srv.start()
+    try:
+        for fixture in ["small", "redump-xgd2"]:
+            e.serve(fixture, f"{fixture}.iso")
+            r = e.run(f"https://localhost:{srv.port}/{fixture}.iso", fixture,
+                      ["--ca-file", os.path.join(TLS_DIR, "ca.pem")])
+            e.expect(r.returncode == 0, f"{fixture}: exit {r.returncode}")
+            e.expect("verified" in r.stdout, f"{fixture}: not verified")
+            e.check_installed(fixture, fixture)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
 SCENARIOS = {
     "fixtures": s_fixtures,
+    "https": s_https,
     "local_image": s_local_image,
     "title_from_url": s_title_from_url,
     "drops": s_drops,
