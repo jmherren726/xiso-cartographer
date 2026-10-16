@@ -178,6 +178,7 @@ typedef struct run {
     uint64_t last_data_ms;
     uint64_t longest_gap_ms;
     unsigned retries;
+    unsigned reports; /* progress lines so far */
     /* save=yes */
     HANDLE save;
     uint8_t *wbuf;
@@ -264,6 +265,13 @@ static xc_err on_data(void *ctx, uint64_t offset, const uint8_t *data, size_t le
         out("  %4llu s  %llu of %llu MiB  %s MB/s\n",
             (unsigned long long)((now - r->start_ms) / 1000U), (unsigned long long)(r->done >> 20U),
             (unsigned long long)(r->size >> 20U), speed);
+        /* What TCP agreed, while the connection is open: at 10 s, then once a minute. */
+        if (++r->reports % 12U == 2U) {
+            char tcp[400];
+            if (xc_nx_tcp_describe(tcp, sizeof tcp) > 0) {
+                out("  TCP now: %s\n", tcp);
+            }
+        }
     }
     return XC_OK;
 }
@@ -539,10 +547,8 @@ int main(void)
     out("Retries %u, longest pause in the data %s s\n", r.retries, gap);
     xc_nx_tcp_counters tc;
     xc_nx_tcp_counters_get(&tc);
-    out("TCP: window %lu KB; frames in %lu, dropped %lu; segments in %lu, out %lu, bad %lu, "
-        "dropped %lu; out of memory %lu\n",
-        (unsigned long)(tc.window_bytes / 1024U), (unsigned long)tc.frames_in,
-        (unsigned long)tc.frames_dropped, (unsigned long)tc.segments_in,
+    out("TCP: window %lu KB; segments in %lu, out %lu, bad %lu, dropped %lu; out of memory %lu\n",
+        (unsigned long)(tc.window_bytes / 1024U), (unsigned long)tc.segments_in,
         (unsigned long)tc.segments_out, (unsigned long)tc.segments_bad,
         (unsigned long)tc.segments_dropped, (unsigned long)tc.out_of_memory);
     if (cfg.save) {

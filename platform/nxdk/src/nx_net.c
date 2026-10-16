@@ -7,8 +7,10 @@
 #include <errno.h>
 #include <lwip/netdb.h>
 #include <lwip/netif.h>
+#include <lwip/priv/tcp_priv.h>
 #include <lwip/sockets.h>
 #include <lwip/stats.h>
+#include <lwip/tcpip.h>
 #include <nxdk/net.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -36,14 +38,43 @@ void xc_nx_tcp_counters_get(xc_nx_tcp_counters *out)
     /* Read without locking: lwIP's thread may be counting meanwhile, which is fine for a
      * report. Counters are 32-bit (LWIP_STATS_LARGE, platform/nxdk/lwip/lwipopts.h). */
     memset(out, 0, sizeof *out);
-    out->frames_in = lwip_stats.link.recv;
-    out->frames_dropped = lwip_stats.link.drop;
     out->segments_in = lwip_stats.mib2.tcpinsegs;
     out->segments_out = lwip_stats.mib2.tcpoutsegs;
     out->segments_bad = lwip_stats.mib2.tcpinerrs;
     out->segments_dropped = lwip_stats.tcp.drop;
     out->out_of_memory = lwip_stats.tcp.memerr + lwip_stats.link.memerr;
     out->window_bytes = TCP_WND;
+}
+
+size_t xc_nx_tcp_describe(char *buf, size_t cap)
+{
+    if (buf == NULL || cap == 0) {
+        return 0;
+    }
+    buf[0] = '\0';
+    size_t len = 0;
+    LOCK_TCPIP_CORE(); /* the pcb list belongs to lwIP's thread */
+    for (const struct tcp_pcb *p = tcp_active_pcbs; p != NULL && len + 1 < cap; p = p->next) {
+        if (p->state != ESTABLISHED) {
+            continue;
+        }
+        bool scaled = (p->flags & TF_WND_SCALE) != 0;
+        int n = snprintf(buf + len, cap - len,
+                         "%sport %u: scaling %s (ours %u, theirs %u), SACK %s, our window %lu "
+                         "(advertised %lu), theirs %lu, cwnd %lu, mss %u, out-of-order %s",
+                         len > 0 ? "; " : "", (unsigned)p->remote_port, scaled ? "on" : "OFF",
+                         scaled ? (unsigned)p->rcv_scale : 0U, scaled ? (unsigned)p->snd_scale : 0U,
+                         (p->flags & TF_SACK) != 0 ? "on" : "OFF", (unsigned long)p->rcv_wnd,
+                         (unsigned long)p->rcv_ann_wnd, (unsigned long)p->snd_wnd,
+                         (unsigned long)p->cwnd, (unsigned)p->mss,
+                         p->ooseq != NULL ? "queued" : "none");
+        if (n < 0) {
+            break;
+        }
+        len += (size_t)n < cap - len ? (size_t)n : cap - len - 1;
+    }
+    UNLOCK_TCPIP_CORE();
+    return len;
 }
 
 /* --- clock ---------------------------------------------------------------------------- */

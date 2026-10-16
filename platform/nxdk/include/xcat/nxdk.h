@@ -83,17 +83,24 @@ typedef struct xc_nx_net_stats {
 void xc_nx_net_last(xc_nx_net_stats *out);
 
 /*
- * lwIP's counters since startup, for diagnosing slow downloads (M5): frames the network card
- * passed up and lwIP dropped, TCP segments in and out (out is mostly our ACKs), bad and
- * dropped segments, buffer shortages; and the receive window (platform/nxdk/lwip/lwipopts.h).
+ * lwIP's counters since startup, for diagnosing slow downloads (M5): TCP segments in and out
+ * (lwIP doesn't count plain ACKs as out), bad and dropped segments, buffer shortages; and the
+ * configured receive window (platform/nxdk/lwip/lwipopts.h).
  */
 typedef struct xc_nx_tcp_counters {
-    uint32_t frames_in, frames_dropped;
     uint32_t segments_in, segments_out, segments_bad, segments_dropped;
     uint32_t out_of_memory;
     uint32_t window_bytes;
 } xc_nx_tcp_counters;
 void xc_nx_tcp_counters_get(xc_nx_tcp_counters *out);
+
+/*
+ * What lwIP agreed for each established TCP connection, as one line of text in buf[0, cap):
+ * window scaling and both scale factors, SACK, our receive window and what we last
+ * advertised, the peer's window, the congestion window, the MSS, and whether out-of-order
+ * segments are queued. Returns the length. Shows whether the larger window is in effect.
+ */
+size_t xc_nx_tcp_describe(char *buf, size_t cap);
 
 /*
  * For TLS (xcat/tls.h, ADR 0012, nx_tls.c). xc_nx_wallclock() is the console's clock, but
