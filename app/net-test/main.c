@@ -178,6 +178,10 @@ typedef struct run {
     uint64_t last_data_ms;
     uint64_t longest_gap_ms;
     unsigned retries;
+    unsigned reports; /* progress lines so far */
+    /* recv counters at the start and at the last "Reading:" line, and when that was */
+    xc_nx_recv_counters rc_start, rc_last;
+    uint64_t rc_last_ms;
     /* save=yes */
     HANDLE save;
     uint8_t *wbuf;
@@ -236,6 +240,24 @@ static bool flush_save(run *r)
     return ok;
 }
 
+/*
+ * "Reading:" between two snapshots of the recv counters, `ms` apart: the share of the time
+ * spent waiting for data, and how full our receive window was when the app came to read.
+ */
+static void report_reading(const char *indent, const xc_nx_recv_counters *from,
+                           const xc_nx_recv_counters *to, uint64_t ms)
+{
+    uint64_t waited = to->wait_ms - from->wait_ms;
+    uint32_t reads = to->reads - from->reads;
+    uint64_t avg = reads > 0 ? (to->unread_bytes_sum - from->unread_bytes_sum) / reads : 0;
+    out("%sReading: waited for data %llu%% of %llu s; %lu reads, window closed at %lu, "
+        "unread on average %llu KB (most %lu KB since the start)\n",
+        indent, (unsigned long long)(ms > 0 ? waited * 100U / ms : 0),
+        (unsigned long long)(ms / 1000U), (unsigned long)reads,
+        (unsigned long)(to->reads_window_closed - from->reads_window_closed),
+        (unsigned long long)(avg / 1024U), (unsigned long)(to->unread_bytes_max / 1024U));
+}
+
 static xc_err on_data(void *ctx, uint64_t offset, const uint8_t *data, size_t len)
 {
     run *r = ctx;
@@ -259,11 +281,27 @@ static xc_err on_data(void *ctx, uint64_t offset, const uint8_t *data, size_t le
     }
     if (now >= r->next_report_ms) {
         r->next_report_ms = now + REPORT_EVERY_MS;
+        /* What TCP agreed, while the connection is open: at 10 s, then once a minute. Taken
+         * before printing, since out() flushes the log to disk and the app reads nothing
+         * meanwhile, which fills the window. */
+        bool detail = ++r->reports % 12U == 2U;
+        char tcp[400];
+        size_t tcp_len = detail ? xc_nx_tcp_describe(tcp, sizeof tcp) : 0;
+        xc_nx_recv_counters rc;
+        xc_nx_recv_counters_get(&rc);
         char speed[24];
         tenths(speed, sizeof speed, mbps_tenths(r->done, now - r->start_ms));
         out("  %4llu s  %llu of %llu MiB  %s MB/s\n",
             (unsigned long long)((now - r->start_ms) / 1000U), (unsigned long long)(r->done >> 20U),
             (unsigned long long)(r->size >> 20U), speed);
+        if (tcp_len > 0) {
+            out("  TCP now: %s\n", tcp);
+        }
+        if (detail) {
+            report_reading("  ", &r->rc_last, &rc, now - r->rc_last_ms);
+            r->rc_last = rc;
+            r->rc_last_ms = now;
+        }
     }
     return XC_OK;
 }
@@ -504,6 +542,9 @@ int main(void)
             "(A power cut or reboot starts the test over.)\n");
         r.start_ms = now_ms(&r);
         r.next_report_ms = r.start_ms + REPORT_EVERY_MS;
+        xc_nx_recv_counters_get(&r.rc_start);
+        r.rc_last = r.rc_start;
+        r.rc_last_ms = r.start_ms;
         err = xc_http_read(&client, &res, 0, total, on_data, &r);
         if (err == XC_OK && !flush_save(&r)) {
             err = XC_ERR_IO;
@@ -539,12 +580,13 @@ int main(void)
     out("Retries %u, longest pause in the data %s s\n", r.retries, gap);
     xc_nx_tcp_counters tc;
     xc_nx_tcp_counters_get(&tc);
-    out("TCP: window %lu KB; frames in %lu, dropped %lu; segments in %lu, out %lu, bad %lu, "
-        "dropped %lu; out of memory %lu\n",
-        (unsigned long)(tc.window_bytes / 1024U), (unsigned long)tc.frames_in,
-        (unsigned long)tc.frames_dropped, (unsigned long)tc.segments_in,
+    out("TCP: window %lu KB; segments in %lu, out %lu, bad %lu, dropped %lu; out of memory %lu\n",
+        (unsigned long)(tc.window_bytes / 1024U), (unsigned long)tc.segments_in,
         (unsigned long)tc.segments_out, (unsigned long)tc.segments_bad,
         (unsigned long)tc.segments_dropped, (unsigned long)tc.out_of_memory);
+    xc_nx_recv_counters rc;
+    xc_nx_recv_counters_get(&rc);
+    report_reading("", &r.rc_start, &rc, ms);
     if (cfg.save) {
         char wspeed[24];
         tenths(wspeed, sizeof wspeed, mbps_tenths(r.done, r.write_ms));

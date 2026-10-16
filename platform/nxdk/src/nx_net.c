@@ -7,8 +7,10 @@
 #include <errno.h>
 #include <lwip/netdb.h>
 #include <lwip/netif.h>
+#include <lwip/priv/tcp_priv.h>
 #include <lwip/sockets.h>
 #include <lwip/stats.h>
+#include <lwip/tcpip.h>
 #include <nxdk/net.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,9 +24,39 @@ extern struct netif *g_pnetif; /* nxdk/net.c */
 
 struct xc_net_conn {
     int s;
+    uint16_t local_port; /* finds its pcb for recv_counters, 0 if unknown */
 };
 
 static xc_nx_net_stats stats;
+static xc_nx_recv_counters recv_counters;
+
+void xc_nx_recv_counters_get(xc_nx_recv_counters *out)
+{
+    *out = recv_counters;
+}
+
+/* Counts the state of our receive window as a recv on `conn` begins (xc_nx_recv_counters). */
+static void count_window(const xc_net_conn *conn)
+{
+    if (conn->local_port == 0) {
+        return;
+    }
+    LOCK_TCPIP_CORE();
+    for (const struct tcp_pcb *p = tcp_active_pcbs; p != NULL; p = p->next) {
+        if (p->local_port == conn->local_port) {
+            uint32_t unread = TCP_WND > p->rcv_wnd ? (uint32_t)(TCP_WND - p->rcv_wnd) : 0U;
+            recv_counters.unread_bytes_sum += unread;
+            if (unread > recv_counters.unread_bytes_max) {
+                recv_counters.unread_bytes_max = unread;
+            }
+            if (p->rcv_ann_wnd == 0) {
+                recv_counters.reads_window_closed++;
+            }
+            break;
+        }
+    }
+    UNLOCK_TCPIP_CORE();
+}
 
 void xc_nx_net_last(xc_nx_net_stats *out)
 {
@@ -36,14 +68,43 @@ void xc_nx_tcp_counters_get(xc_nx_tcp_counters *out)
     /* Read without locking: lwIP's thread may be counting meanwhile, which is fine for a
      * report. Counters are 32-bit (LWIP_STATS_LARGE, platform/nxdk/lwip/lwipopts.h). */
     memset(out, 0, sizeof *out);
-    out->frames_in = lwip_stats.link.recv;
-    out->frames_dropped = lwip_stats.link.drop;
     out->segments_in = lwip_stats.mib2.tcpinsegs;
     out->segments_out = lwip_stats.mib2.tcpoutsegs;
     out->segments_bad = lwip_stats.mib2.tcpinerrs;
     out->segments_dropped = lwip_stats.tcp.drop;
     out->out_of_memory = lwip_stats.tcp.memerr + lwip_stats.link.memerr;
     out->window_bytes = TCP_WND;
+}
+
+size_t xc_nx_tcp_describe(char *buf, size_t cap)
+{
+    if (buf == NULL || cap == 0) {
+        return 0;
+    }
+    buf[0] = '\0';
+    size_t len = 0;
+    LOCK_TCPIP_CORE(); /* the pcb list belongs to lwIP's thread */
+    for (const struct tcp_pcb *p = tcp_active_pcbs; p != NULL && len + 1 < cap; p = p->next) {
+        if (p->state != ESTABLISHED) {
+            continue;
+        }
+        bool scaled = (p->flags & TF_WND_SCALE) != 0;
+        int n = snprintf(buf + len, cap - len,
+                         "%sport %u: scaling %s (ours %u, theirs %u), SACK %s, our window %lu "
+                         "(advertised %lu), theirs %lu, cwnd %lu, mss %u, out-of-order %s",
+                         len > 0 ? "; " : "", (unsigned)p->remote_port, scaled ? "on" : "OFF",
+                         scaled ? (unsigned)p->rcv_scale : 0U, scaled ? (unsigned)p->snd_scale : 0U,
+                         (p->flags & TF_SACK) != 0 ? "on" : "OFF", (unsigned long)p->rcv_wnd,
+                         (unsigned long)p->rcv_ann_wnd, (unsigned long)p->snd_wnd,
+                         (unsigned long)p->cwnd, (unsigned)p->mss,
+                         p->ooseq != NULL ? "queued" : "none");
+        if (n < 0) {
+            break;
+        }
+        len += (size_t)n < cap - len ? (size_t)n : cap - len - 1;
+    }
+    UNLOCK_TCPIP_CORE();
+    return len;
 }
 
 /* --- clock ---------------------------------------------------------------------------- */
@@ -183,6 +244,12 @@ static xc_err net_connect(void *ctx, const char *host, uint16_t port, uint32_t t
         return err;
     }
     conn->s = s;
+    conn->local_port = 0;
+    struct sockaddr_in local;
+    socklen_t local_len = (socklen_t)sizeof local;
+    if (lwip_getsockname(s, (struct sockaddr *)&local, &local_len) == 0) {
+        conn->local_port = lwip_ntohs(local.sin_port);
+    }
     *out = conn;
     return XC_OK;
 }
@@ -218,8 +285,12 @@ static xc_err net_recv(void *ctx, xc_net_conn *conn, void *buf, size_t cap, uint
 {
     (void)ctx;
     *got = 0;
+    recv_counters.reads++;
+    count_window(conn);
     for (;;) {
+        uint64_t t0 = clock_now_ms(NULL);
         xc_err err = wait_sock(conn->s, WAIT_READ, timeout_ms);
+        recv_counters.wait_ms += clock_now_ms(NULL) - t0;
         if (err != XC_OK) {
             return err;
         }

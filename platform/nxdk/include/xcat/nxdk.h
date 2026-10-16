@@ -83,17 +83,40 @@ typedef struct xc_nx_net_stats {
 void xc_nx_net_last(xc_nx_net_stats *out);
 
 /*
- * lwIP's counters since startup, for diagnosing slow downloads (M5): frames the network card
- * passed up and lwIP dropped, TCP segments in and out (out is mostly our ACKs), bad and
- * dropped segments, buffer shortages; and the receive window (platform/nxdk/lwip/lwipopts.h).
+ * lwIP's counters since startup, for diagnosing slow downloads (M5): TCP segments in and out
+ * (lwIP doesn't count plain ACKs as out), bad and dropped segments, buffer shortages; and the
+ * configured receive window (platform/nxdk/lwip/lwipopts.h).
  */
 typedef struct xc_nx_tcp_counters {
-    uint32_t frames_in, frames_dropped;
     uint32_t segments_in, segments_out, segments_bad, segments_dropped;
     uint32_t out_of_memory;
     uint32_t window_bytes;
 } xc_nx_tcp_counters;
 void xc_nx_tcp_counters_get(xc_nx_tcp_counters *out);
+
+/*
+ * What lwIP agreed for each established TCP connection, as one line of text in buf[0, cap):
+ * window scaling and both scale factors, SACK, our receive window and what we last
+ * advertised, the peer's window, the congestion window, the MSS, and whether out-of-order
+ * segments are queued. Returns the length. Shows whether the larger window is in effect.
+ */
+size_t xc_nx_tcp_describe(char *buf, size_t cap);
+
+/*
+ * Where a download's time goes (M5), summed over every recv on xc_nx_net connections: how long
+ * they waited for data, and the state of our receive window as each one began: the bytes
+ * received but not yet read (summed for an average, and the most), and how many found it
+ * closed (zero advertised). Waiting most of the time means the data arrives too slowly
+ * (sender or path); a full window whenever the app reads means the console is too slow.
+ */
+typedef struct xc_nx_recv_counters {
+    uint64_t wait_ms;
+    uint32_t reads;
+    uint32_t reads_window_closed;
+    uint64_t unread_bytes_sum;
+    uint32_t unread_bytes_max;
+} xc_nx_recv_counters;
+void xc_nx_recv_counters_get(xc_nx_recv_counters *out);
 
 /*
  * For TLS (xcat/tls.h, ADR 0012, nx_tls.c). xc_nx_wallclock() is the console's clock, but
