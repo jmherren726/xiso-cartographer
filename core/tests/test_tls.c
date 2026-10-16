@@ -92,7 +92,8 @@ typedef struct server {
     const char *response;
     size_t resp_off;
     bool close_after_response;
-    bool hang_up; /* close the TCP connection as soon as the client speaks */
+    bool hang_up;      /* close the TCP connection as soon as the client speaks */
+    const char *plain; /* answer with these bytes instead of TLS, like an http server */
     int connects;
     bool open;
     xc_net_conn conn;
@@ -203,6 +204,14 @@ static xc_err f_recv(void *ctx, xc_net_conn *conn, void *buf, size_t cap, uint32
     TEST_ASSERT_EQUAL_PTR(&s->conn, conn);
     *got = 0;
     if (s->hang_up) {
+        return XC_OK;
+    }
+    if (s->plain != NULL) {
+        size_t n = strlen(s->plain);
+        n = n < cap ? n : cap;
+        memcpy(buf, s->plain, n);
+        s->plain += n;
+        *got = n; /* 0 once it's all sent: the server hangs up */
         return XC_OK;
     }
     server_pump(s);
@@ -607,6 +616,13 @@ static void test_server_hangs_up_mid_handshake(void)
     expect_refused("test.example", XC_ERR_NET_IO);
 }
 
+static void test_plain_http_server(void)
+{
+    client_start("ca.pem");
+    S.plain = "HTTP/1.0 400 Bad Request\r\nContent-Length: 0\r\n\r\n";
+    expect_refused("test.example", XC_ERR_TLS_NOT_TLS);
+}
+
 static void test_close_notify_ends_the_stream(void)
 {
     S.close_after_response = true;
@@ -785,6 +801,7 @@ int main(int argc, char **argv)
     RUN_TEST(test_no_time_or_randomness_sends_nothing);
     RUN_TEST(test_no_common_cipher_or_version);
     RUN_TEST(test_server_hangs_up_mid_handshake);
+    RUN_TEST(test_plain_http_server);
     RUN_TEST(test_close_notify_ends_the_stream);
     RUN_TEST(test_invalid_arguments);
     RUN_TEST(test_https_probe);

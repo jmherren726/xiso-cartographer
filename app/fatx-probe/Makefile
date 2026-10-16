@@ -6,6 +6,10 @@ GEN_XISO = $(XBE_TITLE).iso
 SRCS = $(CURDIR)/main.c
 CFLAGS += -std=c11 -Wall -Wextra -Werror
 
-NXDK_DIR ?= $(CURDIR)/../../third_party/nxdk
+ROOT_DIR := $(CURDIR)/../..
+NXDK_DIR ?= $(ROOT_DIR)/third_party/nxdk
+
+# TCP tuning shared by every XBE (lwIP options).
+include $(ROOT_DIR)/app/lwip.mk
 
 include $(NXDK_DIR)/Makefile

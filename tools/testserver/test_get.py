@@ -98,6 +98,8 @@ SCENARIOS: dict[str, Scenario] = {
                               stderr=r"is the clock right\?"),
     "https_bad_ca_file": Scenario("/big.bin", tls=True, ca="make_certs.sh", ok=False,
                                   stderr="make_certs.sh: not a valid PEM certificate bundle"),
+    "https_to_http_port": Scenario("https://localhost:{port}/big.bin", ok=False, args=["--attempts", "1"],
+                                   stderr="didn't answer in HTTPS"),
     "http_to_tls_port": Scenario("http://localhost:{port}/big.bin", tls=True, ok=False, args=["--attempts", "1"]),
     "bad_url": Scenario("ftp://127.0.0.1/big.bin", ok=False, stderr="Invalid or unsupported URL"),
     "creds_not_over_http": Scenario("/big.bin?auth=Bearer%20test-token", ok=False, creds=LOOPBACK_CREDS,

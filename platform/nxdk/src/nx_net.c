@@ -8,6 +8,7 @@
 #include <lwip/netdb.h>
 #include <lwip/netif.h>
 #include <lwip/sockets.h>
+#include <lwip/stats.h>
 #include <nxdk/net.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -28,6 +29,21 @@ static xc_nx_net_stats stats;
 void xc_nx_net_last(xc_nx_net_stats *out)
 {
     *out = stats;
+}
+
+void xc_nx_tcp_counters_get(xc_nx_tcp_counters *out)
+{
+    /* Read without locking: lwIP's thread may be counting meanwhile, which is fine for a
+     * report. Counters are 32-bit (LWIP_STATS_LARGE, platform/nxdk/lwip/lwipopts.h). */
+    memset(out, 0, sizeof *out);
+    out->frames_in = lwip_stats.link.recv;
+    out->frames_dropped = lwip_stats.link.drop;
+    out->segments_in = lwip_stats.mib2.tcpinsegs;
+    out->segments_out = lwip_stats.mib2.tcpoutsegs;
+    out->segments_bad = lwip_stats.mib2.tcpinerrs;
+    out->segments_dropped = lwip_stats.tcp.drop;
+    out->out_of_memory = lwip_stats.tcp.memerr + lwip_stats.link.memerr;
+    out->window_bytes = TCP_WND;
 }
 
 /* --- clock ---------------------------------------------------------------------------- */

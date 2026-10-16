@@ -537,6 +537,14 @@ int main(void)
         tls_report(tls); /* after redirects: the server the data came from */
     }
     out("Retries %u, longest pause in the data %s s\n", r.retries, gap);
+    xc_nx_tcp_counters tc;
+    xc_nx_tcp_counters_get(&tc);
+    out("TCP: window %lu KB; frames in %lu, dropped %lu; segments in %lu, out %lu, bad %lu, "
+        "dropped %lu; out of memory %lu\n",
+        (unsigned long)(tc.window_bytes / 1024U), (unsigned long)tc.frames_in,
+        (unsigned long)tc.frames_dropped, (unsigned long)tc.segments_in,
+        (unsigned long)tc.segments_out, (unsigned long)tc.segments_bad,
+        (unsigned long)tc.segments_dropped, (unsigned long)tc.out_of_memory);
     if (cfg.save) {
         char wspeed[24];
         tenths(wspeed, sizeof wspeed, mbps_tenths(r.done, r.write_ms));

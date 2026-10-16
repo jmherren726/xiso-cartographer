@@ -69,6 +69,8 @@ const char *xc_err_str(xc_err err)
         return "Couldn't get the correct time, so HTTPS certificates can't be checked";
     case XC_ERR_TLS_NO_RANDOM:
         return "Couldn't gather enough randomness for a secure connection";
+    case XC_ERR_TLS_NOT_TLS:
+        return "The server didn't answer in HTTPS (is it a plain http:// server?)";
     case XC_ERR_COUNT_:
         break;
     }
