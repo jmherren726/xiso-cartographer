@@ -17,6 +17,7 @@
 #include "xcat/net.h"
 #include "xcat/sink.h"
 #include "xcat/source.h"
+#include "xcat/tls.h"
 
 #define XC_NX_PATH_MAX 256 /* bytes, including the terminator */
 
@@ -80,6 +81,32 @@ typedef struct xc_nx_net_stats {
     xc_err result;       /* XC_OK, or why it failed */
 } xc_nx_net_stats;
 void xc_nx_net_last(xc_nx_net_stats *out);
+
+/*
+ * For TLS (xcat/tls.h, ADR 0012, nx_tls.c). xc_nx_wallclock() is the console's clock, but
+ * refused (XC_ERR_TLS_NO_TIME) when it's earlier than this XBE's build time: it was reset.
+ * NTP comes in front of it later in M5 (§5). xc_nx_console_time() is the clock's raw value
+ * and xc_nx_build_time() the floor, both in Unix seconds, for messages.
+ */
+void xc_nx_wallclock(xc_wallclock *w);
+int64_t xc_nx_console_time(void);
+int64_t xc_nx_build_time(void);
+
+/*
+ * Fills `pool` for the TLS random generator (§6): the seed file E:\Apps\xcat\random-seed,
+ * the clock, the performance counter and the MAC address (credited nothing), then 256
+ * samples of timer-interrupt jitter, about a quarter of a second (one bit each, if it
+ * changed). Writes a new seed file from the pool. Call after xc_nx_net_startup(), so the
+ * MAC address is known. XC_ERR_TLS_NO_RANDOM if too little was credited.
+ */
+typedef struct xc_nx_entropy_stats {
+    unsigned samples;
+    unsigned bits;               /* credited in total */
+    unsigned distinct_low_bytes; /* of the cycle counts' low bytes, 1-256: a health check */
+    uint64_t min_cycles, max_cycles;
+    bool seed_read, seed_written;
+} xc_nx_entropy_stats;
+xc_err xc_nx_entropy_gather(xc_entropy_pool *pool, xc_nx_entropy_stats *st);
 
 /* File access for xc_install (xcat/install.h) on FATX, with flushed, durable writes. */
 void xc_nx_install_io(xc_install_io *io);

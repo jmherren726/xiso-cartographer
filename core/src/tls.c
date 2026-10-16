@@ -14,6 +14,15 @@
 #include "bearssl.h"
 #include "cacert.h"
 
+/* Overwrites memory in a way the compiler can't drop as a dead store. */
+static void wipe(void *p, size_t len)
+{
+    volatile unsigned char *v = p;
+    while (len-- > 0) {
+        *v++ = 0;
+    }
+}
+
 /* ---- Trust anchors ------------------------------------------------------------------- */
 
 struct xc_tls_anchors {
@@ -229,6 +238,137 @@ const char *xc_tls_builtin_date(void)
     return xc_cacert_date;
 }
 
+/* ---- Entropy pool (ADR 0012 §6) ------------------------------------------------------- */
+
+struct xc_entropy_pool {
+    br_sha256_context hash; /* everything added so far */
+    unsigned bits;
+    uint64_t outputs;
+};
+
+xc_err xc_entropy_pool_create(xc_entropy_pool **out)
+{
+    if (out == NULL) {
+        return XC_ERR_INVALID_ARG;
+    }
+    *out = calloc(1, sizeof **out);
+    if (*out == NULL) {
+        return XC_ERR_NOMEM;
+    }
+    br_sha256_init(&(*out)->hash);
+    br_sha256_update(&(*out)->hash, "xcat entropy pool v1", 20);
+    return XC_OK;
+}
+
+void xc_entropy_pool_destroy(xc_entropy_pool *p)
+{
+    if (p != NULL) {
+        wipe(p, sizeof *p);
+        free(p);
+    }
+}
+
+void xc_entropy_pool_add(xc_entropy_pool *p, const void *data, size_t len, unsigned bits)
+{
+    if (p == NULL || (data == NULL && len > 0)) {
+        return;
+    }
+    br_sha256_update(&p->hash, data, len);
+    p->bits = bits > UINT32_MAX - p->bits ? UINT32_MAX : p->bits + bits;
+}
+
+unsigned xc_entropy_pool_bits(const xc_entropy_pool *p)
+{
+    return p != NULL ? p->bits : 0;
+}
+
+static xc_err pool_get(void *ctx, void *buf, size_t len)
+{
+    xc_entropy_pool *p = ctx;
+    if (p == NULL || p->bits < XC_ENTROPY_MIN_BITS) {
+        return XC_ERR_TLS_NO_RANDOM;
+    }
+    unsigned char *dst = buf;
+    while (len > 0) {
+        /* Output = H(pool || "out" || n); then the pool absorbs it, so the next output and
+         * the pool's later state can't be worked out from this one. */
+        br_sha256_context h = p->hash;
+        unsigned char block[32];
+        unsigned char n[8];
+        for (int i = 0; i < 8; i++) {
+            n[i] = (unsigned char)(p->outputs >> (8 * i));
+        }
+        p->outputs++;
+        br_sha256_update(&h, "out", 3);
+        br_sha256_update(&h, n, sizeof n);
+        br_sha256_out(&h, block);
+        br_sha256_update(&p->hash, "stir", 4);
+        br_sha256_update(&p->hash, block, sizeof block);
+        size_t take = len < sizeof block ? len : sizeof block;
+        memcpy(dst, block, take);
+        dst += take;
+        len -= take;
+        wipe(block, sizeof block);
+        wipe(&h, sizeof h);
+    }
+    return XC_OK;
+}
+
+void xc_entropy_pool_source(xc_entropy_pool *p, xc_entropy *e)
+{
+    if (e != NULL) {
+        e->get = pool_get;
+        e->ctx = p;
+    }
+}
+
+/* ---- Cipher speed --------------------------------------------------------------------- */
+
+static uint32_t kb_per_s(size_t bytes, uint64_t ms)
+{
+    uint64_t kbs = (uint64_t)bytes / (ms > 0 ? ms : 1); /* bytes per ms = kB per s */
+    return kbs > UINT32_MAX ? UINT32_MAX : (uint32_t)kbs;
+}
+
+xc_err xc_tls_measure_ciphers(const xc_clock *clock, size_t bytes, xc_tls_speed *out)
+{
+    if (clock == NULL || clock->now_ms == NULL || out == NULL || bytes == 0) {
+        return XC_ERR_INVALID_ARG;
+    }
+    enum { CHUNK = 16384 }; /* one TLS record */
+    unsigned char *data = calloc(1, CHUNK);
+    if (data == NULL) {
+        return XC_ERR_NOMEM;
+    }
+    static const unsigned char key[32] = {1, 2, 3, 4, 5, 6, 7, 8};
+    static const unsigned char iv[12] = {9, 10, 11, 12};
+    unsigned char tag[16];
+
+    size_t total = (bytes + CHUNK - 1) / CHUNK * CHUNK; /* whole records */
+    uint64_t t0 = clock->now_ms(clock->ctx);
+    for (size_t done = 0; done < total; done += CHUNK) {
+        br_poly1305_ctmul_run(key, iv, data, CHUNK, NULL, 0, tag, br_chacha20_ct_run, 1);
+    }
+    uint64_t t1 = clock->now_ms(clock->ctx);
+    out->chacha20_poly1305_kbs = kb_per_s(total, t1 - t0);
+
+    br_aes_ct_ctr_keys aes;
+    br_gcm_context gcm;
+    br_aes_ct_ctr_init(&aes, key, 16);
+    br_gcm_init(&gcm, &aes.vtable, br_ghash_ctmul);
+    t0 = clock->now_ms(clock->ctx);
+    for (size_t done = 0; done < total; done += CHUNK) {
+        br_gcm_reset(&gcm, iv, sizeof iv);
+        br_gcm_flip(&gcm);
+        br_gcm_run(&gcm, 1, data, CHUNK);
+        br_gcm_get_tag(&gcm, tag);
+    }
+    t1 = clock->now_ms(clock->ctx);
+    out->aes128_gcm_kbs = kb_per_s(total, t1 - t0);
+    free(data);
+    return XC_OK;
+}
+
 /* ---- The TLS net --------------------------------------------------------------------- */
 
 struct xc_net_conn {
@@ -260,15 +400,6 @@ static const struct {
     {BR_TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384, "ECDHE-RSA-AES256-GCM-SHA384"},
 };
 #define SUITE_COUNT (sizeof suites / sizeof suites[0])
-
-/* Overwrites memory in a way the compiler can't drop as a dead store. */
-static void wipe(void *p, size_t len)
-{
-    volatile unsigned char *v = p;
-    while (len-- > 0) {
-        *v++ = 0;
-    }
-}
 
 static xc_err map_error(int e)
 {

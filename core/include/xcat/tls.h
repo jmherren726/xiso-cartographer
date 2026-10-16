@@ -45,6 +45,23 @@ typedef struct xc_wallclock {
 
 #define XC_TLS_SEED_BYTES 32U
 
+/*
+ * An entropy pool, for platforms with no random generator of their own (the Xbox, ADR 0012
+ * §6). The platform adds samples (timings of events it doesn't control, plus anything
+ * unique to the console) and says how many bits of entropy each is worth, conservatively.
+ * Everything is hashed together (SHA-256). As an xc_entropy it fails with
+ * XC_ERR_TLS_NO_RANDOM until XC_ENTROPY_MIN_BITS have been credited; after that each output
+ * is a hash of the pool, which is then stirred with it, so outputs never repeat.
+ */
+#define XC_ENTROPY_MIN_BITS 128U
+
+typedef struct xc_entropy_pool xc_entropy_pool;
+xc_err xc_entropy_pool_create(xc_entropy_pool **out);
+void xc_entropy_pool_destroy(xc_entropy_pool *p);
+void xc_entropy_pool_add(xc_entropy_pool *p, const void *data, size_t len, unsigned bits);
+unsigned xc_entropy_pool_bits(const xc_entropy_pool *p);        /* credited so far */
+void xc_entropy_pool_source(xc_entropy_pool *p, xc_entropy *e); /* p must outlive e */
+
 /* ---- Trust anchors ------------------------------------------------------------------- */
 
 #define XC_TLS_MAX_ANCHOR_FILE ((size_t)1024 * 1024) /* ADR 0012 §4 */
@@ -105,6 +122,19 @@ void xc_tls_last_info(const xc_tls *t, xc_tls_info *info);
 
 /* BearSSL's error code for the last failure (0 if none), for logs; see bearssl_ssl.h. */
 int xc_tls_last_error(const xc_tls *t);
+
+/*
+ * How fast this CPU encrypts with the two cipher families TLS may use here, with the
+ * portable implementations BearSSL picks on a CPU without SSE2 or AES-NI (the Xbox):
+ * ChaCha20 + Poly1305 and AES-128-GCM. Runs each over `bytes` of memory (no network) and
+ * returns kilobytes (1000 bytes) per second. It shows the most TLS can deliver on this CPU,
+ * apart from the link (the M5 go/no-go, ADR 0005).
+ */
+typedef struct xc_tls_speed {
+    uint32_t chacha20_poly1305_kbs;
+    uint32_t aes128_gcm_kbs;
+} xc_tls_speed;
+xc_err xc_tls_measure_ciphers(const xc_clock *clock, size_t bytes, xc_tls_speed *out);
 
 #ifdef __cplusplus
 }

@@ -108,6 +108,28 @@ A run passes when the screen ends with "CRC-32 … matches, PASS". Each run is a
 
 A pass is "OK: … verified (resumed)" in step 3. Send `E:\xcat\install.log`: it has every run, the MB/s, and for any retry the time the last connection's lookup and handshake took (that's to pin down the one-off 15 s first-request delay from M3). Delete `E:\Games\large` afterwards; it's test data.
 
+## M5: TLS speed on the console
+
+**Why now:** HTTPS speed on the console is the go/no-go for the Xbox-only design (target ≥ 1 MB/s, [HANDOFF.md §4](HANDOFF.md#4-strategies): "prove the risk early"). This run measures it with `app/net-test` before the installer uses TLS. The full M5 exit test (installing the archive.org test item over HTTPS, and rejecting a bad certificate and a wrong clock) follows once NTP and the installer's HTTPS are in.
+
+For an `https` URL the test first prints:
+- how fast the CPU runs the two cipher families with no network involved (the most TLS can do on this CPU);
+- the console's clock;
+- the randomness it gathered (timer samples, bits credited, a health figure out of 256);
+- which roots it trusts.
+
+It then prints how long connecting took and which TLS version and cipher suite the server chose, then the download as before.
+
+**Before you start:** set the date and time in the dashboard's settings. Until NTP is in (later in M5), certificates are checked against the console's clock. A clock that was reset (earlier than the XBE's build) is refused with a message saying so.
+
+| Step | Where | How |
+|---|---|---|
+| 1 | Hardware, internet | `E:\xcat\net-test.txt` with the archive.org test item's download URL (`url=https://archive.org/download/<item>/<file>`) and `limit=268435456`, so only its first 256 MiB are fetched. FTP `app/net-test/bin/default.xbe` from the CI artifact to e.g. `E:\Apps\xcat-net-test\` and launch it. Make sure `E:\Apps\xcat\cacert.pem` doesn't exist, so the built-in roots are used. |
+| 2 | Hardware, LAN (optional, recommended) | HTTPS from the PC, which shows the TLS cost without the internet link in the way. On the PC (Git Bash): `sh tools/testserver/make_lan_cert.sh <pc-ip> C:/xcat-lan`, `python3 tools/testserver/make_test_file.py --out C:\xcat-net --size 256M`, then `python3 tools/testserver/rangeserver.py --root C:\xcat-net --bind 0.0.0.0 --tls-cert C:\xcat-lan\lan-cert.pem --tls-key C:\xcat-lan\lan-key.pem`. FTP `C:\xcat-lan\lan-cert.pem` to the console as `E:\Apps\xcat\cacert.pem`. Use `url=https://<pc-ip>:8080/xcat-test-268435456.bin` with the printed `size=` and `crc32=`. The run should end "matches, PASS". Optionally run it again with the server started with `--tls-ciphers ECDHE+AESGCM` (AES-GCM instead of ChaCha20). |
+| 3 | Hardware (optional preview of the exit test) | With step 2's `cacert.pem` still in place, run step 1's archive.org URL: it must fail with "The server's certificate isn't trusted". Then **delete `E:\Apps\xcat\cacert.pem`**, set the dashboard clock a few years ahead and run step 1 again: it must fail with "isn't valid at the current time (is the clock right?)". Set the clock back afterwards. |
+
+Send `E:\xcat\net-test.log`. Record in the results log: the cipher speeds, the randomness line, the suite each server chose, the connect time and the MB/s. archive.org's suite is worth noting in any case (ADR 0005 asks to watch for changes).
+
 ## FATX probe (M2)
 
 No authoritative list of FATX naming rules exists, and a game's files can't be renamed on install, because the game opens them by name. So the rules in `core/src/fatx.c` ([fatx-names.md](formats/fatx-names.md)) come from the console's own kernel, measured by `app/fatx-probe`.
