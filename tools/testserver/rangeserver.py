@@ -251,11 +251,17 @@ class Handler(BaseHTTPRequestHandler):
                 pass
 
 
-def tls_context(cert: str, key: str) -> ssl.SSLContext:
+# The TLS 1.2 suites the console offers (ADR 0012 §2), in its order. The server's order wins,
+# so this makes it pick ChaCha20 like the client prefers; --tls-ciphers changes it.
+DEFAULT_CIPHERS = "ECDHE+CHACHA20:ECDHE+AESGCM"
+
+
+def tls_context(cert: str, key: str, ciphers: str = DEFAULT_CIPHERS) -> ssl.SSLContext:
     """A TLS 1.2+ server context from a PEM chain and a key (PEM, or the DER the test PKI in
     tools/fixtures/tls/ stores)."""
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    ctx.set_ciphers(ciphers)
     with open(key, "rb") as f:
         data = f.read()
     if data.startswith(b"-----"):
@@ -280,11 +286,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--port", type=int, default=8080)
     ap.add_argument("--tls-cert", help="serve HTTPS with this PEM certificate chain")
     ap.add_argument("--tls-key", help="... and this private key (PEM or DER)")
+    ap.add_argument("--tls-ciphers", default=DEFAULT_CIPHERS,
+                    help=f"OpenSSL cipher list, in the server's order of preference (default "
+                         f"{DEFAULT_CIPHERS}; e.g. ECDHE+AESGCM to make the console use AES-GCM)")
     ap.add_argument("-q", "--quiet", action="store_true", help="don't log requests")
     args = ap.parse_args(argv)
     if (args.tls_cert is None) != (args.tls_key is None):
         ap.error("--tls-cert and --tls-key go together")
-    tls = tls_context(args.tls_cert, args.tls_key) if args.tls_cert else None
+    tls = tls_context(args.tls_cert, args.tls_key, args.tls_ciphers) if args.tls_cert else None
     srv = RangeServer(args.root, args.bind, args.port, verbose=not args.quiet, tls=tls)
     scheme = "https" if tls else "http"
     print(f"serving {srv.root} on {scheme}://{args.bind}:{srv.port}/ (Ctrl+C to stop)", flush=True)

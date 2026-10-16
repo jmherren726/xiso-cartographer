@@ -1,4 +1,4 @@
-# Network test XBE (see main.c, M3). Built by the top-level Makefile: `make docker-xbe`.
+# Network test XBE (see main.c; M3, HTTPS since M5). Built by the top-level Makefile: `make docker-xbe`.
 # Output: app/net-test/bin/default.xbe and app/net-test/xcat-net-test.iso.
 
 XBE_TITLE = xcat-net-test
@@ -19,6 +19,9 @@ SRCS = $(CURDIR)/main.c \
        $(PLATFORM_DIR)/src/nx_platform.c
 
 CFLAGS += -I$(CORE_DIR)/include -I$(PLATFORM_DIR)/include -std=c11 -Wall -Wextra -Werror
+
+# HTTPS (M5): BearSSL, core/src/tls.c, the CA bundle and platform/nxdk/src/nx_tls.c.
+include $(CURDIR)/../tls.mk
 
 NXDK_DIR ?= $(ROOT_DIR)/third_party/nxdk
 

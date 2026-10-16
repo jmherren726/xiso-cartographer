@@ -11,6 +11,8 @@
 #   rsa-ca.pem      RSA-2048 test CA, same dates as ca.pem
 #   rsa-server.pem  RSA-2048 leaf like server.pem, signed by rsa-ca.pem; rsa-server.key.der
 set -eu
+# Git Bash on Windows would rewrite "/CN=..." as a Windows path otherwise.
+export MSYS_NO_PATHCONV=1
 cd "$(dirname "$0")"
 
 EC="-newkey ec -pkeyopt ec_paramgen_curve:P-256"

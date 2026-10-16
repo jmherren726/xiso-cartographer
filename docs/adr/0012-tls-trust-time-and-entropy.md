@@ -35,10 +35,10 @@
 6. **Randomness.** BearSSL's HMAC-DRBG (SHA-256) is seeded through a new platform hook, `xc_entropy`. TLS refuses to start until the hook has supplied its minimum seed.
    - **PC:** the operating system's generator (`BCryptGenRandom`, `getrandom`).
    - **Xbox:**
-     - the low bits of the CPU's timestamp counter, sampled at events whose timing the console doesn't control: received network packets (DHCP, DNS, NTP), disk reads and writes, and controller polls;
-     - mixed into a SHA-256 pool together with the console's clock, its MAC address, and a seed file, `E:\Apps\xcat\random-seed`.
-     - The seed file is replaced with fresh generator output each time the app starts. Fresh random numbers keep coming, even on a console whose state an attacker knows.
-     - Each timing sample is counted as at most one bit of entropy. The exact sampling and the minimum are in the `tls` module's header and get tests.
+     - the CPU's timestamp counter, sampled at events whose timing the console doesn't control. As built in M5 (`xc_nx_entropy_gather`), that's the number of cycles each of 256 one-millisecond sleeps takes: the wake-up comes from the timer interrupt, whose exact cycle varies with interrupt latency, cache state and the other interrupts (network, USB, disk) the console takes meanwhile. Event timings from network packets, disk I/O and controller polls can be added the same way;
+     - mixed into a SHA-256 pool (`xc_entropy_pool` in the `tls` module) together with the console's clock, its performance counter, its MAC address, and a seed file, `E:\Apps\xcat\random-seed`. These count for nothing.
+     - The seed file is replaced with fresh pool output each time the app starts. Fresh random numbers keep coming, even on a console whose state an attacker knows.
+     - Each timing sample is counted as at most one bit of entropy, and only if it differs from the one before. TLS needs 128 bits (`XC_ENTROPY_MIN_BITS`). The console reports how many distinct low bytes its samples had, as a health check recorded with the M5 hardware run.
 
 ## Consequences
 

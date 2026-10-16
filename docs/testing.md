@@ -25,6 +25,8 @@ Newest first. "Build" is the commit or CI artifact tested.
 
 | Date | Milestone | Build | Where | Result | Notes |
 |---|---|---|---|---|---|
+| 2026-10-16 | M5 (TLS speed, step 2) | #45 CI artifact (`ea658d9`) | Hardware: main console, LAN HTTPS from the PC (`make_lan_cert.sh` certificate as `E:\Apps\xcat\cacert.pem`) | ✅ Pass | 1 GiB test file over HTTPS at a steady **6.7 MB/s** (plain HTTP on the same LAN: 11.8 MB/s), CRC-32 `6775e853` matches, 0 retries, longest pause 0.1 s. Connected (TCP + TLS handshake) in 252 ms; ECDHE-ECDSA-CHACHA20-POLY1305. **The console's TLS path is well above the 1 MB/s target**; step 1's 0.3 MB/s comes from its TCP over the internet path, not from TLS. Two earlier attempts failed with "TLS error 3": a plain-HTTP `rangeserver.py` from an earlier test still shared port 8080 (Windows allowed both to bind) and answered instead. |
+| 2026-10-16 | M5 (TLS speed, step 1) | #45 CI artifact (`ea658d9`) | Hardware: main console, internet to archive.org | ⚠️ Works, too slow | HTTPS to archive.org works end to end: TLS 1.2 handshake and certificate check with the built-in roots, then the redirect to the storage server, connected in 2,113 ms. Server chose **ECDHE-ECDSA-CHACHA20-POLY1305** (0xcca9). **CPU, no network: ChaCha20-Poly1305 18.0 MB/s, AES-128-GCM 3.7 MB/s**. Randomness: 256 samples, 255 bits credited, 127 of 256 low bytes seen, 1.41–1.47 M cycles per sleep. Clock OK. First 256 MiB of the test item at a steady **0.3 MB/s**, 0 retries, longest pause 2.1 s, several 5 s intervals with almost no progress. The PC gets **18.7 MB/s** from the same storage server over one connection (curl, ~60 ms round trip). So the CPU (18 MB/s) and the server aren't the limit: the console's TCP over a long path is. Its 64 KB window without scaling caps one connection at ~1.1 MB/s at 60 ms, and the stalls suggest lost packets recovered by timeouts (lwIP has no SACK). Below the 1 MB/s target until the TCP settings are fixed. |
 | 2026-10-15 | M4 (follow-up) | #41 CI artifact | Hardware: main console | ✅ Pass | **LT + RT + Back + Black** returns to the dashboard from the app ([build-xbox.md](build-xbox.md#what-the-app-does-m4)). |
 | 2026-10-15 | M4 (attempt 2) | #41 CI artifact (`3abd5d6`) | Hardware: main console, LAN to the PC's `rangeserver.py` | ✅ Pass | `large` fixture regenerated with its file at the FATX maximum, 4 GiB − 16 KiB (fatx-names.md §4b). Power cut at ~1.2 GB; the next start **continued the big file from its checkpoint at 1,216 MiB** ("1 file(s) continued from a checkpoint"), wrote the remaining ~2,880 MiB at a steady ~8 MB/s, read all 4,096 MiB back at ~18 MB/s, and ended "OK: 3 files in E:\Games\large, verified (resumed)", "Done: 1 of 1". **M4 exit test met:** an over-4 GB image installs over the LAN and resumes after a power cut. The speed shown after the resume, and the final MB/s, were miscalculated (corrected after this run). |
 | 2026-10-15 | M4 (attempt 1) | #41 CI artifact (`13cf96c`) | Hardware: main console, LAN to the PC's `rangeserver.py` | ❌ Fail | `large` fixture over HTTP at **8.0 MB/s** (network and disk writes together). (1) A power cut at ~1.3 GB restarted the install from 0: the journal only recorded finished files, and the image is almost all one 4 GB file. Fixed by checkpoints every 64 MiB ([ADR 0011](adr/0011-checkpoints-inside-large-files.md)). (2) The second run failed with "Read or write failed" in the last 16 KiB of the 4,294,965,248-byte file. The same install verifies on a PC; the FATX probe then showed the console can't grow a file past 4 GiB − 16 KiB. Fixed by refusing such files (fatx-names.md §4b) and shrinking the fixture's file to exactly that size. |
@@ -107,6 +109,28 @@ A run passes when the screen ends with "CRC-32 … matches, PASS". Each run is a
 | 4 | Hardware (optional) | Launch once more: the game goes to `E:\Games\large (2)`, because the first one is finished ("already installed there"). Delete that folder afterwards. |
 
 A pass is "OK: … verified (resumed)" in step 3. Send `E:\xcat\install.log`: it has every run, the MB/s, and for any retry the time the last connection's lookup and handshake took (that's to pin down the one-off 15 s first-request delay from M3). Delete `E:\Games\large` afterwards; it's test data.
+
+## M5: TLS speed on the console
+
+**Why now:** HTTPS speed on the console is the go/no-go for the Xbox-only design (target ≥ 1 MB/s, [HANDOFF.md §4](HANDOFF.md#4-strategies): "prove the risk early"). This run measures it with `app/net-test` before the installer uses TLS. The full M5 exit test (installing the archive.org test item over HTTPS, and rejecting a bad certificate and a wrong clock) follows once NTP and the installer's HTTPS are in.
+
+For an `https` URL the test first prints:
+- how fast the CPU runs the two cipher families with no network involved (the most TLS can do on this CPU);
+- the console's clock;
+- the randomness it gathered (timer samples, bits credited, a health figure out of 256);
+- which roots it trusts.
+
+It then prints how long connecting took and which TLS version and cipher suite the server chose, then the download as before.
+
+**Before you start:** set the date and time in the dashboard's settings. Until NTP is in (later in M5), certificates are checked against the console's clock. A clock that was reset (earlier than the XBE's build) is refused with a message saying so.
+
+| Step | Where | How |
+|---|---|---|
+| 1 | Hardware, internet | `E:\xcat\net-test.txt` with the archive.org test item's download URL (`url=https://archive.org/download/<item>/<file>`) and `limit=268435456`, so only its first 256 MiB are fetched. FTP `app/net-test/bin/default.xbe` from the CI artifact to e.g. `E:\Apps\xcat-net-test\` and launch it. Make sure `E:\Apps\xcat\cacert.pem` doesn't exist, so the built-in roots are used. |
+| 2 | Hardware, LAN (optional, recommended) | HTTPS from the PC, which shows the TLS cost without the internet link in the way. On the PC (Git Bash): `sh tools/testserver/make_lan_cert.sh <pc-ip> C:/xcat-lan`, `python3 tools/testserver/make_test_file.py --out C:\xcat-net --size 256M`, then `python3 tools/testserver/rangeserver.py --root C:\xcat-net --bind 0.0.0.0 --tls-cert C:\xcat-lan\lan-cert.pem --tls-key C:\xcat-lan\lan-key.pem`. FTP `C:\xcat-lan\lan-cert.pem` to the console as `E:\Apps\xcat\cacert.pem`. Use `url=https://<pc-ip>:8080/xcat-test-268435456.bin` with the printed `size=` and `crc32=`. The run should end "matches, PASS". Optionally run it again with the server started with `--tls-ciphers ECDHE+AESGCM` (AES-GCM instead of ChaCha20). |
+| 3 | Hardware (optional preview of the exit test) | With step 2's `cacert.pem` still in place, run step 1's archive.org URL: it must fail with "The server's certificate isn't trusted". Then **delete `E:\Apps\xcat\cacert.pem`**, set the dashboard clock a few years ahead and run step 1 again: it must fail with "isn't valid at the current time (is the clock right?)". Set the clock back afterwards. |
+
+Send `E:\xcat\net-test.log`. Record in the results log: the cipher speeds, the randomness line, the suite each server chose, the connect time and the MB/s. archive.org's suite is worth noting in any case (ADR 0005 asks to watch for changes).
 
 ## FATX probe (M2)
 

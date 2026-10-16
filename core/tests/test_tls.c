@@ -695,6 +695,74 @@ static void test_https_certificate_errors_are_not_retried(void)
     TEST_ASSERT_EQUAL_UINT64(0, clock_ms); /* no backoff either */
 }
 
+/* ---- Entropy pool and cipher speed ---------------------------------------------------- */
+
+static void test_entropy_pool(void)
+{
+    xc_entropy_pool *p = NULL;
+    xc_entropy_pool *q = NULL;
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_entropy_pool_create(&p));
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_entropy_pool_create(&q));
+    xc_entropy e;
+    xc_entropy_pool_source(p, &e);
+    unsigned char a[40];
+    unsigned char b[40];
+    /* Refused until enough bits are credited; uncredited material doesn't count. */
+    TEST_ASSERT_EQUAL_INT(XC_ERR_TLS_NO_RANDOM, e.get(e.ctx, a, sizeof a));
+    xc_entropy_pool_add(p, "seed file", 9, 0);
+    xc_entropy_pool_add(p, "jitter", 6, XC_ENTROPY_MIN_BITS - 1);
+    TEST_ASSERT_EQUAL_UINT(XC_ENTROPY_MIN_BITS - 1, xc_entropy_pool_bits(p));
+    TEST_ASSERT_EQUAL_INT(XC_ERR_TLS_NO_RANDOM, e.get(e.ctx, a, sizeof a));
+    xc_entropy_pool_add(p, "x", 1, 1);
+    TEST_ASSERT_EQUAL_INT(XC_OK, e.get(e.ctx, a, sizeof a));
+    TEST_ASSERT_EQUAL_INT(XC_OK, e.get(e.ctx, b, sizeof b));
+    TEST_ASSERT_TRUE(memcmp(a, b, sizeof a) != 0); /* never the same output twice */
+    /* The same inputs give the same output (it's a hash), different inputs a different one. */
+    xc_entropy_pool_add(q, "seed file", 9, 0);
+    xc_entropy_pool_add(q, "jitter", 6, XC_ENTROPY_MIN_BITS - 1);
+    xc_entropy_pool_add(q, "x", 1, 1);
+    xc_entropy f;
+    xc_entropy_pool_source(q, &f);
+    TEST_ASSERT_EQUAL_INT(XC_OK, f.get(f.ctx, b, sizeof b));
+    TEST_ASSERT_EQUAL_MEMORY(a, b, sizeof a);
+    xc_entropy_pool_add(q, "y", 1, 1);
+    TEST_ASSERT_EQUAL_INT(XC_OK, f.get(f.ctx, b, sizeof b));
+    TEST_ASSERT_TRUE(memcmp(a, b, sizeof a) != 0);
+    xc_entropy_pool_destroy(p);
+    xc_entropy_pool_destroy(q);
+}
+
+static void test_tls_over_an_entropy_pool(void)
+{
+    xc_entropy_pool *p = NULL;
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_entropy_pool_create(&p));
+    xc_entropy pooled;
+    xc_entropy_pool_source(p, &pooled);
+    size_t len = 0;
+    char *pem = read_file("ca.pem", &len);
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_tls_anchors_parse(pem, len, &anchors, NULL));
+    free(pem);
+    xc_tls_config cfg = {&tcp, anchors, &pooled, &wallclock};
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_tls_create(&cfg, &tls, &tls_net));
+    expect_refused("test.example", XC_ERR_TLS_NO_RANDOM);
+    xc_entropy_pool_add(p, "enough", 6, XC_ENTROPY_MIN_BITS);
+    xc_net_conn *conn = NULL;
+    TEST_ASSERT_EQUAL_INT(XC_OK, tls_open("test.example", &conn));
+    tls_net.close(tls_net.ctx, conn);
+    xc_tls_destroy(tls);
+    tls = NULL;
+    xc_entropy_pool_destroy(p);
+}
+
+static void test_cipher_speed(void)
+{
+    xc_tls_speed sp;
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_tls_measure_ciphers(&fclock, 100000, &sp));
+    TEST_ASSERT_TRUE(sp.chacha20_poly1305_kbs > 0);
+    TEST_ASSERT_TRUE(sp.aes128_gcm_kbs > 0);
+    TEST_ASSERT_EQUAL_INT(XC_ERR_INVALID_ARG, xc_tls_measure_ciphers(&fclock, 0, &sp));
+}
+
 int main(int argc, char **argv)
 {
     if (argc > 1) {
@@ -721,5 +789,8 @@ int main(int argc, char **argv)
     RUN_TEST(test_invalid_arguments);
     RUN_TEST(test_https_probe);
     RUN_TEST(test_https_certificate_errors_are_not_retried);
+    RUN_TEST(test_entropy_pool);
+    RUN_TEST(test_tls_over_an_entropy_pool);
+    RUN_TEST(test_cipher_speed);
     return UNITY_END();
 }
