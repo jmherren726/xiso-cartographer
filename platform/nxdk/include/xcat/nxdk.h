@@ -85,14 +85,25 @@ void xc_nx_net_last(xc_nx_net_stats *out);
 /*
  * lwIP's counters since startup, for diagnosing slow downloads (M5): TCP segments in and out
  * (lwIP doesn't count plain ACKs as out), bad and dropped segments, buffer shortages; and the
- * configured receive window (platform/nxdk/lwip/lwipopts.h).
+ * configured receive window (platform/nxdk/lwip/lwipopts.h). Also the frames the driver
+ * handed to lwIP, and how many lwIP refused (its input mailbox was full), which nxdk drops
+ * without counting: xc_nx_net_startup() wraps the netif's input function to count them.
  */
 typedef struct xc_nx_tcp_counters {
     uint32_t segments_in, segments_out, segments_bad, segments_dropped;
     uint32_t out_of_memory;
     uint32_t window_bytes;
+    uint32_t frames_in, frames_refused;
 } xc_nx_tcp_counters;
 void xc_nx_tcp_counters_get(xc_nx_tcp_counters *out);
+
+/* The Ethernet link as the kernel last saw it: up, 10 or 100 Mbit/s (0 if unknown), duplex. */
+typedef struct xc_nx_link {
+    bool up;
+    unsigned mbps;
+    bool full_duplex;
+} xc_nx_link;
+xc_nx_link xc_nx_link_get(void);
 
 /*
  * What lwIP agreed for each established TCP connection, as one line of text in buf[0, cap):
@@ -106,13 +117,15 @@ size_t xc_nx_tcp_describe(char *buf, size_t cap);
  * Where a download's time goes (M5), summed over every recv on xc_nx_net connections: how long
  * they waited for data, and the state of our receive window as each one began: the bytes
  * received but not yet read (summed for an average, and the most), and how many found it
- * closed (zero advertised). Waiting most of the time means the data arrives too slowly
- * (sender or path); a full window whenever the app reads means the console is too slow.
+ * closed (zero advertised), and how many found out-of-order data queued (a segment before it
+ * was lost or late). Waiting most of the time means the data arrives too slowly (sender or
+ * path); a full window whenever the app reads means the console is too slow.
  */
 typedef struct xc_nx_recv_counters {
     uint64_t wait_ms;
     uint32_t reads;
     uint32_t reads_window_closed;
+    uint32_t reads_out_of_order;
     uint64_t unread_bytes_sum;
     uint32_t unread_bytes_max;
 } xc_nx_recv_counters;

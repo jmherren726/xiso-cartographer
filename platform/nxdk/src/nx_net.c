@@ -29,6 +29,7 @@ struct xc_net_conn {
 
 static xc_nx_net_stats stats;
 static xc_nx_recv_counters recv_counters;
+static volatile uint32_t frames_in, frames_refused; /* counting_input, from the driver's DPC */
 
 void xc_nx_recv_counters_get(xc_nx_recv_counters *out)
 {
@@ -52,6 +53,9 @@ static void count_window(const xc_net_conn *conn)
             if (p->rcv_ann_wnd == 0) {
                 recv_counters.reads_window_closed++;
             }
+            if (p->ooseq != NULL) {
+                recv_counters.reads_out_of_order++;
+            }
             break;
         }
     }
@@ -74,6 +78,39 @@ void xc_nx_tcp_counters_get(xc_nx_tcp_counters *out)
     out->segments_dropped = lwip_stats.tcp.drop;
     out->out_of_memory = lwip_stats.tcp.memerr + lwip_stats.link.memerr;
     out->window_bytes = TCP_WND;
+    out->frames_in = frames_in;
+    out->frames_refused = frames_refused;
+}
+
+/* --- frames from the driver ----------------------------------------------------------- */
+
+/*
+ * nxdk's driver hands each received frame to g_pnetif->input (tcpip_input) from its DPC.
+ * lwIP queues it in its thread's mailbox (SYS_MBOX_SIZE slots); when that is full, the frame
+ * is dropped and nothing counts it. This wrapper counts frames and refusals.
+ */
+static netif_input_fn lwip_input;
+
+static err_t counting_input(struct pbuf *p, struct netif *inp)
+{
+    frames_in++;
+    err_t err = lwip_input(p, inp);
+    if (err != ERR_OK) {
+        frames_refused++;
+    }
+    return err;
+}
+
+xc_nx_link xc_nx_link_get(void)
+{
+    DWORD st = PhyGetLinkState(FALSE);
+    xc_nx_link link;
+    link.up = (st & XNET_ETHERNET_LINK_ACTIVE) != 0;
+    link.mbps = (st & XNET_ETHERNET_LINK_100MBPS) != 0  ? 100U
+                : (st & XNET_ETHERNET_LINK_10MBPS) != 0 ? 10U
+                                                        : 0U;
+    link.full_duplex = (st & XNET_ETHERNET_LINK_FULL_DUPLEX) != 0;
+    return link;
 }
 
 size_t xc_nx_tcp_describe(char *buf, size_t cap)
@@ -140,6 +177,10 @@ xc_err xc_nx_net_startup(char *ip, size_t ip_size)
 {
     if (nxNetInit(NULL) != 0) {
         return XC_ERR_NET_CONNECT;
+    }
+    if (lwip_input == NULL) {
+        lwip_input = g_pnetif->input;
+        g_pnetif->input = counting_input; /* one pointer store: the DPC sees old or new */
     }
     if (ip != NULL && ip_size > 0) {
         (void)snprintf(ip, ip_size, "%s", ip4addr_ntoa(netif_ip4_addr(g_pnetif)));
