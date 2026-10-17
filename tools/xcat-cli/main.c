@@ -10,6 +10,7 @@
  *   xcat-cli install [options] <url|image> <games-dir> [title]
  *                                       install like the console: resumable, verified
  * (xcat/install.h)
+ *   xcat-cli ntp [options] [server]     ask a time server like the console (docs/formats/sntp.md)
  *
  * Exit status: 0 success, 1 failure (for map: any error line), 2 usage error, 3 not
  * installable (check).
@@ -19,6 +20,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "xcat/crc32.h"
 #include "xcat/credentials.h"
@@ -28,6 +30,7 @@
 #include "xcat/http_client.h"
 #include "xcat/install.h"
 #include "xcat/map.h"
+#include "xcat/sntp.h"
 #include "xcat/version.h"
 #include "xcat/xdvdfs.h"
 
@@ -46,6 +49,7 @@ static int usage(void)
         "       xcat-cli map [net options] <map-file>\n"
         "       xcat-cli install [net options] [--checkpoint <bytes>] <url|image> <games-dir>\n"
         "                        [title]\n"
+        "       xcat-cli ntp [--port <n>] [--timeout <ms>] [--floor <unix-seconds>] [server]\n"
         "net options: --timeout <ms>, --attempts <n>, --credentials <file>,\n"
         "             --ca-file <pem> (trust these CAs instead of the built-in ones),\n"
         "             --now <unix-seconds> (for tests: the time certificates are checked at)\n",
@@ -1020,8 +1024,89 @@ static int cmd_install(int argc, char **argv)
     return rc;
 }
 
+/*
+ * xcat-cli ntp [--port <n>] [--timeout <ms>] [--floor <unix-seconds>] [server]: asks a time
+ * server like the console does (docs/formats/sntp.md) and says how far this PC's clock is off.
+ */
+static int cmd_ntp(int argc, char **argv)
+{
+    const char *server = XC_SNTP_DEFAULT_SERVER;
+    unsigned long port = XC_SNTP_PORT;
+    unsigned long timeout = XC_SNTP_DEFAULT_TIMEOUT_MS;
+    unsigned long floor_s = 0;
+    bool have_server = false;
+    for (int i = 0; i < argc; i++) {
+        bool more = i + 1 < argc;
+        if (strcmp(argv[i], "--port") == 0 && more) {
+            if (!parse_uint(argv[++i], 65535UL, &port) || port == 0) {
+                return usage();
+            }
+        } else if (strcmp(argv[i], "--timeout") == 0 && more) {
+            if (!parse_uint(argv[++i], 600000UL, &timeout)) {
+                return usage();
+            }
+        } else if (strcmp(argv[i], "--floor") == 0 && more) {
+            if (!parse_uint(argv[++i], 0xFFFFFFFFUL, &floor_s)) {
+                return usage();
+            }
+        } else if (argv[i][0] != '-' && !have_server) {
+            server = argv[i];
+            have_server = true;
+        } else {
+            return usage();
+        }
+    }
+    xc_err err = xc_host_net_startup();
+    if (err != XC_OK) {
+        return fail("network", err);
+    }
+    xc_udp udp;
+    xc_clock clock;
+    xc_entropy entropy;
+    xc_host_udp(&udp);
+    xc_host_clock(&clock);
+    xc_host_entropy(&entropy);
+    xc_sntp_result r;
+    xc_sntp_failure f;
+    memset(&r, 0, sizeof r);
+    memset(&f, 0, sizeof f);
+    err = xc_sntp_query(&udp, &clock, &entropy, server, (uint16_t)port, (uint32_t)timeout,
+                        (int64_t)floor_s, &r, &f);
+    /* This PC's clock and the answer's time carried forward on the monotonic clock, together. */
+    struct timespec pc;
+    if (timespec_get(&pc, TIME_UTC) != TIME_UTC) {
+        pc.tv_sec = time(NULL);
+        pc.tv_nsec = 0;
+    }
+    int64_t pc_ms = (int64_t)pc.tv_sec * 1000 + (int64_t)pc.tv_nsec / 1000000;
+    int64_t ntp_ms = r.unix_ms + (int64_t)(clock.now_ms(clock.ctx) - r.mono_ms);
+    xc_host_net_cleanup();
+    if (err != XC_OK) {
+        (void)fprintf(stderr, "xcat-cli: NTP %s: %s%s%s%s%s (%u request%s)\n", server,
+                      xc_err_str(err), f.why != NULL ? ": " : "", f.why != NULL ? f.why : "",
+                      f.kiss[0] != '\0' ? " " : "", f.kiss, f.attempts, f.attempts == 1 ? "" : "s");
+        return 1;
+    }
+    time_t ntp_s = (time_t)(ntp_ms / 1000);
+    struct tm tm;
+#if defined(_WIN32)
+    (void)gmtime_s(&tm, &ntp_s);
+#else
+    (void)gmtime_r(&ntp_s, &tm);
+#endif
+    char date[32];
+    (void)strftime(date, sizeof date, "%Y-%m-%d %H:%M:%S", &tm);
+    (void)printf("NTP %s: %s UTC, stratum %u, round trip %" PRIu32 " ms, %u request%s\n", server,
+                 date, (unsigned)r.stratum, r.rtt_ms, r.attempts, r.attempts == 1 ? "" : "s");
+    (void)printf("This PC's clock is %+.1f s off\n", (double)(pc_ms - ntp_ms) / 1000.0);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
+    if (argc >= 2 && strcmp(argv[1], "ntp") == 0) {
+        return cmd_ntp(argc - 2, argv + 2);
+    }
     if (argc >= 2 && strcmp(argv[1], "get") == 0) {
         return cmd_get(argc - 2, argv + 2);
     }

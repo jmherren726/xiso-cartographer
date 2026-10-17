@@ -69,6 +69,8 @@ bool xc_nx_mkdirs(const char *path);
  */
 xc_err xc_nx_net_startup(char *ip, size_t ip_size);
 void xc_nx_net(xc_net *net);
+/* One UDP request and answer (xc_udp, for SNTP), after xc_nx_net_startup(). */
+void xc_nx_udp(xc_udp *udp);
 
 /* Monotonic milliseconds from the CPU's performance counter, and sleep. */
 void xc_nx_clock(xc_clock *clock);

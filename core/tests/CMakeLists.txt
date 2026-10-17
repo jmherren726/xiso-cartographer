@@ -97,6 +97,7 @@ xcat_add_test(test_url)
 xcat_add_test(test_http)
 xcat_add_test(test_http_client)
 # TLS against an in-process BearSSL server, with the committed test certificates.
+xcat_add_test(test_sntp)
 xcat_add_test(test_tls ARGS ${PROJECT_SOURCE_DIR}/tools/fixtures/tls)
 target_link_libraries(test_tls PRIVATE bearssl)
 
@@ -154,6 +155,20 @@ foreach(_name IN LISTS _install_scenarios)
   xcat_test_env(install_${_name})
 endforeach()
 
+# `xcat-cli ntp` end to end against a fake SNTP server, one test per misbehaviour
+# (tools/testserver/test_ntp.py, docs/formats/sntp.md §4 and §6).
+execute_process(
+  COMMAND ${Python3_EXECUTABLE} -I ${PROJECT_SOURCE_DIR}/tools/testserver/test_ntp.py --list
+  OUTPUT_VARIABLE _ntp_scenarios OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ERROR_IS_FATAL ANY)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  ${PROJECT_SOURCE_DIR}/tools/testserver/test_ntp.py)
+foreach(_name IN LISTS _ntp_scenarios)
+  add_test(NAME ntp_${_name}
+    COMMAND ${Python3_EXECUTABLE} -I ${PROJECT_SOURCE_DIR}/tools/testserver/test_ntp.py
+            --cli $<TARGET_FILE:xcat-cli> ${_name})
+  xcat_test_env(ntp_${_name})
+endforeach()
+
 # `xcat-cli map` end to end: local and HTTP includes, problems and the exit status.
 add_test(NAME map_cli
   COMMAND ${Python3_EXECUTABLE} -I ${PROJECT_SOURCE_DIR}/tools/testserver/test_map_cli.py
@@ -200,3 +215,7 @@ xcat_add_fuzzer(fuzz_journal SEEDS ${_journal_seeds})
 # Trust-anchor (PEM bundle) seeds are committed: the test certificates and a few broken ones.
 file(GLOB _tls_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/tls/*.seed)
 xcat_add_fuzzer(fuzz_tls_anchors SEEDS ${_tls_seeds})
+
+# SNTP answer seeds are committed, written by tools/fixtures/sntp_seeds.py.
+file(GLOB _sntp_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/sntp/*.seed)
+xcat_add_fuzzer(fuzz_sntp SEEDS ${_sntp_seeds})
