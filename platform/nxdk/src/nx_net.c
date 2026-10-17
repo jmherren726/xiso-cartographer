@@ -359,6 +359,67 @@ static void net_close(void *ctx, xc_net_conn *conn)
     }
 }
 
+/* --- UDP -------------------------------------------------------------------------------- */
+
+/* One datagram out and one back (xc_udp): the socket is connected to the server, so lwIP only
+ * delivers that address's datagrams. */
+static xc_err udp_exchange(void *ctx, const char *host, uint16_t port, const void *req,
+                           size_t req_len, void *resp, size_t cap, uint32_t timeout_ms, size_t *got,
+                           uint32_t *rtt_ms)
+{
+    (void)ctx;
+    *got = 0;
+    *rtt_ms = 0;
+    char port_str[8];
+    (void)snprintf(port_str, sizeof port_str, "%u", (unsigned)port);
+    struct addrinfo hints;
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_DGRAM;
+    hints.ai_protocol = IPPROTO_UDP;
+    struct addrinfo *ai = NULL;
+    if (lwip_getaddrinfo(host, port_str, &hints, &ai) != 0 || ai == NULL) {
+        return XC_ERR_NET_DNS;
+    }
+    int s = lwip_socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    bool ok = s >= 0 && lwip_fcntl(s, F_SETFL, O_NONBLOCK) == 0 &&
+              lwip_connect(s, ai->ai_addr, ai->ai_addrlen) == 0 &&
+              lwip_send(s, req, req_len, 0) == (ssize_t)req_len;
+    lwip_freeaddrinfo(ai);
+    if (!ok) {
+        if (s >= 0) {
+            (void)lwip_close(s);
+        }
+        return XC_ERR_NET_IO;
+    }
+    uint64_t sent = clock_now_ms(NULL);
+    xc_err err = wait_sock(s, WAIT_READ, timeout_ms);
+    while (err == XC_OK) {
+        ssize_t n = lwip_recv(s, resp, cap, 0);
+        if (n >= 0) {
+            *got = (size_t)n; /* lwIP drops what doesn't fit */
+            *rtt_ms = (uint32_t)(clock_now_ms(NULL) - sent);
+            break;
+        }
+        if (errno != EINTR && !would_block()) {
+            err = XC_ERR_NET_IO;
+            break;
+        }
+        uint64_t now = clock_now_ms(NULL);
+        err = now - sent >= timeout_ms
+                  ? XC_ERR_NET_TIMEOUT
+                  : wait_sock(s, WAIT_READ, (uint32_t)(timeout_ms - (now - sent)));
+    }
+    (void)lwip_close(s);
+    return err;
+}
+
+void xc_nx_udp(xc_udp *udp)
+{
+    udp->exchange = udp_exchange;
+    udp->ctx = NULL;
+}
+
 void xc_nx_net(xc_net *net)
 {
     net->connect = net_connect;

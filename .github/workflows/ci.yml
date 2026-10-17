@@ -210,6 +210,12 @@ jobs:
           ./build/fuzz/core/tests/fuzz_tls_anchors -max_total_time=60 -max_len=65536 \
             -print_final_stats=1 -artifact_prefix=build/fuzz/artifacts/ \
             build/fuzz/corpus-tls core/tests/fuzz-seeds/tls
+      - name: Fuzz the SNTP answer checks (60 s)
+        run: |
+          mkdir -p build/fuzz/corpus-sntp build/fuzz/artifacts
+          ./build/fuzz/core/tests/fuzz_sntp -max_total_time=60 -max_len=4096 \
+            -print_final_stats=1 -artifact_prefix=build/fuzz/artifacts/ \
+            build/fuzz/corpus-sntp core/tests/fuzz-seeds/sntp
       - name: Upload crashing inputs
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

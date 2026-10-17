@@ -30,6 +30,7 @@
 #include "xcat/crc32.h"
 #include "xcat/http_client.h"
 #include "xcat/nxdk.h"
+#include "xcat/sntp.h"
 #include "xcat/tls.h"
 #include "xcat/version.h"
 
@@ -93,6 +94,7 @@ typedef struct config {
     uint64_t limit; /* 0: the whole file */
     bool save;
     unsigned attempts;
+    char ntp[256]; /* time server (docs/formats/sntp.md); "" for ntp=off */
 } config;
 
 static bool parse_u64(const char *s, int base, uint64_t *v)
@@ -110,6 +112,7 @@ static bool read_config(config *cfg)
 {
     memset(cfg, 0, sizeof *cfg);
     cfg->attempts = DEFAULT_ATTEMPTS;
+    memcpy(cfg->ntp, XC_SNTP_DEFAULT_SERVER, sizeof XC_SNTP_DEFAULT_SERVER);
     FILE *f = fopen(CONFIG, "rb");
     if (f == NULL) {
         out("No %s.\n\nCreate it on the PC and copy it over FTP, e.g.:\n"
@@ -153,6 +156,9 @@ static bool read_config(config *cfg)
             cfg->save = strcmp(val, "yes") == 0;
         } else if (strcmp(key, "attempts") == 0 && parse_u64(val, 10, &v) && v > 0 && v <= 1000) {
             cfg->attempts = (unsigned)v;
+        } else if (strcmp(key, "ntp") == 0 && strlen(val) > 0 && strlen(val) < sizeof cfg->ntp) {
+            const char *server = strcmp(val, "off") == 0 ? "" : val;
+            memcpy(cfg->ntp, server, strlen(server) + 1);
         } else {
             out("%s: bad value for %s: %s\n", CONFIG, key, val);
             ok = false;
@@ -351,7 +357,8 @@ static char *read_ca_file(size_t *len)
 }
 
 /* Sets up TLS over `tcp` and reports each step; false (after saying why) if it can't. */
-static bool tls_setup(const xc_net *tcp, const xc_clock *clock, xc_net *tls_net, xc_tls **tls)
+static bool tls_setup(const config *cfg, const xc_net *tcp, const xc_clock *clock, xc_net *tls_net,
+                      xc_tls **tls)
 {
     static xc_entropy_pool *pool;
     static xc_entropy entropy;
@@ -374,13 +381,6 @@ static bool tls_setup(const xc_net *tcp, const xc_clock *clock, xc_net *tls_net,
     utc_date(date, sizeof date, xc_nx_console_time());
     utc_date(floor_date, sizeof floor_date, xc_nx_build_time());
     out("Console clock %s (this build: %s)\n", date, floor_date);
-    xc_nx_wallclock(&wallclock);
-    int64_t now = 0;
-    if (wallclock.now(wallclock.ctx, &now) != XC_OK) {
-        out("The console's clock is earlier than this XBE's build, so it was reset. Set the\n"
-            "date and time in the dashboard's settings, then run the test again.\n");
-        return false;
-    }
 
     xc_nx_entropy_stats st;
     xc_err err = xc_entropy_pool_create(&pool);
@@ -397,6 +397,44 @@ static bool tls_setup(const xc_net *tcp, const xc_clock *clock, xc_net *tls_net,
         return false;
     }
     xc_entropy_pool_source(pool, &entropy);
+
+    /* The time for certificate checks (docs/formats/sntp.md §6, ADR 0012 §5). The nonce comes
+     * from the entropy pool, so this comes after it. */
+    static xc_wallclock console;
+    static xc_time_source time_src;
+    static xc_udp udp;
+    xc_nx_wallclock(&console);
+    xc_nx_udp(&udp);
+    const char *server = cfg->ntp[0] != '\0' ? cfg->ntp : NULL;
+    err = xc_time_choose(&time_src, &udp, clock, &entropy, server, XC_SNTP_PORT,
+                         XC_SNTP_DEFAULT_TIMEOUT_MS, &console, xc_nx_build_time());
+    if (time_src.kind == XC_TIME_NTP) {
+        int64_t ntp_ms =
+            time_src.ntp.unix_ms + (int64_t)(clock->now_ms(clock->ctx) - time_src.ntp.mono_ms);
+        int64_t off_s = xc_nx_console_time() - ntp_ms / 1000;
+        utc_date(date, sizeof date, ntp_ms / 1000);
+        out("Time from NTP (%s): %s, stratum %u, round trip %lu ms, %u request%s; the console's "
+            "clock is %+lld s off\n",
+            server, date, (unsigned)time_src.ntp.stratum, (unsigned long)time_src.ntp.rtt_ms,
+            time_src.ntp.attempts, time_src.ntp.attempts == 1 ? "" : "s", (long long)off_s);
+    } else {
+        if (server == NULL) {
+            out("NTP is off (ntp=off).\n");
+        } else {
+            const xc_sntp_failure *f = &time_src.failure;
+            out("NTP (%s) failed after %u request%s: %s%s%s%s%s\n", server, f->attempts,
+                f->attempts == 1 ? "" : "s", xc_err_str(f->err), f->why != NULL ? ": " : "",
+                f->why != NULL ? f->why : "", f->kiss[0] != '\0' ? " " : "", f->kiss);
+        }
+        if (err != XC_OK) {
+            out("%s. The console's clock is earlier than this XBE's build, so it was reset: set "
+                "the date and time in the dashboard's settings, then run the test again.\n",
+                xc_err_str(err));
+            return false;
+        }
+        out("Time from the console's clock (not earlier than this build)\n");
+    }
+    xc_time_wallclock(&time_src, &wallclock);
 
     size_t len = 0;
     char *pem = read_ca_file(&len);
@@ -482,7 +520,7 @@ int main(void)
     xc_nx_clock(&clock);
     static xc_net tls_net;
     xc_tls *tls = NULL;
-    if (is_https(cfg.url) && !tls_setup(&net, &clock, &tls_net, &tls)) {
+    if (is_https(cfg.url) && !tls_setup(&cfg, &net, &clock, &tls_net, &tls)) {
         halt();
     }
     uint8_t *rbuf = malloc(RECV_BUF_SIZE);

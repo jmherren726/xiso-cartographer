@@ -55,3 +55,7 @@ A fault counts down only on the responses it actually affects: `drop=1000` skips
 The resume scenarios kill the installer once its journal has a few `done` lines, as a power cut would stop it, then run it again. It must resume in the same folder, start a new folder when the image changed, and, when a finished file was damaged in between, fail the read-back check and then repair the file on the next run. `resume_inside_file` kills it right after a checkpoint inside a file (`--checkpoint 16384`), and the next run must continue that file rather than start it over (ADR 0011).
 
 `test_map_cli.py` checks `xcat-cli map` with a local include and an HTTP include served by the test server.
+
+## SNTP
+
+`sntpserver.py` is a fake time server on `127.0.0.1` (UDP) for [docs/formats/sntp.md](../../docs/formats/sntp.md). It answers with a fixed time (2026-10-17 00:00:00.5 UTC), or misbehaves in one way chosen with `--mode`: it loses the first request, sends a stray answer from another port first, sends a kiss-o'-death, says it isn't synchronized, echoes the wrong nonce, answers with a 2001 time, or never answers. `test_ntp.py` runs `xcat-cli ntp` against each mode (`ntp_<scenario>` in CTest) and checks the exit status, the message and how many requests the server saw. By hand: `python3 tools/testserver/sntpserver.py --port 12300 --mode kiss`, then `xcat-cli ntp --port 12300 127.0.0.1`.

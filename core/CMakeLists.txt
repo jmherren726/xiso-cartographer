@@ -13,6 +13,7 @@ add_library(xcat
   src/journal.c
   src/map.c
   src/source.c
+  src/sntp.c
   src/text.c
   src/tls.c
   src/url.c

@@ -66,11 +66,14 @@ const char *xc_err_str(xc_err err)
     case XC_ERR_TLS_CERT_TIME:
         return "The server's certificate isn't valid at the current time (is the clock right?)";
     case XC_ERR_TLS_NO_TIME:
-        return "Couldn't get the correct time, so HTTPS certificates can't be checked";
+        return "Couldn't get the correct time (NTP server unreachable and the console's clock is "
+               "wrong)";
     case XC_ERR_TLS_NO_RANDOM:
         return "Couldn't gather enough randomness for a secure connection";
     case XC_ERR_TLS_NOT_TLS:
         return "The server didn't answer in HTTPS (is it a plain http:// server?)";
+    case XC_ERR_NTP:
+        return "The time server's answer was refused (not synchronized, rate limit or invalid)";
     case XC_ERR_COUNT_:
         break;
     }
