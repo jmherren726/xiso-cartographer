@@ -5,6 +5,7 @@
  * never touch the xc_net fields of the same names.
  */
 #include <errno.h>
+#include <lwip/memp.h>
 #include <lwip/netdb.h>
 #include <lwip/netif.h>
 #include <lwip/priv/tcp_priv.h>
@@ -20,7 +21,8 @@
 
 #include "xcat/nxdk.h"
 
-extern struct netif *g_pnetif; /* nxdk/net.c */
+extern struct netif *g_pnetif;              /* nxdk/net.c */
+extern const struct memp_desc memp_RX_POOL; /* nvnetdrv_lwip.c: one per driver buffer in use */
 
 struct xc_net_conn {
     int s;
@@ -80,6 +82,8 @@ void xc_nx_tcp_counters_get(xc_nx_tcp_counters *out)
     out->window_bytes = TCP_WND;
     out->frames_in = frames_in;
     out->frames_refused = frames_refused;
+    out->rx_buffers = RX_BUFF_CNT;
+    out->rx_buffers_max_used = (uint32_t)memp_RX_POOL.stats->max;
 }
 
 /* --- frames from the driver ----------------------------------------------------------- */

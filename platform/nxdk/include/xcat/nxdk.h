@@ -88,12 +88,15 @@ void xc_nx_net_last(xc_nx_net_stats *out);
  * configured receive window (platform/nxdk/lwip/lwipopts.h). Also the frames the driver
  * handed to lwIP, and how many lwIP refused (its input mailbox was full), which nxdk drops
  * without counting: xc_nx_net_startup() wraps the netif's input function to count them.
+ * And the driver's receive buffers: how many there are, and the most lwIP held at once (each
+ * frame keeps its buffer until the app has read it; with none free, the chip drops frames).
  */
 typedef struct xc_nx_tcp_counters {
     uint32_t segments_in, segments_out, segments_bad, segments_dropped;
     uint32_t out_of_memory;
     uint32_t window_bytes;
     uint32_t frames_in, frames_refused;
+    uint32_t rx_buffers, rx_buffers_max_used;
 } xc_nx_tcp_counters;
 void xc_nx_tcp_counters_get(xc_nx_tcp_counters *out);
 
