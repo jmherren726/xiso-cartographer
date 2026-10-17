@@ -16,9 +16,10 @@
 
 /*
  * Receive window: 240 segments (~336 KB), advertised with window scaling (RFC 7323). One
- * connection moves at most one window per round trip: 120 segments (167 KB) gave a steady
- * 1.7 MB/s from archive.org with the app idle 79% of the time, which is that window at ~95 ms.
- * 240 segments allow ~3.5 MB/s there. The socket's receive mailbox holds SYS_MBOX_SIZE (128,
+ * connection moves at most one window per round trip: ~5.9 MB/s at the 57 ms measured to
+ * archive.org (120 segments allowed ~2.9). archive.org measured 1.7 MB/s with 120 segments and
+ * 1.8 with 240, so the window isn't what limits it today (packets lost on the way are), but the
+ * larger one leaves room for a faster path. The socket's receive mailbox holds SYS_MBOX_SIZE (128,
  * nxdk's sys_arch.h) segments the app hasn't read; past that, lwIP keeps the data as "refused"
  * and hands it over on a later segment or timer tick (up to 250 ms), so nothing is lost when
  * the app falls behind, it only waits.
