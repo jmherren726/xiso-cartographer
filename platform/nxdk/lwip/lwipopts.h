@@ -15,15 +15,19 @@
 #include_next "lwipopts.h" /* nxdk's: lib/net/nforceif/include/lwipopts.h */
 
 /*
- * Receive window: 120 segments (~168 KB), advertised with window scaling (RFC 7323), so a
- * 60 ms path allows ~2.8 MB/s. Bounded by nxdk's mailboxes: the socket's receive mailbox
- * holds SYS_MBOX_SIZE (128) segments that the app hasn't read yet, so a window of more than
- * 128 segments could be refused by our own stack when the app falls behind.
+ * Receive window: 240 segments (~336 KB), advertised with window scaling (RFC 7323). One
+ * connection moves at most one window per round trip: ~5.9 MB/s at the 57 ms measured to
+ * archive.org (120 segments allowed ~2.9). archive.org measured 1.7 MB/s with 120 segments and
+ * 1.8 with 240, so the window isn't what limits it today (packets lost on the way are), but the
+ * larger one leaves room for a faster path. The socket's receive mailbox holds SYS_MBOX_SIZE (128,
+ * nxdk's sys_arch.h) segments the app hasn't read; past that, lwIP keeps the data as "refused"
+ * and hands it over on a later segment or timer tick (up to 250 ms), so nothing is lost when
+ * the app falls behind, it only waits.
  */
 #undef TCP_WND
-#define TCP_WND (120 * TCP_MSS)
+#define TCP_WND (240 * TCP_MSS)
 #define LWIP_WND_SCALE 1
-#define TCP_RCV_SCALE 2 /* the 16-bit window field counts 4-byte units: up to 256 KB */
+#define TCP_RCV_SCALE 3 /* the 16-bit window field counts 8-byte units: up to 512 KB */
 
 /* Sending stays as it was (we only send small requests). */
 #undef TCP_SND_BUF
@@ -32,9 +36,10 @@
 /*
  * Zero-copy receive buffers in the network driver (nvnetdrv_lwip.c): a segment keeps its
  * buffer until the app has read it, so a full window needs one buffer per segment, plus room
- * for out-of-order segments and other traffic. 2 KB each: ~384 KB in all.
+ * for out-of-order segments, frames waiting for lwIP's thread and other traffic. When all are
+ * taken, the network chip drops what arrives. 2 KB each: 768 KB in all.
  */
-#define RX_BUFF_CNT 192
+#define RX_BUFF_CNT 384
 
 /* Tell the sender which segments arrived after a loss (SACK, RFC 2018), so it resends only
  * what's missing instead of waiting for a timeout. Needs the out-of-order queue (on). */
@@ -42,5 +47,9 @@
 
 /* 32-bit statistics counters: 16-bit ones wrap after 94 MB of frames (xc_nx_tcp_counters_get). */
 #define LWIP_STATS_LARGE 1
+
+/* Pool statistics: the most driver receive buffers in use at once (xc_nx_tcp_counters_get). */
+#undef MEMP_STATS
+#define MEMP_STATS 1
 
 #endif /* XCAT_LWIPOPTS_H */

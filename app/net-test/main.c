@@ -251,10 +251,11 @@ static void report_reading(const char *indent, const xc_nx_recv_counters *from,
     uint32_t reads = to->reads - from->reads;
     uint64_t avg = reads > 0 ? (to->unread_bytes_sum - from->unread_bytes_sum) / reads : 0;
     out("%sReading: waited for data %llu%% of %llu s; %lu reads, window closed at %lu, "
-        "unread on average %llu KB (most %lu KB since the start)\n",
+        "out-of-order data at %lu, unread on average %llu KB (most %lu KB since the start)\n",
         indent, (unsigned long long)(ms > 0 ? waited * 100U / ms : 0),
         (unsigned long long)(ms / 1000U), (unsigned long)reads,
         (unsigned long)(to->reads_window_closed - from->reads_window_closed),
+        (unsigned long)(to->reads_out_of_order - from->reads_out_of_order),
         (unsigned long long)(avg / 1024U), (unsigned long)(to->unread_bytes_max / 1024U));
 }
 
@@ -471,7 +472,9 @@ int main(void)
             "address).\n");
         halt();
     }
-    out("Console IP %s\nURL %s\n", ip, cfg.url);
+    xc_nx_link link = xc_nx_link_get();
+    out("Console IP %s; link %s, %u Mbit/s, %s duplex\nURL %s\n", ip, link.up ? "up" : "DOWN",
+        link.mbps, link.full_duplex ? "full" : "HALF", cfg.url);
 
     xc_net net;
     xc_clock clock;
@@ -512,8 +515,12 @@ int main(void)
     }
     uint64_t total = 0;
     if (err == XC_OK) {
-        out("Size %llu bytes (%llu MiB); connected in %llu ms\n", (unsigned long long)res.size,
-            (unsigned long long)(res.size >> 20U), (unsigned long long)(now_ms(&r) - r.start_ms));
+        xc_nx_net_stats ns;
+        xc_nx_net_last(&ns); /* the server the data comes from, after any redirect */
+        out("Size %llu bytes (%llu MiB); connected in %llu ms (TCP handshake %lu ms, about one "
+            "round trip)\n",
+            (unsigned long long)res.size, (unsigned long long)(res.size >> 20U),
+            (unsigned long long)(now_ms(&r) - r.start_ms), (unsigned long)ns.connect_ms);
         if (tls != NULL) {
             tls_report(tls);
         }
@@ -580,10 +587,13 @@ int main(void)
     out("Retries %u, longest pause in the data %s s\n", r.retries, gap);
     xc_nx_tcp_counters tc;
     xc_nx_tcp_counters_get(&tc);
-    out("TCP: window %lu KB; segments in %lu, out %lu, bad %lu, dropped %lu; out of memory %lu\n",
-        (unsigned long)(tc.window_bytes / 1024U), (unsigned long)tc.segments_in,
+    out("TCP: window %lu KB; frames in %lu, refused by lwIP %lu; segments in %lu, out %lu, bad "
+        "%lu, dropped %lu; out of memory %lu; receive buffers in use at most %lu of %lu\n",
+        (unsigned long)(tc.window_bytes / 1024U), (unsigned long)tc.frames_in,
+        (unsigned long)tc.frames_refused, (unsigned long)tc.segments_in,
         (unsigned long)tc.segments_out, (unsigned long)tc.segments_bad,
-        (unsigned long)tc.segments_dropped, (unsigned long)tc.out_of_memory);
+        (unsigned long)tc.segments_dropped, (unsigned long)tc.out_of_memory,
+        (unsigned long)tc.rx_buffers_max_used, (unsigned long)tc.rx_buffers);
     xc_nx_recv_counters rc;
     xc_nx_recv_counters_get(&rc);
     report_reading("", &r.rc_start, &rc, ms);
