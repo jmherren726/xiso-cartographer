@@ -72,6 +72,8 @@ const char *xc_err_str(xc_err err)
         return "Couldn't gather enough randomness for a secure connection";
     case XC_ERR_TLS_NOT_TLS:
         return "The server didn't answer in HTTPS (is it a plain http:// server?)";
+    case XC_ERR_IMAGE_HASH:
+        return "The downloaded image doesn't match its published checksum";
     case XC_ERR_NTP:
         return "The time server's answer was refused (not synchronized, rate limit or invalid)";
     case XC_ERR_COUNT_:

@@ -13,6 +13,7 @@
 #include <stdint.h>
 
 #include "xcat/error.h"
+#include "xcat/hash.h"
 #include "xcat/xdvdfs.h"
 
 #ifdef __cplusplus
@@ -24,7 +25,7 @@ extern "C" {
 #define XC_JOURNAL_MAX_LINE 8192                      /* §3.1, without the LF */
 #define XC_JOURNAL_MAX_VALIDATOR 127                  /* as xc_http_resource's (http.md §4.3) */
 #define XC_JOURNAL_VERSION_MAJOR 1
-#define XC_JOURNAL_VERSION_MINOR 1 /* 1.1: part checkpoints (ADR 0011) */
+#define XC_JOURNAL_VERSION_MINOR 2 /* 1.1: part checkpoints (ADR 0011); 1.2: hash state */
 
 /* §4: what an install is from. */
 typedef struct xc_journal_id {
@@ -63,6 +64,11 @@ xc_err xc_journal_format_done(const char *path, uint32_t size, uint32_t crc, cha
 xc_err xc_journal_format_part(const char *path, uint32_t bytes, uint32_t crc, char *out, size_t cap,
                               size_t *len);
 
+/* One `hash` line (§5, v1.2): every image byte before `offset` (a multiple of 64) is hashed. */
+xc_err xc_journal_format_hash(uint64_t offset, const uint8_t md5_state[XC_MD5_BYTES],
+                              const uint8_t sha1_state[XC_SHA1_BYTES], char *out, size_t cap,
+                              size_t *len);
+
 /* What a journal says about the image it's read against (§6). */
 typedef struct xc_journal_state {
     bool valid;           /* false: invalid or another image; don't reuse the folder (§6.4) */
@@ -73,6 +79,10 @@ typedef struct xc_journal_state {
     uint32_t *part_bytes; /* [listing file index]: last checkpoint of an unfinished file, or 0 */
     uint32_t *part_crc;   /* [listing file index]: CRC-32 of those bytes */
     size_t done_count;
+    bool has_hash;        /* a valid `hash` line was read (the last one counts) */
+    uint64_t hash_offset; /* its offset */
+    uint8_t hash_md5[XC_MD5_BYTES];
+    uint8_t hash_sha1[XC_SHA1_BYTES];
     bool torn; /* reading stopped at a torn line (a power cut during an append) */
 } xc_journal_state;
 

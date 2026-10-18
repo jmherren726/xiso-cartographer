@@ -487,7 +487,7 @@ static void test_resume_inside_a_file(void)
     size_t parts = count_lines(journal, "part ", "media/intro.xmv");
     TEST_ASSERT_TRUE(parts >= 1);
     TEST_ASSERT_NOT_NULL(strstr((char *)find(journal)->data, "part 16384 "));
-    TEST_ASSERT_NOT_NULL(strstr((char *)find(journal)->data, "# xcat-journal v1.1 *"));
+    TEST_ASSERT_NOT_NULL(strstr((char *)find(journal)->data, "# xcat-journal v1.2 *"));
     cancel_in = NULL;
     TEST_ASSERT_EQUAL_INT(XC_OK, xc_install(&req, &res));
     TEST_ASSERT_TRUE(res.resumed);
@@ -510,6 +510,114 @@ static void test_checkpoint_ignored_if_file_is_short(void)
     TEST_ASSERT_EQUAL_INT(XC_OK, xc_install(&req, &res));
     TEST_ASSERT_EQUAL_size_t(0, res.files_continued); /* written again from the start */
     TEST_ASSERT_NOT_NULL(find("E:/Games/Small Game/.xcat-installed"));
+}
+
+/* --- whole-image hashes (journal.md §7) ----------------------------------------------------- */
+
+static uint8_t want_md5[XC_MD5_BYTES];
+static uint8_t want_sha1[XC_SHA1_BYTES];
+
+/* The image's MD5 and SHA-1, the slow obvious way. */
+static void hash_image(void)
+{
+    xc_image_hash *h = NULL;
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_image_hash_create(&h));
+    for (uint64_t pos = 0; pos < image.size;) {
+        size_t n = image.size - pos < sizeof buf ? (size_t)(image.size - pos) : sizeof buf;
+        TEST_ASSERT_EQUAL_INT(XC_OK, xc_source_read(&image, pos, buf, n));
+        xc_image_hash_update(h, buf, n);
+        pos += n;
+    }
+    xc_image_hash_final(h, want_md5, want_sha1);
+    xc_image_hash_free(h);
+}
+
+static void expect_image_hash(void)
+{
+    TEST_ASSERT_NOT_EQUAL_INT(XC_INSTALL_HASH_NONE, res.hash);
+    TEST_ASSERT_EQUAL_MEMORY(want_md5, res.md5, XC_MD5_BYTES);
+    TEST_ASSERT_EQUAL_MEMORY(want_sha1, res.sha1, XC_SHA1_BYTES);
+}
+
+static void test_hash_fresh_install(void)
+{
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_install(&req, &res));
+    TEST_ASSERT_EQUAL_INT(XC_INSTALL_HASH_COMPUTED, res.hash);
+    expect_image_hash();
+    TEST_ASSERT_FALSE(res.hash_restarted);
+    TEST_ASSERT_TRUE(res.bytes_read >= image.size); /* every byte, the tables twice */
+    char md5[2 * XC_MD5_BYTES + 1];
+    xc_hex_lower(want_md5, XC_MD5_BYTES, md5);
+    node *m = find("E:/Games/Small Game/.xcat-installed");
+    TEST_ASSERT_NOT_NULL(m);
+    add_bytes(m, "", 1); /* NUL-terminate for strstr */
+    TEST_ASSERT_NOT_NULL(strstr((char *)m->data, md5));
+    TEST_ASSERT_NOT_NULL(strstr((char *)m->data, "verified=crc32\n"));
+}
+
+static void test_hash_expected_values(void)
+{
+    req.expect_md5 = want_md5;
+    req.expect_sha1 = want_sha1;
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_install(&req, &res));
+    TEST_ASSERT_EQUAL_INT(XC_INSTALL_HASH_MATCHED, res.hash);
+    node *m = find("E:/Games/Small Game/.xcat-installed");
+    TEST_ASSERT_NOT_NULL(m);
+    add_bytes(m, "", 1);
+    TEST_ASSERT_NOT_NULL(strstr((char *)m->data, "verified=crc32,image-hash\n"));
+}
+
+static void test_hash_mismatch_fails(void)
+{
+    uint8_t wrong[XC_SHA1_BYTES];
+    memcpy(wrong, want_sha1, sizeof wrong);
+    wrong[7] ^= 1U;
+    req.expect_md5 = want_md5;
+    req.expect_sha1 = wrong;
+    TEST_ASSERT_EQUAL_INT(XC_ERR_IMAGE_HASH, xc_install(&req, &res));
+    expect_image_hash(); /* the computed values are reported */
+    TEST_ASSERT_NULL(find("E:/Games/Small Game/.xcat-installed"));
+    TEST_ASSERT_NOT_NULL(find("E:/Games/Small Game/.xcat-journal"));
+}
+
+static void test_hash_survives_resume(void)
+{
+    req.checkpoint_bytes = 16384; /* also the distance between hash lines */
+    cancel_in = "media/intro.xmv";
+    cancel_in_reports = 3;
+    TEST_ASSERT_EQUAL_INT(XC_ERR_CANCELLED, xc_install(&req, &res));
+    const char *journal = "E:/Games/Small Game/.xcat-journal";
+    TEST_ASSERT_TRUE(count_lines(journal, "hash ", NULL) >= 1);
+    cancel_in = NULL;
+    uint64_t first_read = res.bytes_read;
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_install(&req, &res));
+    TEST_ASSERT_TRUE(res.resumed);
+    TEST_ASSERT_FALSE(res.hash_restarted);
+    expect_image_hash();
+    /* The resume read on from the saved state, not the whole image again. */
+    TEST_ASSERT_TRUE(res.bytes_read < image.size);
+    TEST_ASSERT_TRUE(first_read + res.bytes_read < 2 * image.size);
+}
+
+static void test_hash_restarts_when_needed(void)
+{
+    /* A v1.1-style journal without hash lines: the resume hashes from byte 0 again. */
+    cancel_after = 3;
+    TEST_ASSERT_EQUAL_INT(XC_ERR_CANCELLED, xc_install(&req, &res));
+    TEST_ASSERT_EQUAL_size_t(0, count_lines("E:/Games/Small Game/.xcat-journal", "hash ", NULL));
+    cancel_after = -1;
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_install(&req, &res));
+    TEST_ASSERT_TRUE(res.resumed);
+    TEST_ASSERT_TRUE(res.hash_restarted);
+    expect_image_hash();
+}
+
+static void test_hash_turned_off(void)
+{
+    req.no_hash = true;
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_install(&req, &res));
+    TEST_ASSERT_EQUAL_INT(XC_INSTALL_HASH_NONE, res.hash);
+    TEST_ASSERT_EQUAL_STRING("not asked for", res.hash_note);
 }
 
 static void test_invalid_arguments(void)
@@ -540,6 +648,13 @@ int main(int argc, char **argv)
     RUN_TEST(test_other_folders_are_never_touched);
     RUN_TEST(test_resume_inside_a_file);
     RUN_TEST(test_checkpoint_ignored_if_file_is_short);
+    hash_image();
+    RUN_TEST(test_hash_fresh_install);
+    RUN_TEST(test_hash_expected_values);
+    RUN_TEST(test_hash_mismatch_fails);
+    RUN_TEST(test_hash_survives_resume);
+    RUN_TEST(test_hash_restarts_when_needed);
+    RUN_TEST(test_hash_turned_off);
     RUN_TEST(test_invalid_arguments);
     int rc = UNITY_END();
     setUp(); /* frees the file system */

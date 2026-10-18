@@ -7,6 +7,7 @@ add_library(xcat
   src/error.c
   src/extract.c
   src/fatx.c
+  src/hash.c
   src/http.c
   src/http_client.c
   src/install.c
@@ -38,5 +39,5 @@ target_include_directories(xcat PRIVATE src)
 target_include_directories(xcat PUBLIC include)
 target_compile_features(xcat PUBLIC c_std_11)
 xcat_target_warnings(xcat)
-# Only tls.c (and, later, hash.c) use BearSSL (ADR 0005).
+# Only tls.c and hash.c use BearSSL (ADR 0005).
 target_link_libraries(xcat PRIVATE bearssl)

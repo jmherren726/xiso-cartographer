@@ -158,6 +158,14 @@ static xc_err next_file(run *r)
     return XC_OK;
 }
 
+static xc_err seen(run *r, uint64_t offset, const uint8_t *data, size_t len)
+{
+    if (r->opts->on_bytes == NULL || len == 0) {
+        return XC_OK;
+    }
+    return r->opts->on_bytes(r->opts->on_bytes_ctx, offset, data, len);
+}
+
 /* xc_source_data_fn: routes span bytes [offset, offset + len) to files; gaps are dropped. */
 static xc_err route(void *ctx, uint64_t offset, const uint8_t *data, size_t len)
 {
@@ -169,7 +177,7 @@ static xc_err route(void *ctx, uint64_t offset, const uint8_t *data, size_t len)
             return err;
         }
         if (r->cur >= r->end) {
-            return XC_OK; /* past the span's last file: nothing more to keep */
+            return seen(r, offset, data, len); /* past the span's last file: nothing to keep */
         }
         const xc_xdvdfs_entry *f = &r->l->files[r->cur];
         uint64_t at = f->offset + r->written;
@@ -177,6 +185,10 @@ static xc_err route(void *ctx, uint64_t offset, const uint8_t *data, size_t len)
             /* A coalesced gap (ADR 0004 §3): read, then discarded. */
             uint64_t gap = at - offset;
             size_t n = gap < len ? (size_t)gap : len;
+            err = seen(r, offset, data, n);
+            if (err != XC_OK) {
+                return err;
+            }
             offset += n;
             data += n;
             len -= n;
@@ -194,7 +206,10 @@ static xc_err route(void *ctx, uint64_t offset, const uint8_t *data, size_t len)
         }
         size_t n = left < len ? (size_t)left : len;
         r->crc = xc_crc32(r->crc, data, n);
-        err = put(r, data, n);
+        err = seen(r, offset, data, n);
+        if (err == XC_OK) {
+            err = put(r, data, n);
+        }
         if (err != XC_OK) {
             return err;
         }
@@ -312,6 +327,11 @@ xc_err xc_extract(const xc_source *src, const xc_xdvdfs_listing *listing, const 
         }
     }
 
+    /* Whole-image read: spans start where the last one ended (from whole_from), with no gap
+       limit; the image's tail after the last file is read at the end. */
+    bool whole = opts->whole_image;
+    uint64_t pos = opts->whole_from;
+    uint64_t gap_limit = whole ? UINT64_MAX : opts->coalesce_gap;
     size_t i = 0;
     while (err == XC_OK && i < listing->file_count) {
         const xc_xdvdfs_entry *f = &listing->files[i];
@@ -328,12 +348,15 @@ xc_err xc_extract(const xc_source *src, const xc_xdvdfs_listing *listing, const 
         /* A span: following files whose gap from the span's end is small. A file that starts
            before the end (overlapping data already read) starts a new span. */
         uint64_t start = f->offset + resumed(&r, i); /* only the rest of a resumed file */
+        if (whole && pos <= start) {
+            start = pos; /* overlapping files (start < pos) are read again on their own */
+        }
         uint64_t end = f->offset + f->size;
         size_t last = i + 1;
         while (last < listing->file_count) {
             const xc_xdvdfs_entry *g = &listing->files[last];
             if (!skipped(&r, last) && g->size > 0) {
-                if (g->offset < end || g->offset - end > opts->coalesce_gap) {
+                if (g->offset < end || g->offset - end > gap_limit) {
                     break;
                 }
                 end = g->offset + g->size;
@@ -341,7 +364,11 @@ xc_err xc_extract(const xc_source *src, const xc_xdvdfs_listing *listing, const 
             last++;
         }
         err = read_span(&r, i, last, start, end);
+        pos = end > pos ? end : pos;
         i = last;
+    }
+    if (err == XC_OK && whole && pos < src->size) {
+        err = read_span(&r, listing->file_count, listing->file_count, pos, src->size);
     }
 
     if (stats != NULL) {

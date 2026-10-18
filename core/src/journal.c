@@ -154,7 +154,7 @@ xc_err xc_journal_format_start(const xc_journal_id *id, const char *source_url, 
         return XC_ERR_INVALID_ARG;
     }
     wbuf w = {out, cap, 0, 0, false};
-    w_str(&w, "# xcat-journal v1.1");
+    w_str(&w, "# xcat-journal v1.2");
     w_end_line(&w);
     w_str(&w, "image ");
     w_fmt(&w, "%" PRIu64, id->image_size);
@@ -206,6 +206,34 @@ xc_err xc_journal_format_part(const char *path, uint32_t bytes, uint32_t crc, ch
     w_hex32(&w, crc);
     w_str(&w, " ");
     w_enc(&w, path);
+    w_end_line(&w);
+    return w_result(&w, len);
+}
+
+static void w_hex_bytes(wbuf *w, const uint8_t *b, size_t n)
+{
+    static const char digits[] = "0123456789ABCDEF";
+    for (size_t i = 0; i < n; i++) {
+        char two[2] = {digits[b[i] >> 4U], digits[b[i] & 0xFU]};
+        w_mem(w, two, 2);
+    }
+}
+
+xc_err xc_journal_format_hash(uint64_t offset, const uint8_t md5_state[XC_MD5_BYTES],
+                              const uint8_t sha1_state[XC_SHA1_BYTES], char *out, size_t cap,
+                              size_t *len)
+{
+    if (md5_state == NULL || sha1_state == NULL || offset % XC_HASH_BLOCK != 0 || out == NULL ||
+        len == NULL) {
+        return XC_ERR_INVALID_ARG;
+    }
+    wbuf w = {out, cap, 0, 0, false};
+    w_str(&w, "hash ");
+    w_fmt(&w, "%" PRIu64, offset);
+    w_str(&w, " ");
+    w_hex_bytes(&w, md5_state, XC_MD5_BYTES);
+    w_str(&w, " ");
+    w_hex_bytes(&w, sha1_state, XC_SHA1_BYTES);
     w_end_line(&w);
     return w_result(&w, len);
 }
@@ -277,6 +305,23 @@ static bool parse_hex32(const char *s, uint32_t *v)
 }
 
 /* §3.4, in place. False if malformed (a raw byte that should have been encoded, a bad %XX). */
+/* §3.5: exactly 2 * n upper-case hex digits. */
+static bool parse_hex_bytes(const char *s, uint8_t *b, size_t n)
+{
+    if (strlen(s) != 2 * n) {
+        return false;
+    }
+    for (size_t i = 0; i < n; i++) {
+        int hi = hex_digit(s[2 * i]);
+        int lo = hex_digit(s[2 * i + 1]);
+        if (hi < 0 || lo < 0) {
+            return false;
+        }
+        b[i] = (uint8_t)((unsigned)hi << 4U | (unsigned)lo);
+    }
+    return true;
+}
+
 static bool decode(char *s)
 {
     char *o = s;
@@ -399,6 +444,7 @@ static xc_err invalid(xc_journal_state *st, size_t files, const char *why)
     st->valid = false;
     st->why = why;
     st->done_count = 0;
+    st->has_hash = false;
     size_t n = files > 0 ? files : 1;
     memset(st->done, 0, sizeof *st->done * n);
     memset(st->part_bytes, 0, sizeof *st->part_bytes * n);
@@ -488,6 +534,19 @@ xc_err xc_journal_read(const char *data, size_t len, const xc_xdvdfs_listing *li
             size_t nf = split_fields(rec, f, 5);
             bool is_done = nf >= 1 && strcmp(f[0], "done") == 0;
             bool is_part = nf >= 1 && strcmp(f[0], "part") == 0;
+            if (nf >= 1 && strcmp(f[0], "hash") == 0 && minor >= 2) {
+                /* §5 (v1.2): the last one counts. */
+                uint64_t off = 0;
+                if (nf != 4 || !parse_dec(f[1], UINT64_MAX, &off) || off % XC_HASH_BLOCK != 0 ||
+                    off > image->image_size || !parse_hex_bytes(f[2], st->hash_md5, XC_MD5_BYTES) ||
+                    !parse_hex_bytes(f[3], st->hash_sha1, XC_SHA1_BYTES)) {
+                    err = invalid(st, files, "journal has a malformed record");
+                    break;
+                }
+                st->has_hash = true;
+                st->hash_offset = off;
+                continue;
+            }
             if (nf >= 1 && !is_done && !is_part) {
                 if (minor <= XC_JOURNAL_VERSION_MINOR) {
                     err = invalid(st, files, "journal has an unknown record");

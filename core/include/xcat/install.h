@@ -5,9 +5,9 @@
  * One whole install (docs/ARCHITECTURE.md §5): read the image's directory
  * tables, check that FATX can store it (ADR 0008), choose or resume the install
  * folder (docs/formats/journal.md), check free space, extract with the journal,
- * read every file back and compare its CRC-32, then write the marker and drop
- * the journal. The same code runs on the Xbox and in xcat-cli; the platform
- * provides file access through xc_install_io.
+ * hash the whole image when it's a trimmed xiso (journal.md §7), read every file
+ * back and compare its CRC-32, then write the marker and drop the journal. The same code runs on
+ * the Xbox and in xcat-cli; the platform provides file access through xc_install_io.
  */
 
 #include <stdbool.h>
@@ -17,6 +17,7 @@
 #include "xcat/error.h"
 #include "xcat/extract.h"
 #include "xcat/fatx.h"
+#include "xcat/hash.h"
 #include "xcat/sink.h"
 #include "xcat/source.h"
 
@@ -96,7 +97,18 @@ typedef struct xc_install_req {
     uint32_t checkpoint_bytes;       /* 0 = XC_INSTALL_CHECKPOINT; tests use small values */
     xc_install_progress_fn progress; /* may be NULL */
     void *progress_ctx;
+    /* Whole-image hashes (journal.md §7): computed for trimmed xisos unless `no_hash`. An
+       expected value that doesn't match fails the install with XC_ERR_IMAGE_HASH. */
+    bool no_hash;
+    const uint8_t *expect_md5;  /* XC_MD5_BYTES, or NULL */
+    const uint8_t *expect_sha1; /* XC_SHA1_BYTES, or NULL */
 } xc_install_req;
+
+typedef enum xc_install_hash {
+    XC_INSTALL_HASH_NONE,     /* not computed: hash_note says why */
+    XC_INSTALL_HASH_COMPUTED, /* md5 and sha1 hold the image's hashes; nothing to compare */
+    XC_INSTALL_HASH_MATCHED,  /* computed, and every expected value matched */
+} xc_install_hash;
 
 typedef struct xc_install_result {
     char folder[XC_INSTALL_MAX_PATH]; /* where the game went (or would have) */
@@ -108,7 +120,12 @@ typedef struct xc_install_result {
     size_t files_written;
     size_t file_count;
     uint64_t bytes_written;
-    uint64_t bytes_read;   /* from the source, including directory tables and gaps */
+    uint64_t bytes_read;       /* from the source, including directory tables and gaps */
+    xc_install_hash hash;      /* journal.md §7 */
+    const char *hash_note;     /* XC_INSTALL_HASH_NONE: why (a static string) */
+    bool hash_restarted;       /* a resume had to hash the image from its first byte again */
+    uint8_t md5[XC_MD5_BYTES]; /* when computed (also on XC_ERR_IMAGE_HASH) */
+    uint8_t sha1[XC_SHA1_BYTES];
     uint64_t space_needed; /* when XC_ERR_NO_SPACE */
     uint64_t space_free;
     char bad_file[256];     /* XC_ERR_VERIFY: the first file that didn't match */
@@ -122,6 +139,7 @@ typedef struct xc_install_result {
 
 /*
  * Runs the install. Errors: XC_ERR_NOT_INSTALLABLE (result->problems), XC_ERR_NO_SPACE,
+ * XC_ERR_IMAGE_HASH (an expected MD5 or SHA-1 didn't match; the journal is kept),
  * XC_ERR_VERIFY (result->bad_file; the journal is kept, so a retry rewrites only what's
  * needed), XC_ERR_FOLDER (no free folder name), XC_ERR_CANCELLED, and whatever the source
  * or the I/O return. Anything but success can be resumed by calling again with the same

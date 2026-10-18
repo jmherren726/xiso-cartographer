@@ -52,7 +52,8 @@ static int usage(void)
         "       xcat-cli ntp [--port <n>] [--timeout <ms>] [--floor <unix-seconds>] [server]\n"
         "net options: --timeout <ms>, --attempts <n>, --credentials <file>,\n"
         "             --ca-file <pem> (trust these CAs instead of the built-in ones),\n"
-        "             --now <unix-seconds> (for tests: the time certificates are checked at)\n",
+        "             --now <unix-seconds> (for tests: the time certificates are checked at)\n"
+        "install options: --md5 <hex>, --sha1 <hex> (the image's expected hashes)\n",
         xc_version_string());
     return 2;
 }
@@ -456,6 +457,11 @@ typedef struct net_opts {
     const char *ca_path; /* replaces the built-in CA bundle (ADR 0012 §4) */
     bool has_now;        /* tests only: check certificates at this time instead of the clock's */
     unsigned long now;
+    /* install only: the image's expected hashes (journal.md §7) */
+    bool has_md5;
+    uint8_t md5[XC_MD5_BYTES];
+    bool has_sha1;
+    uint8_t sha1[XC_SHA1_BYTES];
 } net_opts;
 
 /* Parses leading "--name value" options; returns the index of the first other argument or -1. */
@@ -480,6 +486,10 @@ static int parse_net_opts(int argc, char **argv, net_opts *o)
             o->has_now = true;
         } else if (strcmp(argv[i], "--checkpoint") == 0) {
             ok = parse_uint(argv[i + 1], 0x7FFFFFFFUL, &o->checkpoint) && o->checkpoint >= 4096U;
+        } else if (strcmp(argv[i], "--md5") == 0 && !o->has_md5) {
+            ok = o->has_md5 = xc_hex_parse(argv[i + 1], o->md5, XC_MD5_BYTES);
+        } else if (strcmp(argv[i], "--sha1") == 0 && !o->has_sha1) {
+            ok = o->has_sha1 = xc_hex_parse(argv[i + 1], o->sha1, XC_SHA1_BYTES);
         }
         if (!ok) {
             return -1;
@@ -920,6 +930,22 @@ static bool is_url(const char *s)
            strncmp(s, "HTTP://", 7) == 0 || strncmp(s, "HTTPS://", 8) == 0;
 }
 
+/* journal.md §7: the whole-image hashes, or why there are none. */
+static void print_image_hash(const xc_install_result *r)
+{
+    if (r->hash == XC_INSTALL_HASH_NONE) {
+        (void)printf("image not hashed: %s\n", r->hash_note != NULL ? r->hash_note : "?");
+        return;
+    }
+    char md5[2 * XC_MD5_BYTES + 1];
+    char sha1[2 * XC_SHA1_BYTES + 1];
+    xc_hex_lower(r->md5, XC_MD5_BYTES, md5);
+    xc_hex_lower(r->sha1, XC_SHA1_BYTES, sha1);
+    (void)printf("image md5 %s sha1 %s (%s%s)\n", md5, sha1,
+                 r->hash == XC_INSTALL_HASH_MATCHED ? "matches what was expected" : "computed",
+                 r->hash_restarted ? "; hashed from the start again" : "");
+}
+
 static int cmd_install(int argc, char **argv)
 {
     net_opts o;
@@ -988,6 +1014,8 @@ static int cmd_install(int argc, char **argv)
     req.checkpoint_bytes = (uint32_t)o.checkpoint;
     req.progress = install_progress;
     req.progress_ctx = &ui;
+    req.expect_md5 = o.has_md5 ? o.md5 : NULL;
+    req.expect_sha1 = o.has_sha1 ? o.sha1 : NULL;
     static xc_install_result r;
     err = buf != NULL ? xc_install(&req, &r) : XC_ERR_NOMEM;
     uint64_t ms = clock.now_ms(clock.ctx) - ui.start_ms;
@@ -1007,7 +1035,11 @@ static int cmd_install(int argc, char **argv)
             (void)printf("%zu file%s continued from a checkpoint (%" PRIu64 " bytes kept)\n",
                          r.files_continued, r.files_continued == 1 ? "" : "s", r.bytes_continued);
         }
+        print_image_hash(&r);
     } else {
+        if (err == XC_ERR_IMAGE_HASH) {
+            print_image_hash(&r);
+        }
         if (r.resumed || r.files_written > 0) {
             (void)fprintf(stderr,
                           "  %zu files are done in %s; running the same install again resumes\n",

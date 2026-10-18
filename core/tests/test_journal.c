@@ -102,7 +102,7 @@ static void test_round_trip(void)
     TEST_ASSERT_EQUAL_UINT64(0x18300000U, st.id.partition_offset);
     /* The lines look as journal.md §1 shows them. */
     buf[used] = '\0';
-    TEST_ASSERT_EQUAL_INT(0, strncmp(buf, "# xcat-journal v1.1 *", 21));
+    TEST_ASSERT_EQUAL_INT(0, strncmp(buf, "# xcat-journal v1.2 *", 21));
     TEST_ASSERT_NOT_NULL(strstr(buf, "\nimage 7825162240 405798912 "));
     TEST_ASSERT_NOT_NULL(strstr(buf, "\nvalidators \"5e1f-61a2c3\" Wed,%2014%20Oct%202026"));
     TEST_ASSERT_NOT_NULL(strstr(buf, "\nsource http://192.168.1.20:8080/x%20y.iso *"));
@@ -275,28 +275,112 @@ static void test_invalid_records(void)
 
     used = 0;
     start();
-    raw_line("hash sha1 0123");
+    raw_line("sig sha1 0123");
     expect_invalid("unknown record");
 }
 
 static void test_newer_minor_records_are_skipped(void)
 {
     start();
-    /* Rewrite the header as v1.2, then add a record type a v1.1 reader doesn't know. */
+    /* Rewrite the header as v1.3, then add a record type a v1.2 reader doesn't know. */
     char rest[4096];
     char *nl = memchr(buf, '\n', used);
     TEST_ASSERT_NOT_NULL(nl);
     size_t tail = used - (size_t)(nl + 1 - buf);
     memcpy(rest, nl + 1, tail);
     used = 0;
-    raw_line("# xcat-journal v1.2");
+    raw_line("# xcat-journal v1.3");
     memcpy(buf + used, rest, tail);
     used += tail;
-    raw_line("hash sha1 0123");
+    raw_line("sig sha1 0123");
     done(0, 7U);
     read_back(used);
     TEST_ASSERT_TRUE(st.valid);
     TEST_ASSERT_EQUAL_size_t(1, st.done_count);
+}
+
+static void hash_line(uint64_t offset, uint8_t fill)
+{
+    uint8_t md5[XC_MD5_BYTES];
+    uint8_t sha1[XC_SHA1_BYTES];
+    memset(md5, fill, sizeof md5);
+    memset(sha1, (uint8_t)(fill + 1U), sizeof sha1);
+    size_t n = 0;
+    TEST_ASSERT_EQUAL_INT(
+        XC_OK, xc_journal_format_hash(offset, md5, sha1, buf + used, sizeof buf - used, &n));
+    used += n;
+}
+
+static void test_hash_records(void)
+{
+    used = 0;
+    start();
+    read_back(used);
+    TEST_ASSERT_TRUE(st.valid);
+    TEST_ASSERT_FALSE(st.has_hash);
+
+    done(0, 7U);
+    hash_line(128, 0xA1);
+    hash_line(4096, 0x3C); /* the last one counts */
+    read_back(used);
+    TEST_ASSERT_TRUE(st.valid);
+    TEST_ASSERT_TRUE(st.has_hash);
+    TEST_ASSERT_EQUAL_UINT64(4096, st.hash_offset);
+    TEST_ASSERT_EACH_EQUAL_HEX8(0x3C, st.hash_md5, XC_MD5_BYTES);
+    TEST_ASSERT_EACH_EQUAL_HEX8(0x3D, st.hash_sha1, XC_SHA1_BYTES);
+    TEST_ASSERT_EQUAL_size_t(1, st.done_count);
+
+    /* The format: upper-case hex of fixed length. */
+    used = 0;
+    hash_line(64, 0xAB);
+    TEST_ASSERT_EQUAL_STRING_LEN("hash 64 ABABABABABABABABABABABABABABABAB "
+                                 "ACACACACACACACACACACACACACACACACACACACAC *",
+                                 buf, 5 + 3 + 32 + 1 + 40 + 2);
+
+    /* Offsets must be multiples of 64 and inside the image; states exactly their length. */
+    char past[128];
+    (void)snprintf(past, sizeof past, "hash %llu %s %s",
+                   (unsigned long long)(image.image_size + 64U - image.image_size % 64U),
+                   "00000000000000000000000000000000", "0000000000000000000000000000000000000000");
+    const char *const malformed[] = {
+        "hash 100 00000000000000000000000000000000 0000000000000000000000000000000000000000",
+        past,
+        "hash 64 0000000000000000000000000000000 0000000000000000000000000000000000000000",
+        "hash 64 00000000000000000000000000000000 00000000000000000000000000000000000000000",
+        "hash 64 abcdef00000000000000000000000000 0000000000000000000000000000000000000000",
+        "hash 064 00000000000000000000000000000000 0000000000000000000000000000000000000000",
+        "hash 64 00000000000000000000000000000000",
+    };
+    for (size_t i = 0; i < sizeof malformed / sizeof malformed[0]; i++) {
+        used = 0;
+        start();
+        raw_line(malformed[i]);
+        expect_invalid("malformed");
+    }
+
+    uint8_t z[XC_SHA1_BYTES] = {0};
+    size_t n = 0;
+    TEST_ASSERT_EQUAL_INT(XC_ERR_INVALID_ARG,
+                          xc_journal_format_hash(65, z, z, buf, sizeof buf, &n));
+    TEST_ASSERT_EQUAL_INT(XC_ERR_LIMIT, xc_journal_format_hash(64, z, z, buf, 20, &n));
+}
+
+static void test_hash_in_old_journal_is_unknown(void)
+{
+    /* A v1.1 journal can't have hash lines: one there is an unknown record. */
+    used = 0;
+    start();
+    char rest[4096];
+    char *nl = memchr(buf, '\n', used);
+    TEST_ASSERT_NOT_NULL(nl);
+    size_t tail = used - (size_t)(nl + 1 - buf);
+    memcpy(rest, nl + 1, tail);
+    used = 0;
+    raw_line("# xcat-journal v1.1");
+    memcpy(buf + used, rest, tail);
+    used += tail;
+    hash_line(64, 1);
+    expect_invalid("unknown record");
 }
 
 static void test_bad_headers_and_sizes(void)
@@ -421,6 +505,8 @@ int main(void)
     RUN_TEST(test_newer_minor_records_are_skipped);
     RUN_TEST(test_bad_headers_and_sizes);
     RUN_TEST(test_part_records);
+    RUN_TEST(test_hash_records);
+    RUN_TEST(test_hash_in_old_journal_is_unknown);
     RUN_TEST(test_format_limits);
     return UNITY_END();
 }

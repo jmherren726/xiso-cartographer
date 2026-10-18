@@ -72,7 +72,8 @@ Until the real UI arrives (M8), the app installs everything it's given, one afte
 Each install, network or local, follows the same steps ([ARCHITECTURE.md §5](ARCHITECTURE.md#5-install-flow)):
 - It checks that FATX can store every file under `E:\Games\<title>` ([ADR 0008](adr/0008-refuse-games-fatx-cant-store.md)) and that there's enough free space.
 - It writes the files with progress and a **journal**, so a pulled cable is retried and a **power cut resumes** on the next start instead of starting over ([journal.md](formats/journal.md)).
-- It **reads every installed file back and compares its CRC-32** with what was received, then writes `E:\Games\<title>\.xcat-installed`.
+- For a trimmed xiso it reads the image front to back in full and computes its **MD5 and SHA-1**, which it logs (from M6 they're compared with archive.org's; [journal.md §7](formats/journal.md#7-verification)). Full-disc layouts are checked by size and CRC-32 only.
+- It **reads every installed file back and compares its CRC-32** with what was received, then writes `E:\Games\<title>\.xcat-installed`, with the hashes when there are some.
 
 A title that's already installed gets a numbered folder (`small (2)`). An unfinished install of the same image is resumed in its own folder; one of a different image is left alone. The run ends with "Done: N of M image(s) installed and verified." Everything on screen is also appended to `E:\xcat\install.log`.
 

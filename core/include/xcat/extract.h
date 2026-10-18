@@ -65,6 +65,21 @@ typedef struct xc_extract_opts {
      */
     const uint32_t *resume_bytes;
     const uint32_t *resume_crc;
+    /*
+     * Whole-image read (ADR 0004 §5, journal.md §7): when `whole_image`, the source is read
+     * front to back from `whole_from` to its end in one pass, gaps of any size and the bytes
+     * of skipped files included (read, not written). Files that overlap still start a new
+     * span, so `on_bytes` would then see an offset go backwards.
+     */
+    bool whole_image;
+    uint64_t whole_from;
+    /*
+     * Called with every byte read from the source, in the order read, each piece before the
+     * file it belongs to is written or ended (so at file_done and checkpoint, the bytes seen
+     * end exactly where that file's data ends). Non-OK stops the extraction. May be NULL.
+     */
+    xc_err (*on_bytes)(void *ctx, uint64_t offset, const uint8_t *data, size_t len);
+    void *on_bytes_ctx;
 } xc_extract_opts;
 
 typedef struct xc_extract_stats {
