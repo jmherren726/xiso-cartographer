@@ -61,6 +61,8 @@ void xc_host_dir_sink_close(xc_host_dir_sink *ds);
 xc_err xc_host_net_startup(void);
 void xc_host_net_cleanup(void);
 void xc_host_net(xc_net *net);
+/* One UDP request and answer (xc_udp, for SNTP), after xc_host_net_startup(). */
+void xc_host_udp(xc_udp *udp);
 
 /* Monotonic milliseconds and sleep (xcat/net.h). */
 void xc_host_clock(xc_clock *clock);

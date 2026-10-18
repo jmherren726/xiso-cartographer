@@ -41,6 +41,7 @@ typedef enum xc_err {
     XC_ERR_TLS_NO_TIME,     /* no acceptable time for certificate checks (ADR 0012 §5) */
     XC_ERR_TLS_NO_RANDOM,   /* not enough randomness to start TLS (ADR 0012 §6) */
     XC_ERR_TLS_NOT_TLS,     /* the server answered, but not in TLS (an http:// server?) */
+    XC_ERR_NTP,             /* the time server's answer was refused (docs/formats/sntp.md §4) */
     XC_ERR_COUNT_           /* number of codes; not an error */
 } xc_err;
 

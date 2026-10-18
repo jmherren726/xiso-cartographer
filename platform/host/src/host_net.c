@@ -332,3 +332,102 @@ void xc_host_net(xc_net *net)
     net->close = net_close;
     net->ctx = NULL;
 }
+
+/* --- UDP ------------------------------------------------------------------------------ */
+
+/* Sends `req` on a UDP socket connected to `ai` (so only that address's datagrams arrive) and
+ * waits for one answer. */
+static xc_err udp_one(const struct addrinfo *ai, const void *req, size_t req_len, void *resp,
+                      size_t cap, uint32_t timeout_ms, size_t *got, uint32_t *rtt_ms)
+{
+    sock_t s = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+    if (s == BAD_SOCK) {
+        return XC_ERR_NET_IO;
+    }
+#if defined(_WIN32)
+    bool ok = set_nonblocking(s) && connect(s, ai->ai_addr, (int)ai->ai_addrlen) == 0 &&
+              send(s, req, (int)req_len, 0) == (int)req_len;
+#else
+    bool ok = set_nonblocking(s) && connect(s, ai->ai_addr, ai->ai_addrlen) == 0 &&
+              send(s, req, req_len, 0) == (ssize_t)req_len;
+#endif
+    if (!ok) {
+        (void)CLOSE_SOCK(s);
+        return XC_ERR_NET_IO;
+    }
+    uint64_t sent = clock_now_ms(NULL);
+    uint64_t deadline = sent + timeout_ms;
+    int chunk = cap > (size_t)INT_MAX ? INT_MAX : (int)cap;
+    xc_err err = XC_ERR_NET_TIMEOUT;
+    for (;;) {
+        uint64_t now = clock_now_ms(NULL);
+        if (now >= deadline) {
+            break;
+        }
+        err = wait_sock(s, WAIT_READ, (uint32_t)(deadline - now));
+        if (err != XC_OK) {
+            break;
+        }
+#if defined(_WIN32)
+        int n = recv(s, resp, chunk, 0);
+#else
+        ssize_t n = recv(s, resp, (size_t)chunk, 0);
+#endif
+        if (n >= 0) {
+            *got = (size_t)n;
+            *rtt_ms = (uint32_t)(clock_now_ms(NULL) - sent);
+            break;
+        }
+#if defined(_WIN32)
+        if (WSAGetLastError() == WSAEMSGSIZE) { /* longer than cap: the start was copied */
+            *got = cap;
+            *rtt_ms = (uint32_t)(clock_now_ms(NULL) - sent);
+            break;
+        }
+#endif
+        if (!interrupted() && !would_block()) {
+            err = XC_ERR_NET_IO; /* e.g. the host answered "port unreachable" */
+            break;
+        }
+        err = XC_ERR_NET_TIMEOUT;
+    }
+    (void)CLOSE_SOCK(s);
+    return err;
+}
+
+static xc_err udp_exchange(void *ctx, const char *host, uint16_t port, const void *req,
+                           size_t req_len, void *resp, size_t cap, uint32_t timeout_ms, size_t *got,
+                           uint32_t *rtt_ms)
+{
+    (void)ctx;
+    *got = 0;
+    *rtt_ms = 0;
+    char port_str[8];
+    (void)snprintf(port_str, sizeof port_str, "%u", (unsigned)port);
+    struct addrinfo hints;
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_DGRAM;
+    hints.ai_protocol = IPPROTO_UDP;
+    struct addrinfo *list = NULL;
+    if (getaddrinfo(host, port_str, &hints, &list) != 0 || list == NULL) {
+        return XC_ERR_NET_DNS;
+    }
+    /* IPv4 first, like the console (IPv4 only) and like net_connect. */
+    const struct addrinfo *pick = list;
+    for (const struct addrinfo *ai = list; ai != NULL; ai = ai->ai_next) {
+        if (ai->ai_family == AF_INET) {
+            pick = ai;
+            break;
+        }
+    }
+    xc_err err = udp_one(pick, req, req_len, resp, cap, timeout_ms, got, rtt_ms);
+    freeaddrinfo(list);
+    return err;
+}
+
+void xc_host_udp(xc_udp *udp)
+{
+    udp->exchange = udp_exchange;
+    udp->ctx = NULL;
+}
