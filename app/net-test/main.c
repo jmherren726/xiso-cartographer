@@ -37,7 +37,6 @@
 #define CONFIG "E:\\xcat\\net-test.txt"
 #define LOG "E:\\xcat\\net-test.log"
 #define SAVE "E:\\xcat\\net-test.bin"
-#define CA_FILE "E:\\Apps\\xcat\\cacert.pem"
 #define RECV_BUF_SIZE ((size_t)256 * 1024)
 #define WRITE_BUF_SIZE ((size_t)1024 * 1024) /* large writes: FATX is slow with small ones */
 #define DEFAULT_ATTEMPTS 40U
@@ -215,24 +214,6 @@ static uint64_t mbps_tenths(uint64_t bytes, uint64_t ms)
 
 /* "2026-10-16 14:05:00" (UTC) from Unix seconds; days to a civil date as in H. Hinnant's
  * "chrono-Compatible Low-Level Date Algorithms". */
-static void utc_date(char *buf, size_t size, int64_t t)
-{
-    int64_t days = t >= 0 ? t / 86400 : (t - 86399) / 86400;
-    int64_t secs = t - days * 86400;
-    int64_t z = days + 719468;
-    int64_t era = (z >= 0 ? z : z - 146096) / 146097;
-    int64_t doe = z - era * 146097;
-    int64_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    int64_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    int64_t mp = (5 * doy + 2) / 153;
-    int64_t d = doy - (153 * mp + 2) / 5 + 1;
-    int64_t m = mp < 10 ? mp + 3 : mp - 9;
-    int64_t y = yoe + era * 400 + (m <= 2 ? 1 : 0);
-    (void)snprintf(buf, size, "%04lld-%02lld-%02lld %02lld:%02lld:%02lld UTC", (long long)y,
-                   (long long)m, (long long)d, (long long)(secs / 3600),
-                   (long long)(secs / 60 % 60), (long long)(secs % 60));
-}
-
 static bool flush_save(run *r)
 {
     if (r->wlen == 0) {
@@ -337,34 +318,16 @@ static bool is_https(const char *url)
     return strncmp(url, "https://", 8) == 0 || strncmp(url, "HTTPS://", 8) == 0;
 }
 
-static char *read_ca_file(size_t *len)
+/* xc_nx_https_start reports each step through this: to the screen and the log. */
+static void say(const char *line)
 {
-    HANDLE h = CreateFileA(CA_FILE, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
-                           FILE_ATTRIBUTE_NORMAL, NULL);
-    if (h == INVALID_HANDLE_VALUE) {
-        return NULL;
-    }
-    char *data = malloc(XC_TLS_MAX_ANCHOR_FILE + 1);
-    DWORD got = 0;
-    bool ok = data != NULL && ReadFile(h, data, XC_TLS_MAX_ANCHOR_FILE + 1, &got, NULL);
-    CloseHandle(h);
-    if (!ok) {
-        free(data);
-        return NULL;
-    }
-    *len = got; /* one byte more than allowed is caught by the parser's limit */
-    return data;
+    out("%s", line);
 }
 
 /* Sets up TLS over `tcp` and reports each step; false (after saying why) if it can't. */
 static bool tls_setup(const config *cfg, const xc_net *tcp, const xc_clock *clock, xc_net *tls_net,
                       xc_tls **tls)
 {
-    static xc_entropy_pool *pool;
-    static xc_entropy entropy;
-    static xc_wallclock wallclock;
-    static xc_tls_anchors *anchors;
-
     xc_tls_speed sp;
     out("Cipher speed on this CPU (%u MiB in memory, no network)...\n",
         (unsigned)(CIPHER_TEST_BYTES >> 20U));
@@ -375,96 +338,8 @@ static bool tls_setup(const config *cfg, const xc_net *tcp, const xc_clock *cloc
         tenths(b, sizeof b, sp.aes128_gcm_kbs / 100U);
         out("  ChaCha20-Poly1305 %s MB/s, AES-128-GCM %s MB/s\n", a, b);
     }
-
-    char date[40];
-    char floor_date[40];
-    utc_date(date, sizeof date, xc_nx_console_time());
-    utc_date(floor_date, sizeof floor_date, xc_nx_build_time());
-    out("Console clock %s (this build: %s)\n", date, floor_date);
-
-    xc_nx_entropy_stats st;
-    xc_err err = xc_entropy_pool_create(&pool);
-    if (err == XC_OK) {
-        err = xc_nx_entropy_gather(pool, &st);
-        out("Randomness: %u timer samples, %u bits credited, %u of 256 low bytes seen, "
-            "%llu-%llu cycles; seed file %s, %s\n",
-            st.samples, st.bits, st.distinct_low_bytes, (unsigned long long)st.min_cycles,
-            (unsigned long long)st.max_cycles, st.seed_read ? "read" : "none yet",
-            st.seed_written ? "renewed" : "NOT written");
-    }
-    if (err != XC_OK) {
-        out("Not enough randomness for TLS: %s\n", xc_err_str(err));
-        return false;
-    }
-    xc_entropy_pool_source(pool, &entropy);
-
-    /* The time for certificate checks (docs/formats/sntp.md §6, ADR 0012 §5). The nonce comes
-     * from the entropy pool, so this comes after it. */
-    static xc_wallclock console;
-    static xc_time_source time_src;
-    static xc_udp udp;
-    xc_nx_wallclock(&console);
-    xc_nx_udp(&udp);
-    const char *server = cfg->ntp[0] != '\0' ? cfg->ntp : NULL;
-    err = xc_time_choose(&time_src, &udp, clock, &entropy, server, XC_SNTP_PORT,
-                         XC_SNTP_DEFAULT_TIMEOUT_MS, &console, xc_nx_build_time());
-    if (time_src.kind == XC_TIME_NTP) {
-        int64_t ntp_ms =
-            time_src.ntp.unix_ms + (int64_t)(clock->now_ms(clock->ctx) - time_src.ntp.mono_ms);
-        int64_t off_s = xc_nx_console_time() - ntp_ms / 1000;
-        utc_date(date, sizeof date, ntp_ms / 1000);
-        out("Time from NTP (%s): %s, stratum %u, round trip %lu ms, %u request%s; the console's "
-            "clock is %+lld s off\n",
-            server, date, (unsigned)time_src.ntp.stratum, (unsigned long)time_src.ntp.rtt_ms,
-            time_src.ntp.attempts, time_src.ntp.attempts == 1 ? "" : "s", (long long)off_s);
-    } else {
-        if (server == NULL) {
-            out("NTP is off (ntp=off).\n");
-        } else {
-            const xc_sntp_failure *f = &time_src.failure;
-            out("NTP (%s) failed after %u request%s: %s%s%s%s%s\n", server, f->attempts,
-                f->attempts == 1 ? "" : "s", xc_err_str(f->err), f->why != NULL ? ": " : "",
-                f->why != NULL ? f->why : "", f->kiss[0] != '\0' ? " " : "", f->kiss);
-        }
-        if (err != XC_OK) {
-            out("%s. The console's clock is earlier than this XBE's build, so it was reset: set "
-                "the date and time in the dashboard's settings, then run the test again.\n",
-                xc_err_str(err));
-            return false;
-        }
-        out("Time from the console's clock (not earlier than this build)\n");
-    }
-    xc_time_wallclock(&time_src, &wallclock);
-
-    size_t len = 0;
-    char *pem = read_ca_file(&len);
-    size_t bad = 0;
-    if (pem != NULL) {
-        err = xc_tls_anchors_parse(pem, len, &anchors, &bad);
-        free(pem);
-        if (err != XC_OK) {
-            out("%s can't be used (%s, certificate %u). Fix or delete it.\n", CA_FILE,
-                xc_err_str(err), (unsigned)bad);
-            return false;
-        }
-        out("Trusting the %u certificates in %s\n", (unsigned)xc_tls_anchors_count(anchors),
-            CA_FILE);
-    } else {
-        err = xc_tls_anchors_builtin(&anchors);
-        if (err != XC_OK) {
-            out("Built-in CA bundle: %s\n", xc_err_str(err));
-            return false;
-        }
-        out("Trusting the %u built-in roots (Mozilla, %s)\n",
-            (unsigned)xc_tls_anchors_count(anchors), xc_tls_builtin_date());
-    }
-    xc_tls_config tc = {tcp, anchors, &entropy, &wallclock};
-    err = xc_tls_create(&tc, tls, tls_net);
-    if (err != XC_OK) {
-        out("TLS: %s\n", xc_err_str(err));
-        return false;
-    }
-    return true;
+    xc_nx_https_opts o = {tcp, clock, cfg->ntp[0] != '\0' ? cfg->ntp : NULL, say};
+    return xc_nx_https_start(&o, tls_net, tls) == XC_OK;
 }
 
 static void tls_report(const xc_tls *tls)
