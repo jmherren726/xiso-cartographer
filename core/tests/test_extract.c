@@ -117,6 +117,30 @@ static xc_xdvdfs_entry file_at(const char *path, uint64_t offset, uint32_t size)
     return e;
 }
 
+/* on_bytes: checks that the bytes come in order with the source's content. */
+typedef struct seen_log {
+    uint64_t next;   /* where the next piece must start */
+    uint64_t total;  /* bytes seen */
+    bool backwards;  /* a piece started somewhere else */
+    bool wrong_data; /* a piece didn't hold the source's bytes */
+} seen_log;
+
+static seen_log seen;
+
+static xc_err on_bytes(void *ctx, uint64_t offset, const uint8_t *data, size_t len)
+{
+    seen_log *s = ctx;
+    if (offset != s->next) {
+        s->backwards = true;
+    }
+    for (size_t i = 0; i < len; i++) {
+        s->wrong_data = s->wrong_data || data[i] != pattern((size_t)offset + i);
+    }
+    s->next = offset + len;
+    s->total += len;
+    return XC_OK;
+}
+
 static xc_err extract(xc_xdvdfs_entry *files, size_t nfiles, xc_xdvdfs_entry *dirs, size_t ndirs,
                       const xc_extract_opts *o, xc_extract_stats *st)
 {
@@ -151,6 +175,73 @@ static void assert_content(const mfile *f, uint64_t offset)
 }
 
 /* --- tests -------------------------------------------------------------------- */
+
+static xc_extract_opts whole_opts(uint64_t from)
+{
+    xc_extract_opts o = opts(16); /* tiny gap limit: the whole-image mode must ignore it */
+    o.whole_image = true;
+    o.whole_from = from;
+    o.on_bytes = on_bytes;
+    o.on_bytes_ctx = &seen;
+    memset(&seen, 0, sizeof seen);
+    seen.next = from;
+    return o;
+}
+
+static void test_whole_image_reads_every_byte_in_order(void)
+{
+    /* Gaps far over the limit, a skipped file in the middle, nothing after 30000. */
+    xc_xdvdfs_entry files[] = {file_at("one", 2048, 500), file_at("skip", 8192, 4000),
+                               file_at("three", 20000, 3000), file_at("empty", 0, 0),
+                               file_at("four", 27000, 3000)};
+    bool skip[] = {false, true, false, false, false};
+    xc_extract_opts o = whole_opts(0);
+    o.skip = skip;
+    xc_extract_stats st;
+    TEST_ASSERT_EQUAL_INT(XC_OK, extract(files, 5, NULL, 0, &o, &st));
+    TEST_ASSERT_FALSE(seen.backwards);
+    TEST_ASSERT_FALSE(seen.wrong_data);
+    TEST_ASSERT_EQUAL_UINT64(SRC_SIZE, seen.total); /* the tail after the last file too */
+    TEST_ASSERT_EQUAL_UINT64(SRC_SIZE, st.bytes_read);
+    TEST_ASSERT_EQUAL_size_t(4, ms.nfiles); /* "skip" isn't written */
+    assert_content(&ms.files[0], 2048);
+    assert_content(&ms.files[1], 20000);
+    assert_content(&ms.files[3], 27000);
+    TEST_ASSERT_EQUAL_size_t(2, st.spans); /* one through every file, one for the tail */
+}
+
+static void test_whole_image_from_an_offset(void)
+{
+    /* A resume (journal.md §6.7): "one" is done, the hash state stands at 2496. */
+    xc_xdvdfs_entry files[] = {file_at("one", 2048, 500), file_at("two", 6144, 100)};
+    bool skip[] = {true, false};
+    xc_extract_opts o = whole_opts(2496);
+    o.skip = skip;
+    TEST_ASSERT_EQUAL_INT(XC_OK, extract(files, 2, NULL, 0, &o, NULL));
+    TEST_ASSERT_FALSE(seen.backwards);
+    TEST_ASSERT_EQUAL_UINT64(SRC_SIZE - 2496U, seen.total);
+    TEST_ASSERT_EQUAL_size_t(1, ms.nfiles);
+    assert_content(&ms.files[0], 6144);
+
+    /* Everything done: only the rest of the image is read. */
+    bool all[] = {true, true};
+    o = whole_opts(60000);
+    o.skip = all;
+    TEST_ASSERT_EQUAL_INT(XC_OK, extract(files, 2, NULL, 0, &o, NULL));
+    TEST_ASSERT_EQUAL_UINT64(SRC_SIZE - 60000U, seen.total);
+    TEST_ASSERT_EQUAL_size_t(0, ms.nfiles);
+}
+
+static void test_whole_image_with_overlap_goes_back(void)
+{
+    /* Two entries sharing data can't both be fed by one forward read. */
+    xc_xdvdfs_entry files[] = {file_at("a", 4096, 3000), file_at("b", 5000, 1000)};
+    xc_extract_opts o = whole_opts(0);
+    TEST_ASSERT_EQUAL_INT(XC_OK, extract(files, 2, NULL, 0, &o, NULL));
+    TEST_ASSERT_TRUE(seen.backwards);
+    assert_content(&ms.files[0], 4096);
+    assert_content(&ms.files[1], 5000);
+}
 
 static void test_dirs_first_then_files_with_correct_bytes(void)
 {
@@ -530,6 +621,9 @@ int main(void)
         src_data[i] = pattern(i);
     }
     UNITY_BEGIN();
+    RUN_TEST(test_whole_image_reads_every_byte_in_order);
+    RUN_TEST(test_whole_image_from_an_offset);
+    RUN_TEST(test_whole_image_with_overlap_goes_back);
     RUN_TEST(test_dirs_first_then_files_with_correct_bytes);
     RUN_TEST(test_small_gap_is_read_through_in_one_span);
     RUN_TEST(test_large_gap_starts_a_new_span);

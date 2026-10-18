@@ -1,7 +1,7 @@
 /*
  * One install, start to finish: docs/ARCHITECTURE.md §5, ADR 0004 (stream-extract,
  * resume), ADR 0008 (FATX rules, folder names) and docs/formats/journal.md
- * (§2 life cycle, §6 resuming, §7 verification).
+ * (§2 life cycle, §6 resuming, §7 verification and whole-image hashes).
  */
 #include "xcat/install.h"
 
@@ -10,6 +10,7 @@
 #include <string.h>
 
 #include "xcat/crc32.h"
+#include "xcat/hash.h"
 #include "xcat/journal.h"
 #include "xcat/version.h"
 #include "xcat/xdvdfs.h"
@@ -75,6 +76,12 @@ typedef struct job {
     char line[JOURNAL_LINE_CAP];
     char path[XC_INSTALL_MAX_PATH]; /* scratch */
     xc_install_progress p;
+    /* journal.md §7: the whole-image hash, fed by the extractor's on_bytes */
+    xc_image_hash *hash;      /* NULL: not hashing */
+    bool hash_broken;         /* bytes came out of order (overlapping files) */
+    uint64_t hash_next;       /* the image offset the next byte must have */
+    uint64_t hash_saved;      /* offset of the last `hash` line written */
+    uint32_t hash_save_every; /* image bytes between `hash` lines */
 } job;
 
 /* dir + sep + rel, with rel's '/' turned into sep. False if it doesn't fit. */
@@ -188,6 +195,42 @@ static bool on_extract_progress(void *ctx, const xc_extract_progress *ep)
     return report(j);
 }
 
+/* journal.md §7: every image byte, in order, goes through the hash. */
+static xc_err on_bytes(void *ctx, uint64_t offset, const uint8_t *data, size_t len)
+{
+    job *j = ctx;
+    if (j->hash == NULL || j->hash_broken) {
+        return XC_OK;
+    }
+    if (offset != j->hash_next) {
+        j->hash_broken = true; /* files overlap: a span went back (journal.md §7) */
+        return XC_OK;
+    }
+    xc_image_hash_update(j->hash, data, len);
+    j->hash_next += len;
+    return XC_OK;
+}
+
+/* journal.md §5: after a done or part line, a `hash` line once 64 MiB more were hashed. */
+static xc_err save_hash(job *j)
+{
+    if (j->hash == NULL || j->hash_broken || j->hash_next - j->hash_saved < j->hash_save_every) {
+        return XC_OK;
+    }
+    uint8_t md5[XC_MD5_BYTES];
+    uint8_t sha1[XC_SHA1_BYTES];
+    uint64_t off = xc_image_hash_save(j->hash, md5, sha1);
+    size_t len = 0;
+    xc_err err = xc_journal_format_hash(off, md5, sha1, j->line, sizeof j->line, &len);
+    if (err == XC_OK) {
+        err = j->io->append(j->io->ctx, j->journal_path, j->line, len);
+    }
+    if (err == XC_OK) {
+        j->hash_saved = off;
+    }
+    return err;
+}
+
 /* journal.md §2.3: the sink made the file durable; now record it, durably. */
 static xc_err on_file_done(void *ctx, size_t index, uint32_t crc)
 {
@@ -200,7 +243,7 @@ static xc_err on_file_done(void *ctx, size_t index, uint32_t crc)
     if (err == XC_OK) {
         err = j->io->append(j->io->ctx, j->journal_path, j->line, len);
     }
-    return err;
+    return err == XC_OK ? save_hash(j) : err;
 }
 
 /* ADR 0011: the sink flushed the first `bytes` bytes; record the checkpoint, durably. */
@@ -213,7 +256,76 @@ static xc_err on_checkpoint(void *ctx, size_t index, uint32_t bytes, uint32_t cr
     if (err == XC_OK) {
         err = j->io->append(j->io->ctx, j->journal_path, j->line, len);
     }
-    return err;
+    return err == XC_OK ? save_hash(j) : err;
+}
+
+/*
+ * journal.md §6.7 and §7: whether to hash, and from where. Returns the image offset the
+ * whole-image read starts at. A journal's hash state is used only if nothing still to be
+ * written starts before it; otherwise hashing starts again at byte 0.
+ */
+static xc_err start_hash(job *j, uint64_t *from)
+{
+    *from = 0;
+    if (j->req->no_hash) {
+        j->res->hash_note = "not asked for";
+        return XC_OK;
+    }
+    if (j->vol.layout != XC_XDVDFS_XISO) {
+        j->res->hash_note = "full-disc layout: checked by size and CRC-32 only (ADR 0004 §5)";
+        return XC_OK;
+    }
+    xc_err err = xc_image_hash_create(&j->hash);
+    if (err != XC_OK) {
+        return err;
+    }
+    if (!j->res->resumed) {
+        return XC_OK;
+    }
+    uint64_t first_needed = UINT64_MAX;
+    bool any_kept = false;
+    for (size_t i = 0; i < j->listing.file_count; i++) {
+        const xc_xdvdfs_entry *f = &j->listing.files[i];
+        any_kept = any_kept || j->done[i] || j->resume_bytes[i] > 0;
+        if (!j->done[i] && f->size > 0 && f->offset + j->resume_bytes[i] < first_needed) {
+            first_needed = f->offset + j->resume_bytes[i];
+        }
+    }
+    if (j->journal.has_hash && j->journal.hash_offset <= first_needed) {
+        err = xc_image_hash_restore(j->hash, j->journal.hash_offset, j->journal.hash_md5,
+                                    j->journal.hash_sha1);
+        if (err == XC_OK) {
+            *from = j->journal.hash_offset;
+        }
+        return err;
+    }
+    j->res->hash_restarted = any_kept;
+    return XC_OK;
+}
+
+/* journal.md §7: the result, and the comparison with the expected values. */
+static xc_err finish_hash(job *j)
+{
+    if (j->hash == NULL) {
+        return XC_OK;
+    }
+    if (j->hash_broken || j->hash_next != j->src.size) {
+        j->res->hash_note = "files overlap in the image, so it couldn't be read front to back";
+        return XC_OK;
+    }
+    xc_image_hash_final(j->hash, j->res->md5, j->res->sha1);
+    bool md5_bad =
+        j->req->expect_md5 != NULL && memcmp(j->req->expect_md5, j->res->md5, XC_MD5_BYTES) != 0;
+    bool sha1_bad = j->req->expect_sha1 != NULL &&
+                    memcmp(j->req->expect_sha1, j->res->sha1, XC_SHA1_BYTES) != 0;
+    j->res->hash = j->req->expect_md5 != NULL || j->req->expect_sha1 != NULL
+                       ? XC_INSTALL_HASH_MATCHED
+                       : XC_INSTALL_HASH_COMPUTED;
+    if (md5_bad || sha1_bad) {
+        j->res->hash = XC_INSTALL_HASH_COMPUTED;
+        return XC_ERR_IMAGE_HASH;
+    }
+    return XC_OK;
 }
 
 /* journal.md §6.6: an unfinished file continues at its last checkpoint if the file on disk is
@@ -288,11 +400,20 @@ static xc_err verify(job *j)
 
 static xc_err write_marker(job *j)
 {
-    char text[XC_INSTALL_MAX_PATH + 256];
-    int n = snprintf(text, sizeof text,
-                     "xiso-cartographer %s\nimage=%s\nfiles=%zu\nbytes=%llu\nverified=crc32\n",
-                     xc_version_string(), j->req->source_name != NULL ? j->req->source_name : "",
-                     j->listing.file_count, (unsigned long long)j->listing.total_file_bytes);
+    char text[XC_INSTALL_MAX_PATH + 384];
+    char md5[2 * XC_MD5_BYTES + 1];
+    char sha1[2 * XC_SHA1_BYTES + 1];
+    xc_hex_lower(j->res->md5, XC_MD5_BYTES, md5);
+    xc_hex_lower(j->res->sha1, XC_SHA1_BYTES, sha1);
+    bool hashed = j->res->hash != XC_INSTALL_HASH_NONE;
+    int n =
+        snprintf(text, sizeof text,
+                 "xiso-cartographer %s\nimage=%s\nfiles=%zu\nbytes=%llu\nverified=%s\n%s%s%s%s%s",
+                 xc_version_string(), j->req->source_name != NULL ? j->req->source_name : "",
+                 j->listing.file_count, (unsigned long long)j->listing.total_file_bytes,
+                 j->res->hash == XC_INSTALL_HASH_MATCHED ? "crc32,image-hash" : "crc32",
+                 hashed ? "md5=" : "", hashed ? md5 : "", hashed ? "\nsha1=" : "",
+                 hashed ? sha1 : "", hashed ? "\n" : "");
     if (n < 0 || !join(j, j->path, j->res->folder, XC_INSTALL_MARKER)) {
         return XC_ERR_LIMIT;
     }
@@ -414,10 +535,19 @@ static xc_err run_install(job *j)
         o.checkpoint = on_checkpoint;
         o.resume_bytes = j->resume_bytes;
         o.resume_crc = j->resume_crc;
+        uint64_t from = 0;
+        err = start_hash(j, &from);
+        j->hash_next = from;
+        j->hash_saved = from;
+        j->hash_save_every = o.checkpoint_every;
+        o.whole_image = j->hash != NULL;
+        o.whole_from = from;
+        o.on_bytes = on_bytes;
+        o.on_bytes_ctx = j;
         /* `skip` must not change while extracting: on_file_done marks files in a copy. */
-        bool *skip = malloc(files * sizeof *skip);
+        bool *skip = err == XC_OK ? malloc(files * sizeof *skip) : NULL;
         if (skip == NULL) {
-            err = XC_ERR_NOMEM;
+            err = err == XC_OK ? XC_ERR_NOMEM : err;
         } else {
             memcpy(skip, j->done, files * sizeof *skip);
             o.skip = skip;
@@ -430,6 +560,9 @@ static xc_err run_install(job *j)
         }
     }
     io->close_sink(io->ctx, sink_handle);
+    if (err == XC_OK) {
+        err = finish_hash(j);
+    }
     if (err == XC_OK) {
         err = verify(j);
     }
@@ -474,6 +607,7 @@ xc_err xc_install(const xc_install_req *req, xc_install_result *res)
     free(j->crc);
     free(j->resume_bytes);
     free(j->resume_crc);
+    xc_image_hash_free(j->hash);
     free(j);
     return err;
 }

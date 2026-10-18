@@ -14,6 +14,7 @@ again. Used by CTest (install_<scenario> tests).
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import re
 import shutil
@@ -121,6 +122,23 @@ class Env:
         self.expect(not finished, "the install finished before it could be interrupted")
 
 
+def image_hashes(path: str) -> tuple[str, str]:
+    """The image file's MD5 and SHA-1, as xcat-cli prints them (journal.md section 7)."""
+    md5, sha1 = hashlib.md5(), hashlib.sha1()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            md5.update(chunk)
+            sha1.update(chunk)
+    return md5.hexdigest(), sha1.hexdigest()
+
+
+def expect_hash(e: Env, out: str, fixture: str, restarted: bool = False) -> None:
+    md5, sha1 = image_hashes(os.path.join(e.fixtures, f"{fixture}.iso"))
+    e.expect(f"image md5 {md5} sha1 {sha1}" in out, f"{fixture}: wrong or missing image hashes")
+    e.expect(("hashed from the start again" in out) == restarted,
+             f"{fixture}: hashing {'should' if restarted else 'should not'} have started over")
+
+
 def done_files(journal: str) -> list[str]:
     with open(journal, encoding="ascii") as f:
         return [line.split(" ")[3] for line in f if line.startswith("done ")]
@@ -136,6 +154,10 @@ def s_fixtures(e: Env) -> None:
         r = e.run(e.url(name=f"{fixture}.iso"), fixture)
         e.expect(r.returncode == 0, f"{fixture}: exit {r.returncode}")
         e.expect("verified" in r.stdout, f"{fixture}: not verified")
+        if fixture == "small":
+            expect_hash(e, r.stdout, fixture)
+        else:  # full-disc layouts: sizes and CRC-32 only (ADR 0004 section 5)
+            e.expect("image not hashed: full-disc layout" in r.stdout, f"{fixture}: hashed?")
         e.check_installed(fixture, fixture)
     data = [r for r in e.srv.requests if r.get("range") not in (None, "bytes=0-0")]
     print(f"{len(e.srv.requests)} requests, {len(data)} with data")
@@ -194,6 +216,8 @@ def s_resume_after_kill(e: Env) -> None:
     e.expect(m is not None and int(m.group(1)) >= len(before) >= 2,
              f"didn't resume with the {len(before)} finished files")
     e.expect(not os.path.exists(os.path.join(e.games, "Game (2)")), "a second folder was made")
+    # No hash line yet (the default 64 MiB between them): hashing starts over (journal.md 6.7).
+    expect_hash(e, r.stdout, "small", restarted=True)
     e.check_installed("small")
 
 
@@ -241,13 +265,37 @@ def s_resume_inside_file(e: Env) -> None:
     e.serve("small")
     cp = ["--checkpoint", "16384"]
     e.kill_when(e.url("rate=60000"),
-                lambda js: any(j.startswith("part ") and " media/intro.xmv " in j for j in js),
+                lambda js: any(j.startswith("part ") and " media/intro.xmv " in j for j in js)
+                and any(j.startswith("hash ") for j in js),
                 extra=cp)
     r = e.run(e.url(), extra=cp)
     e.expect(r.returncode == 0, f"resume: exit {r.returncode}")
     m = re.search(r"(\d+) files? continued from a checkpoint \((\d+) bytes kept\)", r.stdout)
     e.expect(m is not None and int(m.group(2)) >= 16384, "no file was continued from a checkpoint")
+    # The hash state saved with the checkpoint carried over (journal.md 6.7).
+    expect_hash(e, r.stdout, "small", restarted=False)
     e.check_installed("small")
+
+
+def s_hash_expected(e: Env) -> None:
+    """journal.md section 7: expected hashes that match pass; a wrong one fails the install."""
+    e.serve("small")
+    md5, sha1 = image_hashes(os.path.join(e.fixtures, "small.iso"))
+    r = e.run(e.url(), "Good", ["--md5", md5.upper(), "--sha1", sha1])
+    e.expect(r.returncode == 0, f"exit {r.returncode}")
+    e.expect("matches what was expected" in r.stdout, "the match isn't reported")
+    e.check_installed("small", "Good")
+    wrong = ("0" if md5[0] != "0" else "1") + md5[1:]
+    r = e.run(e.url(), "Bad", ["--md5", wrong])
+    e.expect(r.returncode == 1, f"wrong md5: exit {r.returncode}, expected 1")
+    e.expect("doesn't match its published checksum" in r.stderr, "no checksum message")
+    e.expect(f"image md5 {md5} " in r.stdout, "the computed hashes aren't shown")
+    bad = os.path.join(e.games, "Bad")
+    e.expect(not os.path.exists(os.path.join(bad, MARKER)), "a marker was written")
+    e.expect(os.path.exists(os.path.join(bad, JOURNAL)), "the journal wasn't kept")
+    r = subprocess.run([e.cli, "install", "--md5", "xyz", e.url(), e.games], capture_output=True,
+                       text=True, timeout=60, check=False)
+    e.expect(r.returncode == 2, f"bad --md5 value: exit {r.returncode}, expected 2")
 
 
 TLS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "fixtures", "tls")
@@ -284,6 +332,7 @@ SCENARIOS = {
     "resume_other_image": s_resume_other_image,
     "verify_catches_damage": s_verify_catches_damage,
     "resume_inside_file": s_resume_inside_file,
+    "hash_expected": s_hash_expected,
 }
 
 

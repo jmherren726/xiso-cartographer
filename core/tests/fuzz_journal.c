@@ -42,7 +42,7 @@ static void read_and_check(const char *text, size_t len, const xc_journal_id *im
     xc_err err = xc_journal_read(text, len, &listing, image, &st);
     check(err == XC_OK);
     if (!st.valid) {
-        check(st.why != NULL && st.done_count == 0);
+        check(st.why != NULL && st.done_count == 0 && !st.has_hash);
         for (size_t i = 0; i < listing.file_count; i++) {
             check(!st.done[i]);
         }
@@ -53,6 +53,9 @@ static void read_and_check(const char *text, size_t len, const xc_journal_id *im
             n += st.done[i] ? 1U : 0U;
         }
         check(n == st.done_count && n <= listing.file_count);
+        /* §5 (v1.2): a hash state stands at a block boundary inside the image. */
+        check(!st.has_hash ||
+              (st.hash_offset % XC_HASH_BLOCK == 0 && st.hash_offset <= image->image_size));
     }
     xc_journal_state_free(&st);
 }

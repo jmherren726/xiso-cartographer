@@ -515,6 +515,21 @@ static const char *problem_text(const xc_fatx_problem *p)
 
 static xc_install_result result;
 
+/* journal.md §7: the whole-image hashes (compared from M6, when archive.org gives them). */
+static void log_image_hash(const xc_install_result *r)
+{
+    if (r->hash == XC_INSTALL_HASH_NONE) {
+        out("  image not hashed: %s\n", r->hash_note != NULL ? r->hash_note : "?");
+        return;
+    }
+    char md5[2 * XC_MD5_BYTES + 1];
+    char sha1[2 * XC_SHA1_BYTES + 1];
+    xc_hex_lower(r->md5, XC_MD5_BYTES, md5);
+    xc_hex_lower(r->sha1, XC_SHA1_BYTES, sha1);
+    out("  image MD5 %s\n  image SHA-1 %s%s\n", md5, sha1,
+        r->hash_restarted ? " (hashed from the start again)" : "");
+}
+
 /* Installs one image; true if it ended installed and verified. */
 static bool install(const xc_source *src, const char *name, const char *etag,
                     const char *last_modified)
@@ -565,9 +580,13 @@ static bool install(const xc_source *src, const char *name, const char *etag,
                 (unsigned)result.files_continued,
                 (unsigned long long)(result.bytes_continued >> 20U));
         }
+        log_image_hash(&result);
         return true;
     }
     out("  NOT INSTALLED: %s\n", xc_err_str(err));
+    if (err == XC_ERR_IMAGE_HASH) {
+        log_image_hash(&result);
+    }
     if (result.current_file[0] != '\0') {
         out("   at %s\n", result.current_file);
     }

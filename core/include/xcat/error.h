@@ -42,6 +42,7 @@ typedef enum xc_err {
     XC_ERR_TLS_NO_RANDOM,   /* not enough randomness to start TLS (ADR 0012 §6) */
     XC_ERR_TLS_NOT_TLS,     /* the server answered, but not in TLS (an http:// server?) */
     XC_ERR_NTP,             /* the time server's answer was refused (docs/formats/sntp.md §4) */
+    XC_ERR_IMAGE_HASH,      /* the image's MD5/SHA-1 isn't the expected one (journal.md §7) */
     XC_ERR_COUNT_           /* number of codes; not an error */
 } xc_err;
 

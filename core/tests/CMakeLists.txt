@@ -98,6 +98,7 @@ xcat_add_test(test_http)
 xcat_add_test(test_http_client)
 # TLS against an in-process BearSSL server, with the committed test certificates.
 xcat_add_test(test_sntp)
+xcat_add_test(test_hash)
 xcat_add_test(test_tls ARGS ${PROJECT_SOURCE_DIR}/tools/fixtures/tls)
 target_link_libraries(test_tls PRIVATE bearssl)
 

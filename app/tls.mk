@@ -1,5 +1,5 @@
-# TLS for an XBE (ADR 0005, ADR 0012): BearSSL, core/src/tls.c, the built-in CA bundle and the
-# SNTP client for the time (core/src/sntp.c).
+# TLS for an XBE (ADR 0005, ADR 0012): BearSSL, core/src/tls.c, the built-in CA bundle, the
+# SNTP client for the time (core/src/sntp.c) and the whole-image hashes (core/src/hash.c).
 # Included by an app Makefile after it sets ROOT_DIR and CORE_DIR, and before it includes
 # nxdk's Makefile; it adds to SRCS and CFLAGS.
 
@@ -12,7 +12,7 @@ CACERT_PEM := $(ROOT_DIR)/third_party/cacert/cacert.pem
 CACERT_C := $(TLS_GEN_DIR)/cacert_data.c
 
 BEARSSL_SRCS := $(shell find $(BEARSSL_DIR)/src -name '*.c')
-TLS_SRCS := $(CORE_DIR)/src/tls.c $(CORE_DIR)/src/sntp.c $(CACERT_C)
+TLS_SRCS := $(CORE_DIR)/src/tls.c $(CORE_DIR)/src/sntp.c $(CORE_DIR)/src/hash.c $(CACERT_C)
 NX_TLS_SRC := $(ROOT_DIR)/platform/nxdk/src/nx_tls.c
 SRCS += $(TLS_SRCS) $(NX_TLS_SRC) $(BEARSSL_SRCS)
 CFLAGS += -I$(BEARSSL_DIR)/inc
