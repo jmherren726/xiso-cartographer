@@ -139,6 +139,26 @@ It then prints how long connecting took and which TLS version and cipher suite t
 
 Send `E:\xcat\net-test.log`. Record in the results log: the cipher speeds, the randomness line, the suite each server chose, the connect time and the MB/s. Since the TCP tuning (`platform/nxdk/lwip/lwipopts.h`), each run also ends with a `TCP:` line: the receive window, frames and segments in, and what was dropped or bad, or ran out of memory. Record it too; drops and memory shortages point at lost packets on the console's side. During the download, a `TCP now:` line (at 10 s, then once a minute) shows what the connection agreed: window scaling on or off, with both scale factors, SACK, our receive window and what we advertised, the server's window and congestion window. If scaling shows `OFF`, the receive window is stuck at 64 KB. Each `TCP now:` line comes with a `Reading:` line for the time since the previous one (the run's summary has one for the whole download): the share of the time the app spent waiting for data, how many reads found our window closed, and how much data was waiting unread, on average and at most. If the app waits most of the time, the data arrives too slowly (the server or the path). If it rarely waits and the window is often closed, the console is too slow. `Reading:` also counts the reads that found out-of-order data queued, a sign of lost segments. The first lines give the link's speed and duplex (`HALF` duplex loses frames to collisions), and the `TCP:` line the frames the driver passed to lwIP and how many lwIP refused because its input mailbox was full, and the most of the driver's receive buffers lwIP held at once (when all are held, the network chip drops frames). The `connected in` line gives the TCP handshake time, about one round trip to the server the data comes from: one receive window per round trip is the most a connection can move. archive.org's suite is worth noting in any case (ADR 0005 asks to watch for changes).
 
+## M5: exit test (install over HTTPS)
+
+**Exit test** ([HANDOFF.md §4.1](HANDOFF.md#41-roadmap)): the archive.org test item installs on hardware over HTTPS, at 1 MB/s or more; a bad certificate and a wrong clock are both rejected. The main app (`app/bin/default.xbe` from the CI artifact) does it: `https://` map entries, NTP for the time, the built-in roots, and the whole-image MD5 and SHA-1 ([journal.md §7](formats/journal.md#7-verification)). [build-xbox.md](build-xbox.md#https) explains the HTTPS setup it logs.
+
+**Before you start:** make sure `E:\Apps\xcat\cacert.pem` and `E:\Apps\xcat\ntp.txt` don't exist, `E:\xcat\isos\` is empty, and about 3.6 GB are free on E:. Write `map.txt` with the test item's download URL (the same one as the TLS speed test) and FTP it to `E:\xcat\`:
+
+```
+# xcat-map v1
+00000001 = https://archive.org/download/<item>/<file>
+```
+
+| Step | Where | How | Pass |
+|---|---|---|---|
+| 1 | Hardware, internet | Launch the app. It sets up TLS ("Randomness", "Time from NTP", "Trusting the 121 built-in roots"), then installs the whole image. Optionally switch the console off once mid-way and launch again: it must resume (over HTTPS, from the journal). | "OK: … verified", the line "wrote … MiB in … s (X MB/s)" with X ≥ 1.0, a "TLS 1.2, …" line, and the image's MD5 and SHA-1. They must equal the values archive.org lists for that file (the item's `https://archive.org/metadata/<item>`, entry `files`, fields `md5` and `sha1`). Launch the game from the dashboard. |
+| 2 | Hardware | **Bad certificate:** copy the LAN test certificate (`C:\xcat-lan\lan-cert.pem` from the TLS speed test, step 2) to `E:\Apps\xcat\cacert.pem` and launch the app. | "NOT INSTALLED: The server's certificate isn't trusted (unknown issuer or wrong name)". Delete `cacert.pem` afterwards. |
+| 3 | Hardware | **Wrong clock, NTP off:** put `off` in `E:\Apps\xcat\ntp.txt`, set the dashboard clock a few years **ahead**, launch. | "NOT INSTALLED: The server's certificate isn't valid at the current time (is the clock right?)". |
+| 4 | Hardware | **Clock reset, NTP unreachable:** set the clock to **2001**, put `192.0.2.1` (an address nothing answers on) in `ntp.txt`, launch. | After three NTP requests: "HTTPS isn't available: Couldn't get the correct time (NTP server unreachable and the console's clock is wrong)". Then delete `ntp.txt` and set the clock back. |
+
+Steps 2–4 find the game from step 1 already installed, so each would go to a numbered folder; they stop before creating one. Send `E:\xcat\install.log`. Record the MB/s, the hashes and whether they matched, the time source, the suite, and the three rejections in the results log (without the item's name, [ADR 0006](adr/0006-no-links-no-bypass.md)).
+
 ## FATX probe (M2)
 
 No authoritative list of FATX naming rules exists, and a game's files can't be renamed on install, because the game opens them by name. So the rules in `core/src/fatx.c` ([fatx-names.md](formats/fatx-names.md)) come from the console's own kernel, measured by `app/fatx-probe`.

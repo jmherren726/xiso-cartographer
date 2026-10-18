@@ -52,7 +52,7 @@ The first image build compiles nxdk's tools and libraries. Docker caches it afte
 | `app/fatx-probe/bin/default.xbe`, `app/fatx-probe/xcat-fatx-probe.iso` | The FATX probe: a test tool that measures what file names and paths the console's FATX driver accepts. See [testing.md](testing.md#fatx-probe-m2). |
 | `app/net-test/bin/default.xbe`, `app/net-test/xcat-net-test.iso` | The network test: downloads a file over HTTP or HTTPS and reports MB/s, retries and the CRC-32; for HTTPS also the CPU's cipher speed and the negotiated TLS suite. See [testing.md](testing.md#m3-network-download-test) and [M5](testing.md#m5-tls-speed-on-the-console). |
 
-XBEs with HTTPS include [`app/tls.mk`](../app/tls.mk): BearSSL, `core/src/tls.c`, the CA bundle (embedded at build time, so the build needs `python3`, which the image has) and `platform/nxdk/src/nx_tls.c`. nxdk compiles without optimisation by default; `tls.mk` builds BearSSL and `tls.c` with `-O2`, since unoptimised crypto would understate the TLS speed several times over. BearSSL's object files land in its submodule folder, which git is told to ignore (`ignore = untracked` in `.gitmodules`).
+XBEs with HTTPS include [`app/tls.mk`](../app/tls.mk): BearSSL, `core/src/tls.c`, `core/src/sntp.c`, `core/src/hash.c`, the CA bundle (embedded at build time, so the build needs `python3`, which the image has) and `platform/nxdk/src/nx_tls.c`. nxdk compiles without optimisation by default; `tls.mk` builds BearSSL and `tls.c` with `-O2`, since unoptimised crypto would understate the TLS speed several times over. BearSSL's object files land in its submodule folder, which git is told to ignore (`ignore = untracked` in `.gitmodules`).
 
 Every CI run also uploads all of these files as the `xiso-cartographer-xbe-<sha>` artifact (`xbe` job).
 
@@ -61,11 +61,11 @@ Every CI run also uploads all of these files as the `xiso-cartographer-xbe-<sha>
 1. Set up xemu with your own BIOS, MCPX boot ROM and HDD image. These are never part of this repo; see the [xemu docs](https://xemu.app/docs/required-files/).
 2. **Machine → Load Disc…** and choose `app/xiso-cartographer.iso`. Then reset the machine (**Machine → Reset**) if it doesn't boot on its own.
 
-## What the app does (M4)
+## What the app does (M5)
 
 Until the real UI arrives (M8), the app installs everything it's given, one after another:
 
-1. **Every entry of the map `E:\xcat\map.txt`** ([map.md](formats/map.md)), downloaded over HTTP and installed while it streams in. Nothing is stored except the game's files ([ADR 0004](adr/0004-streaming-install.md)), so images of 4 GiB and more, such as full-disc dumps, install too. Entries that need a login use `E:\Apps\xcat\credentials` ([credentials.md](formats/credentials.md)). Plain `http://` only until M5.
+1. **Every entry of the map `E:\xcat\map.txt`** ([map.md](formats/map.md)), downloaded over HTTP and installed while it streams in. Nothing is stored except the game's files ([ADR 0004](adr/0004-streaming-install.md)), so images of 4 GiB and more, such as full-disc dumps, install too. Entries that need a login use `E:\Apps\xcat\credentials` ([credentials.md](formats/credentials.md)). Entries can be `http://` or `https://` (see [HTTPS](#https) below).
 2. **Every image in `E:\xcat\isos\`**, as in M2. These must be under 4 GiB, since FATX can't store a larger file.
 3. If there's neither, the bundled test image from `D:\samples\` (`D:` is the folder or disc the XBE was started from), copied to `E:\xcat\isos\` first.
 
@@ -76,6 +76,15 @@ Each install, network or local, follows the same steps ([ARCHITECTURE.md §5](AR
 - It **reads every installed file back and compares its CRC-32** with what was received, then writes `E:\Games\<title>\.xcat-installed`, with the hashes when there are some.
 
 A title that's already installed gets a numbered folder (`small (2)`). An unfinished install of the same image is resumed in its own folder; one of a different image is left alone. The run ends with "Done: N of M image(s) installed and verified." Everything on screen is also appended to `E:\xcat\install.log`.
+
+### HTTPS
+
+The first `https://` URL (a map entry, an `@include`, or a redirect from `http://`) sets up TLS once ([ADR 0012](adr/0012-tls-trust-time-and-entropy.md)), and the log shows each step:
+- **Randomness** from timer jitter and `E:\Apps\xcat\random-seed`, which it renews.
+- **The time** for certificate checks: from NTP, `pool.ntp.org` by default ([sntp.md](formats/sntp.md)). To change it, put a host name or IPv4 address on the first line of `E:\Apps\xcat\ntp.txt`, or `off` to skip NTP (until the settings screen, M8). If NTP fails, the console's clock is used, but only if it isn't earlier than the XBE's build. Otherwise HTTPS stops with "Couldn't get the correct time (NTP server unreachable and the console's clock is wrong)"; `http://` entries still install.
+- **Trust:** the built-in Mozilla roots, or only the certificates in `E:\Apps\xcat\cacert.pem` if that file exists (for a LAN server with its own certificate).
+
+After each HTTPS install the log shows the TLS version and suite the server chose.
 
 **Hold LT + RT + Back + Black** (the shortcut rocky5's tools use) at any time to return to the dashboard, including mid-install or while it waits out a network outage. An install stopped this way keeps everything written so far and resumes on the next start. Confirmed on hardware on 2026-10-15 ([testing.md](testing.md#results-log)).
 

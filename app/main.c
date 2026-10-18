@@ -1,5 +1,6 @@
 /*
- * xiso-cartographer XBE, milestone M4: install games over the network, resumably.
+ * xiso-cartographer XBE, milestone M5: install games over the network (HTTP or HTTPS),
+ * resumably.
  *
  * What it installs, in this order:
  *   1. every entry of the map E:\xcat\map.txt (docs/formats/map.md), downloaded over HTTP
@@ -185,6 +186,11 @@ static void tenths(char *buf, size_t size, uint64_t t)
 
 static bool net_tried;
 static bool net_up;
+static xc_http_config http_cfg;
+static bool https_tried;                      /* TLS was set up, or tried (https_ready) */
+static xc_err https_err = XC_ERR_UNSUPPORTED; /* why there is no TLS, if there isn't */
+static xc_tls *tls;
+static xc_net tls_net;
 static xc_net net;
 static xc_clock clk;
 static xc_credentials creds;
@@ -253,6 +259,17 @@ static void load_credentials(void)
     }
 }
 
+/* xc_nx_https_start reports each step through this. */
+static void say(const char *line)
+{
+    out("%s", line);
+}
+
+static bool is_https(const char *url)
+{
+    return strncmp(url, "https://", 8) == 0 || strncmp(url, "HTTPS://", 8) == 0;
+}
+
 static bool network(void)
 {
     if (net_tried) {
@@ -267,21 +284,42 @@ static bool network(void)
     }
     out("Console IP %s\n", ip);
     xc_nx_net(&net);
-    xc_http_config cfg;
-    memset(&cfg, 0, sizeof cfg);
-    cfg.net = &net;
-    cfg.clock = &clk;
-    cfg.buf = recv_buf;
-    cfg.buf_size = RECV_BUF_SIZE;
-    cfg.max_attempts = ATTEMPTS;
-    cfg.seed = (uint32_t)now_ms();
-    cfg.on_retry = on_retry;
+    memset(&http_cfg, 0, sizeof http_cfg);
+    http_cfg.net = &net;
+    http_cfg.clock = &clk;
+    http_cfg.buf = recv_buf;
+    http_cfg.buf_size = RECV_BUF_SIZE;
+    http_cfg.max_attempts = ATTEMPTS;
+    http_cfg.seed = (uint32_t)now_ms();
+    http_cfg.on_retry = on_retry;
     if (have_creds) {
         xc_cred_http_auth(&auth, &creds);
-        cfg.auth = &auth;
+        http_cfg.auth = &auth;
     }
-    net_up = xc_http_client_init(&client, &cfg) == XC_OK;
+    net_up = xc_http_client_init(&client, &http_cfg) == XC_OK;
     return net_up;
+}
+
+/* The first https URL sets up TLS (ADR 0012: randomness, NTP, trust) and gives it to the
+   HTTP client. False, after saying why once, if HTTPS can't be used. */
+static bool https_ready(void)
+{
+    if (https_tried) {
+        return https_err == XC_OK;
+    }
+    https_tried = true;
+    char ntp_buf[256];
+    xc_nx_https_opts o = {&net, &clk, xc_nx_ntp_setting(ntp_buf, sizeof ntp_buf), say};
+    https_err = xc_nx_https_start(&o, &tls_net, &tls);
+    if (https_err == XC_OK) {
+        http_cfg.tls = &tls_net;
+        xc_http_client_close(&client);
+        https_err = xc_http_client_init(&client, &http_cfg);
+    }
+    if (https_err != XC_OK) {
+        out("HTTPS isn't available: %s. http:// entries still install.\n", xc_err_str(https_err));
+    }
+    return https_err == XC_OK;
 }
 
 /* --- the map ------------------------------------------------------------------------------ */
@@ -331,6 +369,9 @@ static xc_err map_fetch(void *ctx, const char *location, bool is_url, size_t max
     }
     if (!network()) {
         return XC_ERR_NET_CONNECT;
+    }
+    if (is_https(location) && !https_ready()) {
+        return https_err;
     }
     xc_err err = xc_http_resource_init(&res, location, strlen(location));
     if (err == XC_OK) {
@@ -624,11 +665,19 @@ static bool install_url(const char *url)
         out("\n%s\n  NOT INSTALLED: no network\n", url);
         return false;
     }
+    if (is_https(url) && !https_ready()) {
+        out("\n%s\n  NOT INSTALLED: HTTPS isn't available: %s\n", url, xc_err_str(https_err));
+        return false;
+    }
     static xc_http_source hs;
     xc_source src;
     xc_err err = xc_http_resource_init(&res, url, strlen(url));
     if (err == XC_OK) {
         err = xc_http_source_open(&src, &hs, &client, &res);
+    }
+    if (err == XC_ERR_UNSUPPORTED && !https_tried) {
+        /* An http URL that redirected to https: set up TLS and try again. */
+        err = https_ready() ? xc_http_source_open(&src, &hs, &client, &res) : https_err;
     }
     if (err != XC_OK) {
         out("\n%s\n  NOT INSTALLED: %s\n", url, xc_err_str(err));
@@ -636,6 +685,15 @@ static bool install_url(const char *url)
     }
     bool ok = install(&src, url, res.etag[0] != '\0' ? res.etag : NULL,
                       res.last_modified[0] != '\0' ? res.last_modified : NULL);
+    if (is_https(url) && tls != NULL) {
+        /* After redirects: the server the data came from (ADR 0005 asks to watch the suite). */
+        xc_tls_info info;
+        xc_tls_last_info(tls, &info);
+        if (info.suite_name != NULL) {
+            out("  TLS %u.%u, %s\n", (info.version >> 8) - 2U, (info.version & 0xFFU) - 1U,
+                info.suite_name);
+        }
+    }
     xc_http_client_close(&client);
     return ok;
 }
@@ -695,7 +753,7 @@ static int list_local(char names[MAX_LOCAL][XC_NX_PATH_MAX])
 int main(void)
 {
     XVideoSetMode(640, 480, 32, REFRESH_DEFAULT);
-    debugPrint("xiso-cartographer %s - install (M4)\n", xc_version_string());
+    debugPrint("xiso-cartographer %s - install (M5)\n", xc_version_string());
     xc_nx_clock(&clk);
     run_start_ms = now_ms();
     pads_init();

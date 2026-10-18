@@ -139,12 +139,37 @@ void xc_nx_recv_counters_get(xc_nx_recv_counters *out);
 /*
  * For TLS (xcat/tls.h, ADR 0012, nx_tls.c). xc_nx_wallclock() is the console's clock, but
  * refused (XC_ERR_TLS_NO_TIME) when it's earlier than this XBE's build time: it was reset.
- * NTP comes in front of it later in M5 (§5). xc_nx_console_time() is the clock's raw value
- * and xc_nx_build_time() the floor, both in Unix seconds, for messages.
+ * NTP comes in front of it (xc_nx_https_start, docs/formats/sntp.md). xc_nx_console_time()
+ * is the clock's raw value and xc_nx_build_time() the floor, both in Unix seconds, for
+ * messages; xc_nx_utc_date() writes one as "YYYY-MM-DD hh:mm:ss UTC".
  */
 void xc_nx_wallclock(xc_wallclock *w);
 int64_t xc_nx_console_time(void);
 int64_t xc_nx_build_time(void);
+void xc_nx_utc_date(char *buf, size_t size, int64_t unix_s);
+
+/*
+ * The time server to ask: the first line of E:\Apps\xcat\ntp.txt that isn't blank or a
+ * '#' comment (a host name or IPv4 address, copied into buf), NULL for "off", or
+ * pool.ntp.org when the file doesn't exist. Until the settings screen (M8).
+ */
+const char *xc_nx_ntp_setting(char *buf, size_t cap);
+
+/*
+ * Sets up HTTPS once for an XBE (ADR 0012): gathers randomness, gets the time (NTP from
+ * `ntp_server`, NULL for off, else the console's clock if it isn't earlier than the build),
+ * loads the trust anchors (E:\Apps\xcat\cacert.pem if present, else the built-in bundle), and
+ * creates the TLS client over `tcp`. Each step is reported through `say`, one line at a time
+ * (may be NULL). On success *tls_net is the HTTP client's `tls` net. Errors:
+ * XC_ERR_TLS_NO_RANDOM, XC_ERR_TLS_NO_TIME, a CA file's parse error, XC_ERR_NOMEM.
+ */
+typedef struct xc_nx_https_opts {
+    const xc_net *tcp;
+    const xc_clock *clock;
+    const char *ntp_server;
+    void (*say)(const char *line);
+} xc_nx_https_opts;
+xc_err xc_nx_https_start(const xc_nx_https_opts *opts, xc_net *tls_net, xc_tls **tls);
 
 /*
  * Fills `pool` for the TLS random generator (§6): the seed file E:\Apps\xcat\random-seed,
