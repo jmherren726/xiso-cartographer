@@ -22,6 +22,8 @@ Output is git-ignored, deterministic (byte-identical on every run and platform) 
 | `redump-xgd3` | Full disc, partition at `0x02080000` | 8.7 GB (sparse) | The same for XGD3 |
 | `large` (`--large`) | xiso | 4.3 GB (sparse) | A file of 4,294,950,912 bytes (4 GiB − 16 KiB: the largest FATX stores, [fatx-names.md §4b](../../docs/formats/fatx-names.md)), then files whose offsets are past 4 GiB; 64-bit offset arithmetic |
 
+CMake also zips `small` with [zipgen.py](zipgen.py): `small-stored.zip` (stored, Zip64 sizes in the local header) and `small-deflate.zip` (Deflate level 9, like archive.org's zips), each with a `readme.txt` before the image. `test_zip` and `xcat-cli zip` read them. Zip64 end records and broken zips are built byte by byte in `core/tests/test_zip.c`; the fuzz seeds come from [zip_seeds.py](zip_seeds.py).
+
 Negative cases (corrupt or hostile images) belong to the M1 parser tests and fuzzing, not this generator. The generator refuses to write invalid images.
 
 ## Manifest (`<name>.json`, `<name>.tsv`)
