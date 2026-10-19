@@ -96,6 +96,31 @@ typedef struct xc_xdvdfs_order {
 xc_err xc_xdvdfs_stream_order(const xc_xdvdfs_volume *vol, const xc_xdvdfs_listing *listing,
                               xc_xdvdfs_order *out);
 
+/*
+ * What a sequential install would spool or read twice (docs/formats/xdvdfs.md §8.1). Until
+ * the last directory table has been read, a byte that isn't a table or part of a file whose
+ * directory is known could still belong to a file: it's "unidentified". The installer
+ * spools unidentified bytes to disk and keeps the latest `budget` of them, dropping the
+ * oldest when the spool is full. Late file bytes it dropped are read again in a second
+ * pass, from the checkpoint at or before the first of them.
+ */
+typedef struct xc_xdvdfs_spool {
+    uint64_t all_known;    /* end of the last table: every byte after it is identified */
+    uint64_t unidentified; /* spooling all of these avoids a second pass */
+    uint64_t late_bytes;   /* the unidentified bytes that turn out to be file data */
+    uint64_t spooled;      /* min(budget, unidentified): peak spool on disk */
+    uint64_t reread_start; /* first late byte that was dropped; UINT64_MAX if none */
+    uint64_t reread_from;  /* the checkpoint pass 2 restarts from; UINT64_MAX if none */
+    uint64_t reread_end;   /* end of the last dropped late byte: pass 2 stops here */
+} xc_xdvdfs_spool;
+
+/*
+ * Fills `out` for a spool of `budget` bytes and checkpoints every `checkpoint_bytes` of the
+ * image (0 = pass 2 starts exactly at reread_start). XC_ERR_NOMEM, or XC_ERR_INVALID_ARG.
+ */
+xc_err xc_xdvdfs_spool_plan(const xc_xdvdfs_volume *vol, const xc_xdvdfs_listing *listing,
+                            uint64_t budget, uint64_t checkpoint_bytes, xc_xdvdfs_spool *out);
+
 #ifdef __cplusplus
 }
 #endif

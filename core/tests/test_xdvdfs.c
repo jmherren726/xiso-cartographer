@@ -406,6 +406,99 @@ static void test_stream_order_table_after_its_file(void)
     TEST_ASSERT_EQUAL_UINT64((uint64_t)(LATE_SECTOR + 1) * SECTOR, o.tables_end);
 }
 
+/* --- spool plan (§8.1) ------------------------------------------------------ */
+
+/* The image of test_stream_order_table_after_its_file: root table at 33, "late/x" (100
+   bytes at 35) listed in the table at 38, "early" (10 bytes at 36). */
+static void late_img(void)
+{
+    enum { LATE_SECTOR = 38 };
+    img_reset(ROOT_SECTOR, SECTOR);
+    memset(sector_ptr(LATE_SECTOR), 0xFF, SECTOR);
+    size_t next = put_entry(ROOT_SECTOR, 0, 0, 0, DATA_SECTOR + 1, 10, 0x20, "early");
+    put16(sector_ptr(ROOT_SECTOR) + 2, (uint16_t)(next / 4));
+    put_entry(ROOT_SECTOR, next, 0, 0, LATE_SECTOR, SECTOR, 0x10, "late");
+    put_entry(LATE_SECTOR, 0, 0, 0, DATA_SECTOR, 100, 0x20, "x");
+}
+
+static void spool_of_img(uint64_t budget, uint64_t checkpoint, xc_xdvdfs_spool *s)
+{
+    xc_mem_source mem;
+    xc_source src;
+    xc_source_memory(&src, &mem, img, sizeof img);
+    xc_xdvdfs_volume vol;
+    xc_xdvdfs_listing l;
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_xdvdfs_open(&src, &vol));
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_xdvdfs_list(&src, &vol, NULL, &l));
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_xdvdfs_spool_plan(&vol, &l, budget, checkpoint, s));
+    xc_xdvdfs_listing_free(&l);
+}
+
+#define S ((uint64_t)SECTOR)
+
+static void test_spool_plan_no_spool(void)
+{
+    late_img();
+    xc_xdvdfs_spool s;
+    spool_of_img(0, 0, &s);
+    TEST_ASSERT_EQUAL_UINT64(39 * S, s.all_known);
+    /* everything before 39 but the two tables and "early" */
+    TEST_ASSERT_EQUAL_UINT64(37 * S - 10, s.unidentified);
+    TEST_ASSERT_EQUAL_UINT64(100, s.late_bytes);
+    TEST_ASSERT_EQUAL_UINT64(0, s.spooled);
+    TEST_ASSERT_EQUAL_UINT64(35 * S, s.reread_start);
+    TEST_ASSERT_EQUAL_UINT64(35 * S, s.reread_from);
+    TEST_ASSERT_EQUAL_UINT64(35 * S + 100, s.reread_end);
+
+    spool_of_img(0, 32 * S, &s); /* pass 2 starts at the checkpoint before it */
+    TEST_ASSERT_EQUAL_UINT64(35 * S, s.reread_start);
+    TEST_ASSERT_EQUAL_UINT64(32 * S, s.reread_from);
+}
+
+static void test_spool_plan_partial_spool(void)
+{
+    late_img();
+    xc_xdvdfs_spool s;
+    /* holes: [0, 33), [34, 36) (with "late/x" at 35) and [36 + 10, 38). The spool keeps the
+       latest bytes: the last hole alone drops all of "late/x". */
+    spool_of_img(2 * S - 10, 0, &s);
+    TEST_ASSERT_EQUAL_UINT64(2 * S - 10, s.spooled);
+    TEST_ASSERT_EQUAL_UINT64(35 * S, s.reread_start);
+    TEST_ASSERT_EQUAL_UINT64(35 * S + 100, s.reread_end);
+    /* ...plus [35 + 50, 36) keeps all but its first 50 bytes */
+    spool_of_img(3 * S - 60, 0, &s);
+    TEST_ASSERT_EQUAL_UINT64(35 * S, s.reread_start);
+    TEST_ASSERT_EQUAL_UINT64(35 * S + 50, s.reread_end);
+}
+
+static void test_spool_plan_full_spool(void)
+{
+    late_img();
+    xc_xdvdfs_spool s;
+    spool_of_img(4 * S - 10, 0, &s); /* everything from 34 on; [0, 33) is dropped */
+    TEST_ASSERT_EQUAL_UINT64(4 * S - 10, s.spooled);
+    TEST_ASSERT_EQUAL_UINT64(UINT64_MAX, s.reread_start);
+    TEST_ASSERT_EQUAL_UINT64(UINT64_MAX, s.reread_from);
+    spool_of_img(UINT64_MAX, 0, &s);
+    TEST_ASSERT_EQUAL_UINT64(37 * S - 10, s.spooled);
+    TEST_ASSERT_EQUAL_UINT64(UINT64_MAX, s.reread_start);
+}
+
+static void test_spool_plan_tables_first(void)
+{
+    img_reset(ROOT_SECTOR, SECTOR);
+    put_entry(ROOT_SECTOR, 0, 0, 0, DATA_SECTOR, 10, 0x20, "b");
+    xc_xdvdfs_spool s;
+    spool_of_img(0, 0, &s);
+    TEST_ASSERT_EQUAL_UINT64(34 * S, s.all_known);
+    TEST_ASSERT_EQUAL_UINT64(33 * S, s.unidentified); /* up to the root table */
+    TEST_ASSERT_EQUAL_UINT64(0, s.late_bytes);
+    TEST_ASSERT_EQUAL_UINT64(UINT64_MAX, s.reread_start);
+    TEST_ASSERT_EQUAL_INT(XC_ERR_INVALID_ARG, xc_xdvdfs_spool_plan(NULL, NULL, 0, 0, &s));
+}
+
+#undef S
+
 /* --- fixtures ---------------------------------------------------------------- */
 
 static const char *fixtures_dir;
@@ -563,6 +656,10 @@ int main(int argc, char **argv)
     RUN_TEST(test_invalid_arguments);
     RUN_TEST(test_stream_order_tables_first);
     RUN_TEST(test_stream_order_table_after_its_file);
+    RUN_TEST(test_spool_plan_no_spool);
+    RUN_TEST(test_spool_plan_partial_spool);
+    RUN_TEST(test_spool_plan_full_spool);
+    RUN_TEST(test_spool_plan_tables_first);
 
     if (argc > 1) {
         fixtures_dir = argv[1];
