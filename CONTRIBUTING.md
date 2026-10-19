@@ -70,7 +70,7 @@ Tests use [Unity](https://github.com/ThrowTheSwitch/Unity) ([ADR 0003](docs/adr/
 
 ### Fuzzing
 
-Every parser of external input has a libFuzzer target next to its tests (HANDOFF §7.3). Today those are `core/tests/fuzz_xdvdfs.c`, `core/tests/fuzz_http.c` (HTTP response heads, chunked bodies and URLs) `core/tests/fuzz_credentials.c` (the credentials file) `core/tests/fuzz_map.c` (map files with includes) and `core/tests/fuzz_journal.c` (the install journal); each header comment describes the input layout.
+Every parser of external input has a libFuzzer target next to its tests (HANDOFF §7.3). Today those are `core/tests/fuzz_xdvdfs.c`, `core/tests/fuzz_http.c` (HTTP response heads, chunked bodies and URLs) `core/tests/fuzz_credentials.c` (the credentials file) `core/tests/fuzz_map.c` (map files with includes) `core/tests/fuzz_journal.c` (the install journal), `core/tests/fuzz_tls_anchors.c` (PEM trust anchors), `core/tests/fuzz_sntp.c` (SNTP answers) and `core/tests/fuzz_zip.c` (zip end records and central directory); each header comment describes the input layout.
 
 - **Every build** compiles each target as `<name>_replay` and CTest runs it over the seeds (`fuzz_<name>_seeds`). This keeps the harness compiling on every compiler and turns past crashes into regression tests.
 - **Real fuzzing** needs clang on Linux or macOS (on Ubuntu, also `libclang-rt-18-dev` or your clang version's equivalent):
@@ -81,7 +81,7 @@ Every parser of external input has a libFuzzer target next to its tests (HANDOFF
   ./build/fuzz/core/tests/fuzz_xdvdfs -max_len=65536 build/fuzz/corpus build/fuzz/fuzz-seeds
   ```
 
-- **Seeds** for `fuzz_xdvdfs` are made from the fixtures by `tools/fixtures/fuzz_seeds.py` at build time. Seeds for text formats are committed under `core/tests/fuzz-seeds/<target>/` as `*.seed` files, which `.gitattributes` keeps byte-exact (CRLF matters in HTTP).
+- **Seeds** for `fuzz_xdvdfs` are made from the fixtures by `tools/fixtures/fuzz_seeds.py` at build time. Seeds for the other formats are committed under `core/tests/fuzz-seeds/<target>/` as `*.seed` files, which `.gitattributes` keeps byte-exact (CRLF matters in HTTP).
 - **When the fuzzer finds a crash**, fix the bug and add a unit test that reproduces it in the same MR. If the input is a useful regression case, commit it under `core/tests/fuzz-regressions/<target>/` and add it to the replay test's seeds.
 - **New parsers** (`http`, `map`, `catalog`, JSON, `credentials`) come with a fuzz target and an `xcat_add_fuzzer()` line in the MR that adds the parser.
 

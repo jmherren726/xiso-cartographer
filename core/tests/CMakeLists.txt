@@ -32,6 +32,18 @@ add_custom_command(
   VERBATIM)
 add_custom_target(xcat_fixtures ALL DEPENDS ${_fixture_outputs})
 
+# Zips of the small fixture, stored and Deflate (tools/fixtures/zipgen.py).
+set(_zip_outputs ${XCAT_FIXTURES_DIR}/small-stored.zip ${XCAT_FIXTURES_DIR}/small-deflate.zip)
+add_custom_command(
+  OUTPUT ${_zip_outputs}
+  COMMAND ${Python3_EXECUTABLE} -I ${PROJECT_SOURCE_DIR}/tools/fixtures/zipgen.py
+          --fixtures ${XCAT_FIXTURES_DIR} small
+  DEPENDS ${PROJECT_SOURCE_DIR}/tools/fixtures/zipgen.py ${XCAT_FIXTURES_DIR}/small.iso
+  COMMENT "Generating zip test fixtures"
+  VERBATIM)
+add_custom_target(xcat_zip_fixtures ALL DEPENDS ${_zip_outputs})
+add_dependencies(xcat_zip_fixtures xcat_fixtures)
+
 # Test code uses plain stdio (fopen); the CRT's "use fopen_s" deprecation doesn't apply.
 function(xcat_test_target target)
   if(WIN32)
@@ -99,6 +111,8 @@ xcat_add_test(test_http_client)
 # TLS against an in-process BearSSL server, with the committed test certificates.
 xcat_add_test(test_sntp)
 xcat_add_test(test_hash)
+xcat_add_test(test_zip ARGS ${XCAT_FIXTURES_DIR})
+add_dependencies(test_zip xcat_zip_fixtures)
 xcat_add_test(test_tls ARGS ${PROJECT_SOURCE_DIR}/tools/fixtures/tls)
 target_link_libraries(test_tls PRIVATE bearssl)
 
@@ -116,6 +130,16 @@ foreach(_name IN LISTS XCAT_FIXTURES)
   set_tests_properties(layout_${_name} PROPERTIES PASS_REGULAR_EXPRESSION "one sequential pass can install it")
   xcat_test_env(layout_${_name})
 endforeach()
+
+# `xcat-cli zip` on the generated zips: both list and find the image.
+foreach(_kind IN ITEMS stored deflate)
+  add_test(NAME zip_cli_${_kind} COMMAND xcat-cli zip ${XCAT_FIXTURES_DIR}/small-${_kind}.zip)
+  set_tests_properties(zip_cli_${_kind} PROPERTIES PASS_REGULAR_EXPRESSION "image: small.iso")
+  xcat_test_env(zip_cli_${_kind})
+endforeach()
+add_test(NAME zip_cli_not_zip COMMAND xcat-cli zip ${XCAT_FIXTURES_DIR}/small.iso)
+set_tests_properties(zip_cli_not_zip PROPERTIES WILL_FAIL TRUE)
+xcat_test_env(zip_cli_not_zip)
 
 # End to end: xcat-cli extracts every fixture, and the result must match its manifest (and so
 # extract-xiso's output: tools/fixtures/verify.sh checks the manifests against extract-xiso).
@@ -220,3 +244,7 @@ xcat_add_fuzzer(fuzz_tls_anchors SEEDS ${_tls_seeds})
 # SNTP answer seeds are committed, written by tools/fixtures/sntp_seeds.py.
 file(GLOB _sntp_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/sntp/*.seed)
 xcat_add_fuzzer(fuzz_sntp SEEDS ${_sntp_seeds})
+
+# Zip seeds are committed, written by tools/fixtures/zip_seeds.py.
+file(GLOB _zip_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/zip/*.seed)
+xcat_add_fuzzer(fuzz_zip SEEDS ${_zip_seeds})

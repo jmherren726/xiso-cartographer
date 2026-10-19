@@ -43,6 +43,9 @@ typedef enum xc_err {
     XC_ERR_TLS_NOT_TLS,     /* the server answered, but not in TLS (an http:// server?) */
     XC_ERR_NTP,             /* the time server's answer was refused (docs/formats/sntp.md §4) */
     XC_ERR_IMAGE_HASH,      /* the image's MD5/SHA-1 isn't the expected one (journal.md §7) */
+    XC_ERR_NOT_ZIP,         /* no zip end record (docs/formats/zip.md §2) */
+    XC_ERR_ZIP_UNSUPPORTED, /* split zip, or a method/encryption we can't read (zip.md §6) */
+    XC_ERR_ZIP_MEMBER,      /* the zip holds no image, or several (zip.md §5) */
     XC_ERR_COUNT_           /* number of codes; not an error */
 } xc_err;
 

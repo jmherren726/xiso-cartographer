@@ -11,6 +11,7 @@
  *                                       install like the console: resumable, verified
  * (xcat/install.h)
  *   xcat-cli ntp [options] [server]     ask a time server like the console (docs/formats/sntp.md)
+ *   xcat-cli zip [options] <zip|url>    list a zip and check its image (docs/formats/zip.md)
  *
  * Exit status: 0 success, 1 failure (for map: any error line), 2 usage error, 3 not
  * installable (check).
@@ -34,6 +35,7 @@
 #include "xcat/sntp.h"
 #include "xcat/version.h"
 #include "xcat/xdvdfs.h"
+#include "xcat/zip.h"
 
 #define IO_BUFFER_SIZE ((size_t)1024 * 1024)
 
@@ -51,6 +53,7 @@ static int usage(void)
         "       xcat-cli install [net options] [--checkpoint <bytes>] <url|image> <games-dir>\n"
         "                        [title]\n"
         "       xcat-cli ntp [--port <n>] [--timeout <ms>] [--floor <unix-seconds>] [server]\n"
+        "       xcat-cli zip [net options] <zip|url>\n"
         "net options: --timeout <ms>, --attempts <n>, --credentials <file>,\n"
         "             --ca-file <pem> (trust these CAs instead of the built-in ones),\n"
         "             --now <unix-seconds> (for tests: the time certificates are checked at)\n"
@@ -1097,6 +1100,106 @@ static int cmd_install(int argc, char **argv)
     return rc;
 }
 
+/* --- zip ------------------------------------------------------------------------------- */
+
+static const char *method_label(uint16_t method, char *buf, size_t size)
+{
+    const char *name = xc_zip_method_name(method);
+    if (name != NULL) {
+        return name;
+    }
+    (void)snprintf(buf, size, "method %u", (unsigned)method);
+    return buf;
+}
+
+/* Lists a zip's entries and checks its image like the installer will (docs/formats/zip.md). */
+static int zip_report(const char *where, const xc_source *src)
+{
+    xc_zip_listing l;
+    xc_err err = xc_zip_list(src, &l);
+    if (err != XC_OK) {
+        return fail(where, err);
+    }
+    (void)printf("zip: %zu entr%s%s, central directory at %" PRIu64 "\n", l.count,
+                 l.count == 1 ? "y" : "ies", l.zip64 ? ", Zip64" : "", l.cd_offset);
+    (void)printf("  %-13s %15s %15s %-8s  name\n", "method", "size", "compressed", "crc32");
+    for (size_t i = 0; i < l.count; i++) {
+        const xc_zip_entry *e = &l.entries[i];
+        char mbuf[32];
+        (void)printf("  %-13s %15" PRIu64 " %15" PRIu64 " %08" PRIx32 "  %s\n",
+                     method_label(e->method, mbuf, sizeof mbuf), e->size, e->compressed_size,
+                     e->crc32, e->name);
+    }
+    size_t pick = 0;
+    err = xc_zip_pick_image(&l, &pick);
+    if (err != XC_OK) {
+        xc_zip_listing_free(&l);
+        return fail(where, err);
+    }
+    xc_zip_member m;
+    err = xc_zip_open_member(src, &l, pick, &m);
+    const xc_zip_entry *e = &l.entries[pick];
+    if (err == XC_ERR_ZIP_UNSUPPORTED) {
+        char mbuf[32];
+        (void)fprintf(stderr,
+                      "xcat-cli: %s: %s is %s%s; only stored and Deflate members can be "
+                      "installed\n",
+                      where, e->name, method_label(e->method, mbuf, sizeof mbuf),
+                      (e->flags & 0x2041U) != 0 ? ", encrypted" : "");
+        xc_zip_listing_free(&l);
+        return 1;
+    }
+    if (err != XC_OK) {
+        xc_zip_listing_free(&l);
+        return fail(where, err);
+    }
+    (void)printf(
+        "image: %s, %s, %" PRIu64 " bytes (%" PRIu64 " compressed, %.1f%%), data at "
+        "%" PRIu64 "\n",
+        e->name, m.method == XC_ZIP_STORED ? "stored" : "Deflate", m.size, m.compressed_size,
+        m.size > 0 ? 100.0 * (double)m.compressed_size / (double)m.size : 100.0, m.data_offset);
+    xc_zip_listing_free(&l);
+    return 0;
+}
+
+/* xcat-cli zip [net options] <zip|url>: the entries and the image, read with Range. */
+static int cmd_zip(int argc, char **argv)
+{
+    net_opts o;
+    int i = parse_net_opts(argc, argv, &o);
+    if (i < 0 || argc - i != 1) {
+        return usage();
+    }
+    const char *where = argv[i];
+    if (!is_url(where)) {
+        xc_host_file hf = {NULL};
+        xc_source src;
+        xc_err err = xc_host_file_open(&src, &hf, where);
+        if (err != XC_OK) {
+            return fail(where, err);
+        }
+        int rc = zip_report(where, &src);
+        xc_host_file_close(&hf);
+        return rc;
+    }
+    static http_env env;
+    static xc_http_resource res;
+    static xc_http_source hs;
+    xc_source src;
+    xc_err err = xc_http_resource_init(&res, where, strlen(where));
+    if (err != XC_OK) {
+        return fail(where, err);
+    }
+    err = env_open(&env, &o);
+    if (err != XC_OK) {
+        return fail("network", err);
+    }
+    err = xc_http_source_open(&src, &hs, &env.client, &res);
+    int rc = err == XC_OK ? zip_report(where, &src) : get_fail(&env.client, env.tls, where, err);
+    env_close(&env);
+    return rc;
+}
+
 /*
  * xcat-cli ntp [--port <n>] [--timeout <ms>] [--floor <unix-seconds>] [server]: asks a time
  * server like the console does (docs/formats/sntp.md) and says how far this PC's clock is off.
@@ -1185,6 +1288,9 @@ int main(int argc, char **argv)
     }
     if (argc >= 2 && strcmp(argv[1], "install") == 0) {
         return cmd_install(argc - 2, argv + 2);
+    }
+    if (argc >= 2 && strcmp(argv[1], "zip") == 0) {
+        return cmd_zip(argc - 2, argv + 2);
     }
     if (argc >= 2 && strcmp(argv[1], "map") == 0) {
         return cmd_map(argc - 2, argv + 2);

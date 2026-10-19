@@ -76,6 +76,13 @@ const char *xc_err_str(xc_err err)
         return "The downloaded image doesn't match its published checksum";
     case XC_ERR_NTP:
         return "The time server's answer was refused (not synchronized, rate limit or invalid)";
+    case XC_ERR_NOT_ZIP:
+        return "Not a zip file (no end of central directory record)";
+    case XC_ERR_ZIP_UNSUPPORTED:
+        return "This zip can't be read: split archive, encryption or an unsupported compression "
+               "method";
+    case XC_ERR_ZIP_MEMBER:
+        return "The zip must hold exactly one .iso or .xiso image";
     case XC_ERR_COUNT_:
         break;
     }

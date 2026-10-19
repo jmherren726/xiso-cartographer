@@ -20,6 +20,7 @@ add_library(xcat
   src/url.c
   src/version.c
   src/xdvdfs.c
+  src/zip.c
 )
 add_library(xcat::xcat ALIAS xcat)
 
