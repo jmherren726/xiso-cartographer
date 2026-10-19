@@ -33,7 +33,8 @@ add_custom_command(
 add_custom_target(xcat_fixtures ALL DEPENDS ${_fixture_outputs})
 
 # Zips of the small fixture, stored and Deflate (tools/fixtures/zipgen.py).
-set(_zip_outputs ${XCAT_FIXTURES_DIR}/small-stored.zip ${XCAT_FIXTURES_DIR}/small-deflate.zip)
+set(_zip_outputs ${XCAT_FIXTURES_DIR}/small-stored.zip ${XCAT_FIXTURES_DIR}/small-deflate.zip
+  ${XCAT_FIXTURES_DIR}/small-deflate0.zip)
 add_custom_command(
   OUTPUT ${_zip_outputs}
   COMMAND ${Python3_EXECUTABLE} -I ${PROJECT_SOURCE_DIR}/tools/fixtures/zipgen.py
@@ -113,6 +114,8 @@ xcat_add_test(test_sntp)
 xcat_add_test(test_hash)
 xcat_add_test(test_zip ARGS ${XCAT_FIXTURES_DIR})
 add_dependencies(test_zip xcat_zip_fixtures)
+xcat_add_test(test_zip_read ARGS ${XCAT_FIXTURES_DIR})
+add_dependencies(test_zip_read xcat_zip_fixtures)
 xcat_add_test(test_tls ARGS ${PROJECT_SOURCE_DIR}/tools/fixtures/tls)
 target_link_libraries(test_tls PRIVATE bearssl)
 
@@ -245,6 +248,8 @@ xcat_add_fuzzer(fuzz_tls_anchors SEEDS ${_tls_seeds})
 file(GLOB _sntp_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/sntp/*.seed)
 xcat_add_fuzzer(fuzz_sntp SEEDS ${_sntp_seeds})
 
-# Zip seeds are committed, written by tools/fixtures/zip_seeds.py.
+# Zip and Deflate seeds are committed, written by tools/fixtures/zip_seeds.py.
 file(GLOB _zip_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/zip/*.seed)
 xcat_add_fuzzer(fuzz_zip SEEDS ${_zip_seeds})
+file(GLOB _zip_inflate_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/zip-inflate/*.seed)
+xcat_add_fuzzer(fuzz_zip_inflate SEEDS ${_zip_inflate_seeds})

@@ -220,6 +220,10 @@ jobs:
         run: |
           mkdir -p build/fuzz/corpus-zip build/fuzz/artifacts
           ./build/fuzz/core/tests/fuzz_zip -max_total_time=60 -max_len=8192             -print_final_stats=1 -artifact_prefix=build/fuzz/artifacts/             build/fuzz/corpus-zip core/tests/fuzz-seeds/zip
+      - name: Fuzz reading Deflate members with checkpoints (60 s)
+        run: |
+          mkdir -p build/fuzz/corpus-zip-inflate build/fuzz/artifacts
+          ./build/fuzz/core/tests/fuzz_zip_inflate -max_total_time=60 -max_len=65536             -print_final_stats=1 -artifact_prefix=build/fuzz/artifacts/             build/fuzz/corpus-zip-inflate core/tests/fuzz-seeds/zip-inflate
       - name: Upload crashing inputs
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
