@@ -125,6 +125,31 @@ class ImageTests(unittest.TestCase):
         e = img.entries[0]
         self.assertEqual(e["offset"], xg.LAYOUTS["xgd3"] + e["sector"] * xg.SECTOR)
 
+    def _ordered(self, order, gap=0):
+        tree = [pat("a.bin", 3000), xg.directory("d", [pat("b.bin", 5), xg.directory("e", [pat("c.bin", 7)])])]
+        img = xg.Image("t", "xiso", tree, order=order, gap_sectors=gap)
+        xg.layout(img)
+        files = {e["path"]: e["sector"] for e in img.entries if e["type"] == "file"}
+        dirs = {e["path"]: e["sector"] for e in img.entries if e["type"] == "dir"}
+        return img, files, dirs
+
+    def test_tables_last_order(self):
+        img, files, dirs = self._ordered("tables-last", gap=2)
+        self.assertGreater(min(dirs.values()), max(files.values()))  # every table after every file
+        self.assertLess(dirs["d/e"], dirs["d"])  # a child's table before its parent's
+        self.assertGreater(img.root_sector, max(dirs.values()))  # the root last
+        self.assertEqual(files["d/b.bin"] - files["a.bin"], 2 + 2)  # 3000 bytes = 2 sectors, + gap
+
+    def test_root_last_order(self):
+        img, files, dirs = self._ordered("root-last")
+        self.assertLess(max(dirs.values()), min(files.values()))  # subdirectory tables first
+        self.assertLess(dirs["d/e"], dirs["d"])  # deepest first
+        self.assertGreater(img.root_sector, max(files.values()))  # the root after every file
+
+    def test_unknown_order(self):
+        with self.assertRaises(ValueError):
+            xg.layout(xg.Image("t", "xiso", [pat("a.bin", 1)], order="sideways"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -132,6 +132,9 @@ typedef struct builder {
     name_ref *names; /* names in the current directory, for the duplicate check */
     size_t nnames, cap_names;
     uint64_t total;
+    xc_xdvdfs_have_fn have; /* list_partial only */
+    void *have_ctx;
+    bool skipped; /* the last walk_dir found its table unavailable */
 } builder;
 
 /*
@@ -278,6 +281,10 @@ static xc_err walk_dir(builder *b, uint32_t sector, uint32_t size, size_t path_o
         return XC_ERR_CORRUPT;
     }
     size_t tl = size < MAX_TABLE_READ ? size : MAX_TABLE_READ;
+    if (b->have != NULL && !b->have(b->have_ctx, at, tl)) {
+        b->skipped = true; /* §9: not read yet */
+        return XC_OK;
+    }
     xc_err err = xc_source_read(b->src, at, b->table, tl);
     if (err != XC_OK) {
         return err;
@@ -399,8 +406,22 @@ static xc_err to_entries(const builder *b, const item *items, size_t n, xc_xdvdf
     return XC_OK;
 }
 
-xc_err xc_xdvdfs_list(const xc_source *src, const xc_xdvdfs_volume *vol,
-                      const xc_xdvdfs_limits *limits, xc_xdvdfs_listing *out)
+/* Grows a flag array to at least `need` entries, new ones false. */
+static xc_err grow_flags(bool **flags, size_t *cap, size_t need)
+{
+    size_t old = *cap;
+    bool *p = grow(*flags, cap, need, sizeof *p);
+    if (p == NULL) {
+        return XC_ERR_NOMEM;
+    }
+    memset(p + old, 0, (*cap - old) * sizeof *p);
+    *flags = p;
+    return XC_OK;
+}
+
+static xc_err list(const xc_source *src, const xc_xdvdfs_volume *vol,
+                   const xc_xdvdfs_limits *limits, xc_xdvdfs_have_fn have, void *have_ctx,
+                   xc_xdvdfs_listing *out)
 {
     if (src == NULL || vol == NULL || out == NULL) {
         return XC_ERR_INVALID_ARG;
@@ -410,6 +431,10 @@ xc_err xc_xdvdfs_list(const xc_source *src, const xc_xdvdfs_volume *vol,
     builder b;
     memset(&b, 0, sizeof b);
     b.src = src;
+    b.have = have;
+    b.have_ctx = have_ctx;
+    bool *pending = NULL;
+    size_t cap_pending = 0;
     b.partition = vol->partition_offset;
     if (limits != NULL) {
         b.lim = *limits;
@@ -425,11 +450,27 @@ xc_err xc_xdvdfs_list(const xc_source *src, const xc_xdvdfs_volume *vol,
         b.paths[0] = '\0';
         b.paths_len = 1;
         err = walk_dir(&b, vol->root_sector, vol->root_size, 0, 0, 0);
+        if (b.skipped) {
+            out->root_pending = true;
+            out->pending_count = 1;
+        }
     }
     /* Breadth-first: b.dirs grows while we walk it, so copy each item before use. */
     for (size_t i = 0; err == XC_OK && i < b.ndirs; i++) {
         item d = b.dirs[i];
+        b.skipped = false;
         err = walk_dir(&b, d.sector, d.size, d.path_off, strlen(b.paths + d.path_off), d.depth);
+        if (err == XC_OK && b.skipped) {
+            err = grow_flags(&pending, &cap_pending, b.ndirs);
+            if (err == XC_OK) {
+                pending[i] = true;
+                out->pending_count++;
+            }
+        }
+    }
+    if (err == XC_OK && pending != NULL) {
+        /* one flag per directory, including those added after the last pending one */
+        err = grow_flags(&pending, &cap_pending, b.ndirs);
     }
     if (err == XC_OK) {
         err = to_entries(&b, b.files, b.nfiles, &out->files);
@@ -448,9 +489,11 @@ xc_err xc_xdvdfs_list(const xc_source *src, const xc_xdvdfs_volume *vol,
         free(out->files);
         free(out->dirs);
         free(b.paths);
+        free(pending);
         memset(out, 0, sizeof *out);
         return err;
     }
+    out->dir_pending = pending;
     out->file_count = b.nfiles;
     out->dir_count = b.ndirs;
     out->total_file_bytes = b.total;
@@ -461,6 +504,25 @@ xc_err xc_xdvdfs_list(const xc_source *src, const xc_xdvdfs_volume *vol,
     return XC_OK;
 }
 
+xc_err xc_xdvdfs_list(const xc_source *src, const xc_xdvdfs_volume *vol,
+                      const xc_xdvdfs_limits *limits, xc_xdvdfs_listing *out)
+{
+    return list(src, vol, limits, NULL, NULL, out);
+}
+
+xc_err xc_xdvdfs_list_partial(const xc_source *src, const xc_xdvdfs_volume *vol,
+                              const xc_xdvdfs_limits *limits, xc_xdvdfs_have_fn have,
+                              void *have_ctx, xc_xdvdfs_listing *out)
+{
+    if (have == NULL) {
+        if (out != NULL) {
+            memset(out, 0, sizeof *out);
+        }
+        return XC_ERR_INVALID_ARG;
+    }
+    return list(src, vol, limits, have, have_ctx, out);
+}
+
 void xc_xdvdfs_listing_free(xc_xdvdfs_listing *listing)
 {
     if (listing == NULL) {
@@ -468,6 +530,7 @@ void xc_xdvdfs_listing_free(xc_xdvdfs_listing *listing)
     }
     free(listing->files);
     free(listing->dirs);
+    free(listing->dir_pending);
     free(listing->paths_);
     memset(listing, 0, sizeof *listing);
 }

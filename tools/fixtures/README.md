@@ -20,6 +20,10 @@ Output is git-ignored, deterministic (byte-identical on every run and platform) 
 | `redump-xgd1` | Full disc, partition at `0x18300000` | 7.8 GB (sparse) | Partition detection and partition-relative sectors (XGD1); same tree as `small` |
 | `redump-xgd2` | Full disc, partition at `0x0FD90000` | 7.8 GB (sparse) | The same for XGD2 |
 | `redump-xgd3` | Full disc, partition at `0x02080000` | 8.7 GB (sparse) | The same for XGD3 |
+| `late` | xiso, tables last | 1 MiB | The `small` tree with every file first (16 empty sectors after each), then the directory tables, each subdirectory's before its parent's and the root's last: every file comes before its directory table, as in the worst retail masterings ([ADR 0009](../../docs/adr/0009-install-from-zip-archives.md)) |
+| `late-deep` | xiso, tables last | 1.6 MiB | The `deep` tree in the same order |
+| `late-xgd3` | Full disc (XGD3), tables last | 8.7 GB (sparse) | `late` in a full-disc layout: a stream must find the partition first |
+| `late-root` | xiso, root last | 1.6 MiB | The `deep` tree with the subdirectory tables first (deepest first), then the files, then the root table: a stream meets every table before it can know where it is |
 | `large` (`--large`) | xiso | 4.3 GB (sparse) | A file of 4,294,950,912 bytes (4 GiB − 16 KiB: the largest FATX stores, [fatx-names.md §4b](../../docs/formats/fatx-names.md)), then files whose offsets are past 4 GiB; 64-bit offset arithmetic |
 
 CMake also zips `small` with [zipgen.py](zipgen.py): `small-stored.zip` (stored, Zip64 sizes in the local header) `small-deflate.zip` (Deflate level 9, like archive.org's zips) and `small-deflate0.zip` (Deflate level 0: stored Deflate blocks), each with a `readme.txt` before the image. `test_zip`, `test_zip_read` and `xcat-cli zip` read them. Zip64 end records and broken zips are built byte by byte in `core/tests/test_zip.c`; the fuzz seeds (zip archives, and raw Deflate streams for `fuzz_zip_inflate`) come from [zip_seeds.py](zip_seeds.py).
@@ -58,7 +62,7 @@ Each file's content is defined so any language can reproduce any byte range:
 
 The structures, the name ordering (bytewise, `a`–`z` folded to upper case) and the padding rules are those extract-xiso reads and writes; they're summarised at the top of [xisogen.py](xisogen.py). Choices the format leaves open:
 
-- the root table sits at sector `0x108`, then the other directory tables, then file data in path order;
+- the root table sits at sector `0x108`, then the other directory tables, then file data in path order (the `late*` fixtures use the orders above, set with `Image.order` and `gap_sectors` in [xisogen.py](xisogen.py));
 - the tree in each table is balanced, with the root entry at offset 0;
 - xiso images are padded to a multiple of 64 KiB; full-disc layouts to a full dump's size.
 

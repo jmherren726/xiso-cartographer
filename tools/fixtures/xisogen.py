@@ -258,6 +258,13 @@ class Image:
     size: int = 0
     root_sector: int = 0
     root_size: int = 0
+    # "tables-first" (extract-xiso's order); "tables-last": every file first, then the
+    # directory tables, each subdirectory's before its parent's and the root's last, like
+    # the worst retail masterings (docs/adr/0009-install-from-zip-archives.md); or
+    # "root-last": the subdirectory tables first (deepest first), then the files, then the
+    # root table, so a stream meets every table long before it can know where it is.
+    order: str = "tables-first"
+    gap_sectors: int = 0  # empty sectors after each file (padding a stream must skip)
 
 
 def _walk(nodes: list[Node], prefix: str = "") -> Iterator[tuple[str, Node]]:
@@ -270,7 +277,9 @@ def _walk(nodes: list[Node], prefix: str = "") -> Iterator[tuple[str, Node]]:
 
 
 def layout(image: Image) -> None:
-    """Assign sectors: all directory tables first (root at 0x108), then files."""
+    """Assign sectors from 0x108: all directory tables first (root first), then files; or,
+    with order "tables-last", files first, then the tables in reverse walk order (so every
+    table comes after its files and before its parent's), root last."""
     nodes = list(_walk(image.root))
     dirs = [n for _, n in nodes if n.is_dir]
     files = [(p, n) for p, n in nodes if not n.is_dir]
@@ -289,14 +298,28 @@ def layout(image: Image) -> None:
     image.root_size = _table_size(image.root)
 
     sector = ROOT_TABLE_SECTOR
-    image.root_sector = sector
-    sector += image.root_size // SECTOR
-    for d in dirs:
-        d.sector = sector
-        sector += len(d.table) // SECTOR
+    if image.order == "tables-first":
+        image.root_sector = sector
+        sector += image.root_size // SECTOR
+        for d in dirs:
+            d.sector = sector
+            sector += len(d.table) // SECTOR
+    elif image.order == "root-last":
+        for d in reversed(dirs):
+            d.sector = sector
+            sector += len(d.table) // SECTOR
+    elif image.order != "tables-last":
+        raise ValueError(f"unknown table order {image.order!r}")
     for _, f in files:
         f.sector = sector
-        sector += (f.size + SECTOR - 1) // SECTOR
+        sector += (f.size + SECTOR - 1) // SECTOR + image.gap_sectors
+    if image.order == "tables-last":
+        for d in reversed(dirs):
+            d.sector = sector
+            sector += len(d.table) // SECTOR
+    if image.order != "tables-first":
+        image.root_sector = sector
+        sector += image.root_size // SECTOR
 
     # Now every sector is known: build the real tables, deepest first.
     def fill(children: list[Node]) -> None:

@@ -77,7 +77,7 @@ static void test_valid_listing_has_no_problems(void)
 {
     xc_xdvdfs_entry dirs[] = {entry("media", 0x10)};
     xc_xdvdfs_entry files[] = {entry("default.xbe", 0x20), entry("media/intro.xmv", 0x20)};
-    xc_xdvdfs_listing l = {files, 2, dirs, 1, 0, NULL};
+    xc_xdvdfs_listing l = {files, 2, dirs, 1, 0, NULL, NULL, 0, false};
     size_t count = 99;
     TEST_ASSERT_EQUAL_INT(XC_OK, xc_fatx_check_listing(&l, 11, NULL, 0, &count));
     TEST_ASSERT_EQUAL_size_t(0, count);
@@ -93,7 +93,7 @@ static void test_file_size_limit(void)
     files[2].size = 0xFFFFFFFFU;
     xc_xdvdfs_entry dirs[] = {entry("d", 0x10)};
     dirs[0].size = 0xFFFFFFFFU; /* a directory's size is its table: never checked here */
-    xc_xdvdfs_listing l = {files, 3, dirs, 1, 0, NULL};
+    xc_xdvdfs_listing l = {files, 3, dirs, 1, 0, NULL, NULL, 0, false};
     xc_fatx_problem p[4];
     size_t count = 0;
     TEST_ASSERT_EQUAL_INT(XC_OK, xc_fatx_check_listing(&l, 11, p, 4, &count));
@@ -111,7 +111,7 @@ static void test_bad_names_are_reported(void)
     long_name[43] = '\0';
     xc_xdvdfs_entry files[] = {entry("ok.bin", 0x20), entry("what?.bin", 0x20),
                                entry(long_name, 0x20)};
-    xc_xdvdfs_listing l = {files, 3, NULL, 0, 0, NULL};
+    xc_xdvdfs_listing l = {files, 3, NULL, 0, 0, NULL, NULL, 0, false};
     xc_fatx_problem p[4];
     size_t count = 0;
     TEST_ASSERT_EQUAL_INT(XC_OK, xc_fatx_check_listing(&l, 11, p, 4, &count));
@@ -137,7 +137,7 @@ static void test_path_limit_is_exactly_250(void)
     at[237] = '\0'; /* 12 + 1 + 237 = 250 */
     over[238] = '\0';
     xc_xdvdfs_entry files[] = {entry(at, 0x20), entry(over, 0x20)};
-    xc_xdvdfs_listing l = {files, 2, NULL, 0, 0, NULL};
+    xc_xdvdfs_listing l = {files, 2, NULL, 0, 0, NULL, NULL, 0, false};
     xc_fatx_problem p[2];
     size_t count = 0;
     TEST_ASSERT_EQUAL_INT(XC_OK, xc_fatx_check_listing(&l, 12, p, 2, &count));
@@ -164,7 +164,7 @@ static void test_directory_entry_limit(void)
     }
     /* Use N - 1 files: the root then holds 4,095 files plus the directory "big" = 4,096. */
     xc_xdvdfs_entry dirs[] = {entry("big", 0x10)};
-    xc_xdvdfs_listing l = {files, N - 1, dirs, 1, 0, NULL};
+    xc_xdvdfs_listing l = {files, N - 1, dirs, 1, 0, NULL, NULL, 0, false};
     xc_fatx_problem p[2];
     size_t count = 0;
     TEST_ASSERT_EQUAL_INT(XC_OK, xc_fatx_check_listing(&l, 12, p, 2, &count));
@@ -179,7 +179,7 @@ static void test_directory_entry_limit(void)
 static void test_problem_count_exceeds_storage(void)
 {
     xc_xdvdfs_entry files[] = {entry("a?", 0x20), entry("b?", 0x20), entry("c?", 0x20)};
-    xc_xdvdfs_listing l = {files, 3, NULL, 0, 0, NULL};
+    xc_xdvdfs_listing l = {files, 3, NULL, 0, 0, NULL, NULL, 0, false};
     xc_fatx_problem p[1];
     size_t count = 0;
     TEST_ASSERT_EQUAL_INT(XC_OK, xc_fatx_check_listing(&l, 12, p, 1, &count));
