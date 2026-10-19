@@ -1,6 +1,6 @@
 # 0009. Install from zip archives by streaming the zip itself
 
-- **Status:** Accepted (2026-10-14, by the owner). Zip support was optional milestone M9b; it becomes **M5b**, built right after M5 (HTTPS).
+- **Status:** Accepted (2026-10-14, by the owner). Zip support was optional milestone M9b; it becomes **M5b**, built right after M5 (HTTPS). **Amended 2026-10-19** (owner decision): late files go through an adaptive spool, then a second pass over what it dropped. [Amendment 1](#amendment-1-2026-10-19-adaptive-spool) replaces point 6's second-pass rule and the "Directory-table order" decision.
 - **Date:** 2026-10-14
 
 ## Context
@@ -36,7 +36,7 @@ So it can't be resumed, verified or used for a streaming install, which requires
    - The upside is that **every installed byte passes through the member's CRC-32**, so full-disc installs get complete verification against the zip, stronger than ADR 0004's size-only check for Redump layouts.
 6. **Checkpoints, resume and late tables:** while decompressing, the installer saves a checkpoint every 64 MiB of decompressed output: miniz's `tinfl` state plus its 32 KiB window (about 43 KiB), the compressed offset, and the CRC-32 of that interval. Checkpoints serve two purposes:
    - **Resume:** an interrupted install restarts the download from the last checkpoint with `Range`.
-   - **Files that come before their directory table** (see "Directory-table order" below): pass 1 streams the whole member and writes every file whose tables have already been read. Once all tables are known, pass 2 restarts from the checkpoint before the first late file, re-downloading only up to the last table those files wait for, and writes the late files. Re-read bytes are checked against pass 1's per-interval CRC-32s.
+   - **Files that come before their directory table** (see "Directory-table order" below; *replaced by [Amendment 1](#amendment-1-2026-10-19-adaptive-spool)*): pass 1 streams the whole member and writes every file whose tables have already been read. Once all tables are known, pass 2 restarts from the checkpoint before the first late file, re-downloading only up to the last table those files wait for, and writes the late files. Re-read bytes are checked against pass 1's per-interval CRC-32s.
 7. **Library:** miniz (MIT; already planned in [ADR 0002](0002-license.md)), behind a small `core/zip` module with its own fuzz target, like every parser (HANDOFF §7.3).
 8. **Maps:** `…zip/<member>` URLs (archive.org's on-the-fly extraction) are rejected when a map is loaded, with a message that points to the zip URL. The map spec gains this rule in the MR that adds zip support.
 
@@ -55,7 +55,7 @@ Installing in one sequential pass needs every directory table to come before the
 
 So the mastering puts some large files ahead of the directory tables. Only 8 of 517 files are affected, but a single pass can't install this image.
 
-**Decision:** checkpoints and a targeted second pass (point 6). For this image, pass 2 re-reads 410.8 → 1,244.3 MiB of the image: about 834 MiB decompressed, roughly 0.6 GB of the 5.74 GB zip at its average 73% ratio, or ~10% extra download. It needs about 5 MB of checkpoints on disk.
+**Decision (original; replaced by [Amendment 1](#amendment-1-2026-10-19-adaptive-spool), which measured more games):** checkpoints and a targeted second pass (point 6). For this image, pass 2 re-reads 410.8 → 1,244.3 MiB of the image: about 834 MiB decompressed, roughly 0.6 GB of the 5.74 GB zip at its average 73% ratio, or ~10% extra download. It needs about 5 MB of checkpoints on disk.
 
 **Alternatives considered:**
 
@@ -71,3 +71,71 @@ Only Deflate members are affected. Bare images and stored members are read with 
 - Memory: about 43 KiB of decompressor state, plus the existing I/O buffer.
 - Some zips will be refused (Deflate64 from Windows' built-in zipper, LZMA from 7-Zip's zip mode). Each refusal names the method.
 - Adds `core/zip`, miniz, a fuzz target, Zip64 test fixtures (the fixture generator gains zip output), and changes to the map spec and `extract` (a sequential-source mode).
+
+## Amendment 1 (2026-10-19): adaptive spool
+
+### Why
+
+The original decision was sized on one game, where 8 of 517 files came before their tables and a second pass cost ~10% extra download. Measurements since then (`xcat-cli layout`, retail XGD1 full-disc dumps from the owner, titles left out per [ADR 0006](0006-no-links-no-bypass.md)) show that was the good case:
+
+| Game | Late files / all | Late file data | Last table ends at | Unidentified before that |
+|---|---|---|---|---|
+| A (2026-10-14) | 8 / 517 | 616 MiB | 4,040.5 MiB | not measured (before §8.1) |
+| B (2026-10-14) | 20 / 21 | ~2,968 MiB | ~3,738 MiB | not measured |
+| C | 12 / 14 | 868 MiB | 3,732.9 MiB | 3,346 MiB |
+| D | 2,113 / 2,117 | 2,798 MiB | 3,735.6 MiB | 3,348 MiB |
+| E | 19 / 27 | 1,757 MiB | 2,861.4 MiB | 2,474 MiB |
+| F | 59 / 59 | 218 MiB | 3,737.8 MiB | 3,351 MiB |
+
+Every game has late files. In most of them, most of the game is late, so a second pass alone means downloading most of the game twice (D re-reads 3,288 MiB of the image).
+
+The measurements show two things ([xdvdfs.md §8.1](../formats/xdvdfs.md#81-spool-plan) defines the terms):
+
+1. The bytes that can't be identified yet start with **padding**: hundreds of MiB to ~3 GiB between the partition start and the first file data. The late files sit **just before the tables** that list them.
+2. So a spool that keeps the **latest** unidentified bytes, dropping its oldest when full, keeps the late files. A spool that keeps the **first** bytes fills up with padding and saves almost nothing: C, E and F re-read the same with 2 GiB of spool as with none.
+
+Pass 2 re-reads, in MiB of the image, by spool size (keep-latest model; pass 2 starts at a 64 MiB checkpoint):
+
+| Spool | C | D | E | F |
+|---|---|---|---|---|
+| 0 | 917 | 3,288 | 1,944 | 282 |
+| 256 MiB | 661 | 3,032 | 1,709 | 0 |
+| 512 MiB | 405 | 2,776 | 1,453 | 0 |
+| 1 GiB | 0 | 2,264 | 941 | 0 |
+| 2 GiB | 0 | 1,240 | 0 | 0 |
+| everything (no pass 2) | 3,346 | 3,348 | 2,474 | 3,351 |
+
+No single size suits every game and every drive, so the spool uses whatever disk the install doesn't need.
+
+### Decision
+
+This applies to **Deflate members** only. Bare images and stored members are read with `Range`, tables first, as before.
+
+1. **Pass 1** decompresses the whole member in order, as in point 5:
+   - bytes of a table, or of a file whose directory is already known, are handled as now: tables are parsed, file bytes are written;
+   - every other byte between the partition start and the end of the last table is **unidentified**: a gap or part of a late file, which can't be told apart yet. It goes to the **spool**;
+   - bytes before the partition (the video partition), and bytes after the last table that belong to no file, are discarded.
+2. **The spool is a set of chunk files**, one per 64 MiB checkpoint interval of the image (`XC_INSTALL_CHECKPOINT`), in the install folder next to the journal. A chunk holds its interval's unidentified bytes and is complete once the stream has passed that interval.
+3. **Size: free disk minus a reserve.** The spool has no fixed size. Before each write (game file or spool), the installer checks that the free space on the target drive stays above a **reserve** (256 MiB to start, tuned after the hardware tests). If it wouldn't, it **deletes the oldest spool chunk** and checks again. Game files always win over the spool. Since dropped chunks are always the oldest, together they cover one range from the partition start, `[partition, stop)`.
+4. **Once every table has been read**, the whole layout is known:
+   - the free-space check from the bare-image install runs, and with it the FATX checks (ADR 0008). If the game doesn't fit, the install stops with the usual message and the spool is deleted;
+   - the installer copies the late file bytes from the kept chunks into their files and deletes each chunk once it has been used. Gap bytes are dropped.
+5. **Pass 2** runs only if a dropped chunk held late file bytes. The installer restarts decompression from the checkpoint at or before the first dropped late byte, reads up to the end of the last one, and writes those bytes. Re-read bytes are checked against pass 1's per-interval CRC-32s (point 6). The member's CRC-32 still covers every byte, from pass 1.
+6. **The cost is shown after pass 1.** A Deflate member's layout is only known once its tables have been decompressed, so the extra cost can't be shown before the install starts (the original "Directory-table order" section said it could). When pass 1 ends, the screen and `install.log` say how much pass 2 will re-read: MiB of the image, plus an estimated download at the compression ratio seen so far. The journal records the same numbers.
+7. **Resume:** checkpoints work as before. The journal also records the kept chunks and `stop` (v1.3, specified in the MR that implements this). After a power cut, complete chunks are reused and the install resumes from the last checkpoint. A chunk after that checkpoint is rewritten.
+8. Peak disk use is the game files written so far plus the spool. A game whose late data plus padding fits in the free space needs no pass 2 at all.
+
+### Alternatives considered
+
+- **A fixed spool size** (e.g. 1 GiB): it wastes disk that a big drive has, and can fail on a full one. The measurements show the right size varies by game, from 256 MiB to over 3 GiB.
+- **Keeping the first unidentified bytes:** measured, and much worse (see above).
+- **Re-downloading only (the original decision):** up to ~3.3 GB extra per game (D).
+- **Two full passes:** worse than re-downloading only.
+- **Converting the zip on a PC first:** excluded for the beta by [ADR 0010](0010-on-box-login-required-for-beta.md), since everything happens on the box.
+
+### Consequences
+
+- On the measured games, a spool of 1–2 GiB removes pass 2 for most of them. D still re-reads ~1.2 GiB with 2 GiB of spool.
+- The installer needs the free-space hook (`xc_install_ops.free_space`) during the install, not just before it. For Deflate members, the free-space check moves to the point where every table is known.
+- An unfinished install's folder can hold spool chunks. Their names are ones FATX accepts, and they are deleted when the install completes or is abandoned.
+- The cost of a Deflate install is known only after pass 1. It is shown on screen and in the log, which is accepted for the beta.
