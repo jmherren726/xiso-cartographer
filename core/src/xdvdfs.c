@@ -694,6 +694,35 @@ static void span_add(span *s, size_t *n, uint64_t start, uint64_t end, uint64_t 
     }
 }
 
+/*
+ * Walks the holes between the merged spans `known` within [lo, hi) in order. Returns their
+ * total size, or stops once `target` bytes have been walked and sets *at to where that is.
+ */
+static uint64_t holes_until(const span *known, size_t nk, uint64_t lo, uint64_t hi, uint64_t target,
+                            uint64_t *at)
+{
+    uint64_t total = 0;
+    uint64_t pos = lo;
+    for (size_t i = 0; i <= nk && pos < hi; i++) {
+        uint64_t hole_end = i < nk ? known[i].start : hi;
+        if (hole_end > pos) {
+            uint64_t len = hole_end - pos;
+            if (total + len >= target && at != NULL) {
+                *at = pos + (target - total);
+                return target;
+            }
+            total += len;
+        }
+        if (i < nk && known[i].end > pos) {
+            pos = known[i].end;
+        }
+    }
+    if (at != NULL) {
+        *at = hi;
+    }
+    return total;
+}
+
 xc_err xc_xdvdfs_spool_plan(const xc_xdvdfs_volume *vol, const xc_xdvdfs_listing *listing,
                             uint64_t budget, uint64_t checkpoint_bytes, xc_xdvdfs_spool *out)
 {
@@ -749,36 +778,23 @@ xc_err xc_xdvdfs_spool_plan(const xc_xdvdfs_volume *vol, const xc_xdvdfs_listing
     nk = spans_merge(known, nk);
     nl = spans_merge(late, nl);
 
-    /* Walk the unidentified bytes (the holes between identified spans) in stream order. The
-       first `budget` of them are spooled; `stop` is where the spool fills up. */
-    uint64_t stop = hi;
-    uint64_t pos = lo;
-    bool full = false;
-    for (size_t i = 0; i <= nk && pos < hi; i++) {
-        uint64_t hole_end = i < nk ? known[i].start : hi;
-        if (hole_end > pos) {
-            uint64_t len = hole_end - pos;
-            if (!full && out->unidentified + len > budget) {
-                stop = pos + (budget - out->unidentified);
-                full = true;
-            }
-            out->unidentified += len;
-        }
-        if (i < nk && known[i].end > pos) {
-            pos = known[i].end;
-        }
-    }
-    out->spooled = full ? budget : out->unidentified;
+    /* The spool keeps the latest `budget` unidentified bytes: when it is full, its oldest
+       bytes are dropped. So the first unidentified - budget of them are dropped, and `stop` is
+       where the last dropped byte ends. */
+    out->unidentified = holes_until(known, nk, lo, hi, UINT64_MAX, NULL);
+    uint64_t dropped = budget < out->unidentified ? out->unidentified - budget : 0;
+    out->spooled = out->unidentified - dropped;
+    uint64_t stop = lo;
+    (void)holes_until(known, nk, lo, hi, dropped, &stop);
 
-    /* Late bytes past `stop` were neither written nor spooled: pass 2 reads them again. */
+    /* Late bytes before `stop` were neither written nor kept: pass 2 reads them again. */
     for (size_t i = 0; i < nl; i++) {
         out->late_bytes += late[i].end - late[i].start;
-        uint64_t start = late[i].start < stop ? stop : late[i].start;
-        if (start < late[i].end) {
-            if (start < out->reread_start) {
-                out->reread_start = start;
+        if (late[i].start < stop) {
+            if (out->reread_start == UINT64_MAX) {
+                out->reread_start = late[i].start;
             }
-            out->reread_end = late[i].end;
+            out->reread_end = late[i].end < stop ? late[i].end : stop;
         }
     }
     if (out->reread_start != UINT64_MAX) {

@@ -459,21 +459,24 @@ static void test_spool_plan_partial_spool(void)
 {
     late_img();
     xc_xdvdfs_spool s;
-    /* holes: [0, 33) then [34, 36): 34 sectors fill up at 35, where "late/x" starts */
-    spool_of_img(34 * S, 0, &s);
-    TEST_ASSERT_EQUAL_UINT64(34 * S, s.spooled);
+    /* holes: [0, 33), [34, 36) (with "late/x" at 35) and [36 + 10, 38). The spool keeps the
+       latest bytes: the last hole alone drops all of "late/x". */
+    spool_of_img(2 * S - 10, 0, &s);
+    TEST_ASSERT_EQUAL_UINT64(2 * S - 10, s.spooled);
     TEST_ASSERT_EQUAL_UINT64(35 * S, s.reread_start);
-    /* 50 more bytes of "late/x" fit */
-    spool_of_img(34 * S + 50, 0, &s);
-    TEST_ASSERT_EQUAL_UINT64(35 * S + 50, s.reread_start);
     TEST_ASSERT_EQUAL_UINT64(35 * S + 100, s.reread_end);
+    /* ...plus [35 + 50, 36) keeps all but its first 50 bytes */
+    spool_of_img(3 * S - 60, 0, &s);
+    TEST_ASSERT_EQUAL_UINT64(35 * S, s.reread_start);
+    TEST_ASSERT_EQUAL_UINT64(35 * S + 50, s.reread_end);
 }
 
 static void test_spool_plan_full_spool(void)
 {
     late_img();
     xc_xdvdfs_spool s;
-    spool_of_img(35 * S + 50, 0, &s); /* past "late/x", short of the last hole */
+    spool_of_img(4 * S - 10, 0, &s); /* everything from 34 on; [0, 33) is dropped */
+    TEST_ASSERT_EQUAL_UINT64(4 * S - 10, s.spooled);
     TEST_ASSERT_EQUAL_UINT64(UINT64_MAX, s.reread_start);
     TEST_ASSERT_EQUAL_UINT64(UINT64_MAX, s.reread_from);
     spool_of_img(UINT64_MAX, 0, &s);

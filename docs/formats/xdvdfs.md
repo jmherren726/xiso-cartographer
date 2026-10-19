@@ -113,8 +113,9 @@ A directory whose table points back to an ancestor is caught by the depth limit.
 
 - The stream is modelled from the partition offset (nothing before it is game data) to **all known**, the point where every directory table has been read. After it, every byte is identified.
 - A byte in that range is **identified** if it is in a directory table, or in a file whose parent directory is already known when the byte passes. A file whose directory becomes known part-way through is identified from that point on. Every other byte is **unidentified**: it might belong to a file listed in a table not yet read. Gaps and late file bytes can't be told apart until all tables are known.
-- The installer spools the first `budget` unidentified bytes, in stream order. Spooling all of them means no second pass. The peak spool on disk is `min(budget, unidentified)`; once all tables are known, spooled gap bytes are dropped.
-- Late file bytes after the spool fills up are read again in pass 2: from the checkpoint at or before the first such byte (checkpoints every `checkpoint_bytes` of the image, from offset 0) to the end of the last one.
+- The installer spools unidentified bytes and keeps the **latest** `budget` of them: when the spool is full, its oldest bytes are dropped. Spooling all of them means no second pass. The peak spool on disk is `min(budget, unidentified)`; once all tables are known, spooled gap bytes are dropped.
+- Keeping the latest bytes, not the first, matters: on the retail full-disc dumps measured so far, the unidentified bytes start with hundreds of MiB (up to ~3 GiB) of padding, and the late files sit just before the tables that list them.
+- Late file bytes the spool dropped are read again in pass 2: from the checkpoint at or before the first such byte (checkpoints every `checkpoint_bytes` of the image, from offset 0) to the end of the last one.
 - Files that share bytes (several entries with the same extent) are counted per byte, not per file.
 
 `xcat-cli layout` prints the plan for several budgets.
