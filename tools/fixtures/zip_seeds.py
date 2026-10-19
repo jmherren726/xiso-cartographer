@@ -1,7 +1,8 @@
-"""Writes the zip fuzz seeds (core/tests/fuzz-seeds/zip/): small archives covering
-docs/formats/zip.md sections 2-6, Zip64 ones built byte by byte.
+"""Writes the zip fuzz seeds: small archives covering docs/formats/zip.md sections 2-6
+(Zip64 ones built byte by byte) into <dir>/zip, and raw Deflate streams for sections 9-10
+into <dir>/zip-inflate.
 
-Usage: python3 tools/fixtures/zip_seeds.py core/tests/fuzz-seeds/zip
+Usage: python3 tools/fixtures/zip_seeds.py core/tests/fuzz-seeds
 """
 
 from __future__ import annotations
@@ -48,8 +49,32 @@ def zip64_by_hand(name: bytes, data: bytes, method: int) -> bytes:
     return local + central + rec + loc + eocd
 
 
+def raw_deflate(data: bytes, level: int = 9, strategy: int = zlib.Z_DEFAULT_STRATEGY,
+                flush_every: int = 0) -> bytes:
+    c = zlib.compressobj(level, zlib.DEFLATED, -15, 9, strategy)
+    if flush_every == 0:
+        return c.compress(data) + c.flush()
+    out = b""
+    for i in range(0, len(data), flush_every):
+        out += c.compress(data[i:i + flush_every]) + c.flush(zlib.Z_FULL_FLUSH)
+    return out + c.flush()
+
+
+def inflate_seeds() -> dict[str, bytes]:
+    text = b"".join(b"line %d of a synthetic test image\n" % i for i in range(3000))
+    noise = bytes((i * 2654435761 >> 13) & 0xFF for i in range(40000))
+    return {
+        "empty": raw_deflate(b""),
+        "text": raw_deflate(text),
+        "zeros-200k": raw_deflate(bytes(200000)),
+        "noise-stored-blocks": raw_deflate(noise, level=0),
+        "fixed-huffman": raw_deflate(text, strategy=zlib.Z_FIXED),
+        "flushed-blocks": raw_deflate(text * 3, flush_every=20000),
+    }
+
+
 def main() -> int:
-    out = sys.argv[1]
+    out = os.path.join(sys.argv[1], "zip")
     os.makedirs(out, exist_ok=True)
     image = bytes(range(256)) * 8
     seeds = {
@@ -66,6 +91,11 @@ def main() -> int:
         "zip64-deflate": zip64_by_hand(b"game.iso", image, 8),
     }
     for k, v in seeds.items():
+        with open(os.path.join(out, k + ".seed"), "wb") as f:
+            f.write(v)
+    out = os.path.join(sys.argv[1], "zip-inflate")
+    os.makedirs(out, exist_ok=True)
+    for k, v in inflate_seeds().items():
         with open(os.path.join(out, k + ".seed"), "wb") as f:
             f.write(v)
     return 0

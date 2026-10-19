@@ -1,6 +1,6 @@
 # Zip archives (reading the directory and choosing the image)
 
-**Status:** Normative. §1–§7 are implemented by `xcat/zip.h` (M5b) and used by `xcat-cli zip`. Streaming a member's data (stored or Deflate) comes in a later M5b MR, which adds its section here. The reasons are in [ADR 0009](../adr/0009-install-from-zip-archives.md).
+**Status:** Normative. §1–§10 are implemented by `xcat/zip.h` (M5b). §1–§7 are used by `xcat-cli zip`; the installer uses §9–§10 from a later M5b MR. The reasons are in [ADR 0009](../adr/0009-install-from-zip-archives.md).
 
 The installer reads a zip with HTTP `Range` like any other source ([ADR 0004](../adr/0004-streaming-install.md)): first the end of the file, then the central directory, then the chosen member's local header. This document fixes the subset of [PKWARE's APPNOTE 6.3.10](https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT) that it accepts, and every check. Anything outside it is refused with a clear reason; nothing is guessed.
 
@@ -129,8 +129,56 @@ The **central directory** is authoritative: names, methods, sizes and CRC-32s co
 
 ## 7. Result
 
-`xc_zip_list()` returns every entry (name, method, flags, CRC-32, both sizes, local header offset). `xc_zip_pick_image()` applies §5, and `xc_zip_open_member()` applies §6 and returns the data offset. The CRC-32 is checked when the member's data is read (later MR).
+`xc_zip_list()` returns every entry (name, method, flags, CRC-32, both sizes, local header offset). `xc_zip_pick_image()` applies §5, and `xc_zip_open_member()` applies §6 and returns the data offset. The CRC-32 is checked when the member's data is read (§9).
 
 ## 8. Security
 
-Every offset and length comes from the file, which may be hostile. All reads go through bounds-checked helpers, sums are checked for overflow before use, and the reader allocates at most the 4 MiB directory plus one name per entry. `fuzz_zip` exercises §2–§6 on memory sources (CONTRIBUTING.md#fuzzing).
+Every offset and length comes from the file, which may be hostile. All reads go through bounds-checked helpers, sums are checked for overflow before use, and the reader allocates at most the 4 MiB directory plus one name per entry. `fuzz_zip` exercises §2–§6 on memory sources, and `fuzz_zip_inflate` exercises §9–§10 on raw Deflate data and on damaged checkpoints (CONTRIBUTING.md#fuzzing). The decompressor's memory is fixed (§10), whatever the input.
+
+## 9. Reading a member
+
+`xc_zip_read_member()` delivers a member's uncompressed bytes **in order, each once**, to a callback, with their offset in the uncompressed image. It starts at offset 0, or at a checkpoint (§10).
+
+1. **Input:** the member's compressed bytes `[data offset, data offset + compressed size)` (§6). If the source can stream (`read_stream`), they are read with one request from the starting point to the member's end, which over HTTP is one `Range` request. Otherwise they are read in pieces with `read_at`.
+2. **Stored** members are copied as they are. **Deflate** members go through miniz's `tinfl` as raw Deflate (RFC 1951: no zlib header, no Adler-32), with a 32 KiB wrapping dictionary.
+3. **Checks, all fatal:**
+   - the Deflate data is invalid, or ends before its last block: corrupt (`XC_ERR_CORRUPT`);
+   - the member produces more bytes than its uncompressed size, or fewer by the time its compressed bytes run out: corrupt;
+   - the last block ends before the compressed size has been read (trailing bytes): corrupt;
+   - when the whole member has been read, the CRC-32 of all its uncompressed bytes (from offset 0, carried across checkpoints) must equal the central directory's (`XC_ERR_ZIP_CRC`).
+4. **Stopping early:** the caller may name an offset to stop at (a second pass reads only up to its last late byte, ADR 0009 amendment 1). Bytes from that offset on aren't delivered, the rest of the input isn't read, and there's no CRC check. A non-OK return from the data callback also stops the read and is returned as is.
+5. **Checkpoints:** every `checkpoint_every` uncompressed bytes (a multiple of 32 KiB, so a checkpoint always falls where the dictionary wraps), the reader passes the caller a checkpoint (§10) and its position: the uncompressed offset, the compressed bytes consumed, and the CRC-32 so far. A second pass checks re-read bytes by comparing this CRC-32 with pass 1's at the same offset.
+
+## 10. Checkpoints
+
+A checkpoint is everything needed to continue reading a member from an uncompressed offset: miniz's decompressor state, the 32 KiB dictionary, and the positions. It's stored on the console's disk with the install journal, and only the same build reads it back.
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 4 | magic `XCZ1` |
+| 4 | 4 | build tag: `sizeof(tinfl_decompressor)` XOR (`MZ_VERNUM` << 16). A different miniz version, compiler or CPU word size gives another tag. |
+| 8 | 2 | method (0 or 8) |
+| 10 | 2 | 0 |
+| 12 | 4 | the member's CRC-32 (from the central directory) |
+| 16 | 8 | the member's compressed size |
+| 24 | 8 | the member's uncompressed size |
+| 32 | 8 | uncompressed offset: the next byte to deliver |
+| 40 | 8 | compressed bytes consumed: the next byte to read is at data offset + this |
+| 48 | 4 | CRC-32 of the uncompressed bytes before the offset |
+| 52 | 4 | 0 |
+| 56 | `sizeof(tinfl_decompressor)` | the decompressor, as bytes (Deflate only) |
+| … | 32,768 | the dictionary (Deflate only) |
+| last 4 | 4 | CRC-32 of all the bytes before it |
+
+All integers are little-endian. A checkpoint is about 41 KiB for Deflate and 60 bytes for stored members.
+
+Before resuming, the reader checks:
+
+- the length and the trailing CRC-32 (otherwise corrupt);
+- the magic and the build tag (otherwise `XC_ERR_UNSUPPORTED`: the checkpoint is from another build, and the caller should start again from 0);
+- the method, CRC-32 and both sizes against the member being read;
+- that the offsets lie inside the member and the uncompressed offset is a multiple of 32 KiB.
+
+A checkpoint that fails any of the last two checks is corrupt.
+
+A checkpoint is trusted once these checks pass: only the console writes one, in its own install folder. The trailing CRC-32 catches a damaged disk, not an attacker who can already write to it.

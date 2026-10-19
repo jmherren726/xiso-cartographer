@@ -46,6 +46,7 @@ typedef enum xc_err {
     XC_ERR_NOT_ZIP,         /* no zip end record (docs/formats/zip.md §2) */
     XC_ERR_ZIP_UNSUPPORTED, /* split zip, or a method/encryption we can't read (zip.md §6) */
     XC_ERR_ZIP_MEMBER,      /* the zip holds no image, or several (zip.md §5) */
+    XC_ERR_ZIP_CRC,         /* the image in the zip failed its CRC-32 check (zip.md §9) */
     XC_ERR_COUNT_           /* number of codes; not an error */
 } xc_err;
 

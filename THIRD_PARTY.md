@@ -7,6 +7,7 @@ Every dependency is a pinned git submodule under `third_party/` (or vendored wit
 | [Unity](https://github.com/ThrowTheSwitch/Unity) | v2.7.0 | MIT | `third_party/unity` | Host unit tests ([ADR 0003](docs/adr/0003-unit-test-framework.md)) | No |
 | [BearSSL](https://www.bearssl.org/) | `7bea48e` (master, 2026-04-06; v0.6 plus fixes) | MIT | `third_party/bearssl` | TLS 1.2, X.509, hashes ([ADR 0005](docs/adr/0005-bearssl-for-tls.md), [ADR 0012](docs/adr/0012-tls-trust-time-and-entropy.md)). Fetched from bearssl.org, so Dependabot can't track it: check upstream and CVE feeds at each release | Yes (from M5) |
 | [CA bundle](https://curl.se/docs/caextract.html) (`cacert.pem`, Mozilla's root store as curl publishes it) | Mozilla data as of 2026-09-25, SHA-256 `a41b5d35…0505` (pinned in `cacert.pem.sha256`) | MPL-2.0 | `third_party/cacert` (vendored, unmodified) | Built-in TLS trust anchors ([ADR 0012](docs/adr/0012-tls-trust-time-and-entropy.md) §3); updated in a dedicated PR, see its README | Yes (from M5) |
+| [miniz](https://github.com/richgel999/miniz) | 3.1.2 (`77d0dce`, 2026-07-01) | MIT | `third_party/miniz` | Its inflater (tinfl) only, for Deflate zip members ([ADR 0009](docs/adr/0009-install-from-zip-archives.md), [zip.md §9](docs/formats/zip.md)); built by `cmake/miniz.cmake` with its own `miniz_export.h` | Yes (from M5b) |
 | [nxdk](https://github.com/XboxDev/nxdk) | `14d5ee9` (2026-09-30) | Mixed; see below | `third_party/nxdk` | XBE toolchain and runtime libraries | Linked parts only |
 
 ## nxdk components

@@ -78,6 +78,51 @@ xc_err xc_zip_open_member(const xc_source *src, const xc_zip_listing *listing, s
 /* "stored", "Deflate", "Deflate64", "LZMA", "AES-encrypted" ... or NULL if not known. */
 const char *xc_zip_method_name(uint16_t method);
 
+/* --- reading a member (zip.md §9–§10) ---------------------------------------------- */
+
+#define XC_ZIP_DICT_SIZE 32768U /* checkpoints fall on multiples of this */
+
+/* Where a read is: the next uncompressed byte, the compressed bytes consumed, the CRC-32 of
+   the uncompressed bytes before `offset`. */
+typedef struct xc_zip_position {
+    uint64_t offset;
+    uint64_t compressed;
+    uint32_t crc32;
+} xc_zip_position;
+
+/* Receives a checkpoint (zip.md §10) to store; non-OK stops the read. */
+typedef xc_err (*xc_zip_checkpoint_fn)(void *ctx, const xc_zip_position *pos, const uint8_t *blob,
+                                       size_t len);
+
+typedef struct xc_zip_read {
+    const xc_source *src;
+    const xc_zip_member *member; /* from xc_zip_open_member() */
+    xc_source_data_fn on_data;   /* gets the uncompressed bytes in order; offset = in the image */
+    void *data_ctx;
+    uint64_t checkpoint_every; /* multiple of XC_ZIP_DICT_SIZE; 0 = no checkpoints */
+    xc_zip_checkpoint_fn on_checkpoint;
+    void *checkpoint_ctx;
+    const uint8_t *resume; /* a checkpoint to continue from, or NULL to start at 0 */
+    size_t resume_len;
+    uint64_t stop_at; /* deliver only bytes before this offset; 0 = the whole member */
+    size_t read_size; /* piece size for sources without read_stream; 0 = 64 KiB */
+} xc_zip_read;
+
+/*
+ * Reads the member (zip.md §9). XC_ERR_CORRUPT (bad Deflate data, wrong sizes, a damaged
+ * checkpoint), XC_ERR_ZIP_CRC, XC_ERR_UNSUPPORTED (a checkpoint from another build),
+ * XC_ERR_INVALID_ARG, XC_ERR_NOMEM, a read error, or what a callback returned. `end` (may
+ * be NULL) gets the position reached.
+ */
+xc_err xc_zip_read_member(const xc_zip_read *req, xc_zip_position *end);
+
+/* Checks a checkpoint against `member` (zip.md §10) and returns its position. */
+xc_err xc_zip_checkpoint_position(const uint8_t *blob, size_t len, const xc_zip_member *member,
+                                  xc_zip_position *pos);
+
+/* The length of a checkpoint for a member with this method (0 for unsupported methods). */
+size_t xc_zip_checkpoint_size(uint16_t method);
+
 #ifdef __cplusplus
 }
 #endif
