@@ -17,6 +17,7 @@
  */
 #include <ctype.h>
 #include <inttypes.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -282,6 +283,45 @@ static double mib(uint64_t bytes)
     return (double)bytes / (1024.0 * 1024.0);
 }
 
+/* The spool plan (xdvdfs.md §8.1) for a few spool sizes, to size ADR 0009's hybrid. */
+static int print_spool_plan(const char *image, const xc_xdvdfs_volume *vol,
+                            const xc_xdvdfs_listing *l)
+{
+    static const uint64_t budgets_mib[] = {0, 256, 512, 1024, 2048};
+    xc_xdvdfs_spool s;
+    xc_err err = xc_xdvdfs_spool_plan(vol, l, 0, (uint64_t)XC_INSTALL_CHECKPOINT, &s);
+    if (err != XC_OK) {
+        return fail(image, err);
+    }
+    (void)printf("spool: %.1f MiB unidentified before every table is read (at %.1f MiB); "
+                 "%.1f MiB of it is late file data\n",
+                 mib(s.unidentified), mib(s.all_known), mib(s.late_bytes));
+    (void)printf("  spool up to   pass 2 re-reads (decompressed, from a %u MiB checkpoint)\n",
+                 (unsigned)(XC_INSTALL_CHECKPOINT / (1024U * 1024U)));
+    for (size_t i = 0; i < sizeof budgets_mib / sizeof budgets_mib[0]; i++) {
+        uint64_t budget = budgets_mib[i] * 1024U * 1024U;
+        bool all = budget >= s.unidentified;
+        if (all) {
+            budget = s.unidentified;
+        }
+        err = xc_xdvdfs_spool_plan(vol, l, budget, (uint64_t)XC_INSTALL_CHECKPOINT, &s);
+        if (err != XC_OK) {
+            return fail(image, err);
+        }
+        if (all) {
+            (void)printf("  %8.1f MiB  nothing (spools everything)\n", mib(budget));
+            break;
+        }
+        if (s.reread_start == UINT64_MAX) {
+            (void)printf("  %8.1f MiB  nothing\n", mib(budget));
+        } else {
+            (void)printf("  %8.1f MiB  %.1f MiB: %.1f to %.1f MiB\n", mib(budget),
+                         mib(s.reread_end - s.reread_from), mib(s.reread_from), mib(s.reread_end));
+        }
+    }
+    return 0;
+}
+
 static int cmd_layout(const char *image)
 {
     xc_source src;
@@ -329,9 +369,10 @@ static int cmd_layout(const char *image)
                      "from %.1f MiB\n",
                      mib(o.first_late));
     }
+    rc = print_spool_plan(image, &vol, &l);
     xc_xdvdfs_listing_free(&l);
     xc_host_file_close(&hf);
-    return 0;
+    return rc;
 }
 
 /* --- get ------------------------------------------------------------------------------- */

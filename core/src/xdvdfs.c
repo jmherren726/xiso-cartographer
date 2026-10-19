@@ -523,6 +523,84 @@ static void note_table(xc_xdvdfs_order *o, uint64_t start, uint64_t end)
     }
 }
 
+/* When each directory becomes fully known in a sequential read (§8). */
+typedef struct known_map {
+    dir_ref *refs; /* sorted by path */
+    uint64_t *ready;
+    size_t n;
+    uint64_t root_ready;
+    uint64_t all_ready; /* when every table has been read */
+} known_map;
+
+static void known_map_free(known_map *k)
+{
+    free(k->refs);
+    free(k->ready);
+    memset(k, 0, sizeof *k);
+}
+
+/* Fills `k`; also notes every table in `o` unless it is NULL. */
+static xc_err known_map_build(const xc_xdvdfs_volume *vol, const xc_xdvdfs_listing *listing,
+                              known_map *k, xc_xdvdfs_order *o)
+{
+    memset(k, 0, sizeof *k);
+    if (vol->root_size > 0) {
+        uint64_t start = sector_offset(vol->partition_offset, vol->root_sector);
+        k->root_ready = start + vol->root_size;
+        if (o != NULL) {
+            note_table(o, start, k->root_ready);
+        }
+    }
+    k->all_ready = k->root_ready;
+
+    /* A directory is fully known once its own table and every ancestor's table have been
+       read. Directories come parents-first (§7), so each parent is done before its children. */
+    size_t n = listing->dir_count;
+    if (n == 0) {
+        return XC_OK;
+    }
+    if (n > SIZE_MAX / sizeof *k->refs || n > SIZE_MAX / sizeof *k->ready) {
+        return XC_ERR_NOMEM;
+    }
+    k->refs = malloc(n * sizeof *k->refs);
+    k->ready = malloc(n * sizeof *k->ready);
+    if (k->refs == NULL || k->ready == NULL) {
+        known_map_free(k);
+        return XC_ERR_NOMEM;
+    }
+    k->n = n;
+    for (size_t i = 0; i < n; i++) {
+        k->refs[i].path = listing->dirs[i].path;
+        k->refs[i].len = strlen(listing->dirs[i].path);
+        k->refs[i].index = i;
+    }
+    qsort(k->refs, n, sizeof *k->refs, dir_ref_cmp);
+    for (size_t i = 0; i < n; i++) {
+        const xc_xdvdfs_entry *d = &listing->dirs[i];
+        uint64_t known = parent_ready(d->path, k->refs, n, k->ready, k->root_ready);
+        if (d->size > 0) {
+            uint64_t end = d->offset + d->size;
+            if (o != NULL) {
+                note_table(o, d->offset, end);
+            }
+            if (end > known) {
+                known = end;
+            }
+        }
+        k->ready[i] = known;
+        if (known > k->all_ready) {
+            k->all_ready = known;
+        }
+    }
+    return XC_OK;
+}
+
+/* When the directory holding `path` is fully known. */
+static uint64_t known_map_parent(const known_map *k, const char *path)
+{
+    return parent_ready(path, k->refs, k->n, k->ready, k->root_ready);
+}
+
 xc_err xc_xdvdfs_stream_order(const xc_xdvdfs_volume *vol, const xc_xdvdfs_listing *listing,
                               xc_xdvdfs_order *out)
 {
@@ -534,49 +612,11 @@ xc_err xc_xdvdfs_stream_order(const xc_xdvdfs_volume *vol, const xc_xdvdfs_listi
     out->data_start = UINT64_MAX;
     out->first_late = UINT64_MAX;
 
-    uint64_t root_ready = 0;
-    if (vol->root_size > 0) {
-        uint64_t start = sector_offset(vol->partition_offset, vol->root_sector);
-        root_ready = start + vol->root_size;
-        note_table(out, start, root_ready);
+    known_map k;
+    xc_err err = known_map_build(vol, listing, &k, out);
+    if (err != XC_OK) {
+        return err;
     }
-
-    /* A directory is fully known once its own table and every ancestor's table have been
-       read. Directories come parents-first (§7), so each parent is done before its children. */
-    size_t n = listing->dir_count;
-    dir_ref *refs = NULL;
-    uint64_t *ready = NULL;
-    if (n > 0) {
-        if (n > SIZE_MAX / sizeof *refs || n > SIZE_MAX / sizeof *ready) {
-            return XC_ERR_NOMEM;
-        }
-        refs = malloc(n * sizeof *refs);
-        ready = malloc(n * sizeof *ready);
-        if (refs == NULL || ready == NULL) {
-            free(refs);
-            free(ready);
-            return XC_ERR_NOMEM;
-        }
-        for (size_t i = 0; i < n; i++) {
-            refs[i].path = listing->dirs[i].path;
-            refs[i].len = strlen(listing->dirs[i].path);
-            refs[i].index = i;
-        }
-        qsort(refs, n, sizeof *refs, dir_ref_cmp);
-        for (size_t i = 0; i < n; i++) {
-            const xc_xdvdfs_entry *d = &listing->dirs[i];
-            uint64_t known = parent_ready(d->path, refs, n, ready, root_ready);
-            if (d->size > 0) {
-                uint64_t end = d->offset + d->size;
-                note_table(out, d->offset, end);
-                if (end > known) {
-                    known = end;
-                }
-            }
-            ready[i] = known;
-        }
-    }
-
     for (size_t i = 0; i < listing->file_count; i++) {
         const xc_xdvdfs_entry *f = &listing->files[i];
         if (f->size == 0) {
@@ -588,7 +628,7 @@ xc_err xc_xdvdfs_stream_order(const xc_xdvdfs_volume *vol, const xc_xdvdfs_listi
         if (f->offset + f->size > out->data_end) {
             out->data_end = f->offset + f->size;
         }
-        uint64_t known = parent_ready(f->path, refs, n, ready, root_ready);
+        uint64_t known = known_map_parent(&k, f->path);
         if (known > f->offset) {
             out->late_files++;
             out->late_bytes += f->size;
@@ -600,7 +640,153 @@ xc_err xc_xdvdfs_stream_order(const xc_xdvdfs_volume *vol, const xc_xdvdfs_listi
             }
         }
     }
-    free(refs);
-    free(ready);
+    known_map_free(&k);
+    return XC_OK;
+}
+
+/* --- spool plan (§8.1) ------------------------------------------------------- */
+
+typedef struct span {
+    uint64_t start;
+    uint64_t end;
+} span;
+
+static int span_cmp(const void *a, const void *b)
+{
+    const span *x = a;
+    const span *y = b;
+    return (x->start > y->start) - (x->start < y->start);
+}
+
+/* Sorts and merges `s` in place; returns the new count. */
+static size_t spans_merge(span *s, size_t n)
+{
+    if (n == 0) {
+        return 0;
+    }
+    qsort(s, n, sizeof *s, span_cmp);
+    size_t m = 0;
+    for (size_t i = 1; i < n; i++) {
+        if (s[i].start <= s[m].end) {
+            if (s[i].end > s[m].end) {
+                s[m].end = s[i].end;
+            }
+        } else {
+            s[++m] = s[i];
+        }
+    }
+    return m + 1;
+}
+
+/* Appends [start, end) clipped to [lo, hi), if anything is left. */
+static void span_add(span *s, size_t *n, uint64_t start, uint64_t end, uint64_t lo, uint64_t hi)
+{
+    if (start < lo) {
+        start = lo;
+    }
+    if (end > hi) {
+        end = hi;
+    }
+    if (start < end) {
+        s[*n].start = start;
+        s[*n].end = end;
+        (*n)++;
+    }
+}
+
+xc_err xc_xdvdfs_spool_plan(const xc_xdvdfs_volume *vol, const xc_xdvdfs_listing *listing,
+                            uint64_t budget, uint64_t checkpoint_bytes, xc_xdvdfs_spool *out)
+{
+    if (vol == NULL || listing == NULL || out == NULL) {
+        return XC_ERR_INVALID_ARG;
+    }
+    memset(out, 0, sizeof *out);
+    out->reread_start = UINT64_MAX;
+    out->reread_from = UINT64_MAX;
+
+    known_map k;
+    xc_err err = known_map_build(vol, listing, &k, NULL);
+    if (err != XC_OK) {
+        return err;
+    }
+    uint64_t lo = vol->partition_offset; /* nothing before the partition is game data */
+    uint64_t hi = k.all_ready;           /* from here on every byte is identified */
+    out->all_known = hi;
+
+    /* Identified bytes (tables, and file bytes once their directory is known) and late
+       bytes (file bytes that pass before it is), both clipped to [lo, hi). */
+    size_t cap = listing->file_count + listing->dir_count + 1;
+    span *known = NULL;
+    span *late = NULL;
+    if (cap <= SIZE_MAX / sizeof *known) {
+        known = malloc(cap * sizeof *known);
+        late = malloc(cap * sizeof *late);
+    }
+    if (known == NULL || late == NULL) {
+        free(known);
+        free(late);
+        known_map_free(&k);
+        return XC_ERR_NOMEM;
+    }
+    size_t nk = 0;
+    size_t nl = 0;
+    if (vol->root_size > 0) {
+        span_add(known, &nk, k.root_ready - vol->root_size, k.root_ready, lo, hi);
+    }
+    for (size_t i = 0; i < listing->dir_count; i++) {
+        const xc_xdvdfs_entry *d = &listing->dirs[i];
+        span_add(known, &nk, d->offset, d->offset + d->size, lo, hi);
+    }
+    for (size_t i = 0; i < listing->file_count; i++) {
+        const xc_xdvdfs_entry *f = &listing->files[i];
+        uint64_t end = f->offset + f->size;
+        uint64_t ready = known_map_parent(&k, f->path);
+        uint64_t split = ready < f->offset ? f->offset : (ready < end ? ready : end);
+        span_add(late, &nl, f->offset, split, lo, hi);
+        span_add(known, &nk, split, end, lo, hi);
+    }
+    known_map_free(&k);
+    nk = spans_merge(known, nk);
+    nl = spans_merge(late, nl);
+
+    /* Walk the unidentified bytes (the holes between identified spans) in stream order. The
+       first `budget` of them are spooled; `stop` is where the spool fills up. */
+    uint64_t stop = hi;
+    uint64_t pos = lo;
+    bool full = false;
+    for (size_t i = 0; i <= nk && pos < hi; i++) {
+        uint64_t hole_end = i < nk ? known[i].start : hi;
+        if (hole_end > pos) {
+            uint64_t len = hole_end - pos;
+            if (!full && out->unidentified + len > budget) {
+                stop = pos + (budget - out->unidentified);
+                full = true;
+            }
+            out->unidentified += len;
+        }
+        if (i < nk && known[i].end > pos) {
+            pos = known[i].end;
+        }
+    }
+    out->spooled = full ? budget : out->unidentified;
+
+    /* Late bytes past `stop` were neither written nor spooled: pass 2 reads them again. */
+    for (size_t i = 0; i < nl; i++) {
+        out->late_bytes += late[i].end - late[i].start;
+        uint64_t start = late[i].start < stop ? stop : late[i].start;
+        if (start < late[i].end) {
+            if (start < out->reread_start) {
+                out->reread_start = start;
+            }
+            out->reread_end = late[i].end;
+        }
+    }
+    if (out->reread_start != UINT64_MAX) {
+        out->reread_from = checkpoint_bytes > 0
+                               ? out->reread_start - out->reread_start % checkpoint_bytes
+                               : out->reread_start;
+    }
+    free(known);
+    free(late);
     return XC_OK;
 }

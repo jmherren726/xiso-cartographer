@@ -106,3 +106,15 @@ A directory whose table points back to an ancestor is caught by the depth limit.
 - The report gives the table and data ranges, the number and total size of late files, the lowest late offset (where a second pass would have to start), and the latest table end any late file waits for.
 
 `xcat-cli layout <image>` prints this report for an image on a PC.
+
+### 8.1 Spool plan
+
+`xc_xdvdfs_spool_plan()` sizes the two ways a sequential install can handle late files: spool bytes to disk, or read them again in a second pass. It models an installer that learns the layout only as the stream passes:
+
+- The stream is modelled from the partition offset (nothing before it is game data) to **all known**, the point where every directory table has been read. After it, every byte is identified.
+- A byte in that range is **identified** if it is in a directory table, or in a file whose parent directory is already known when the byte passes. A file whose directory becomes known part-way through is identified from that point on. Every other byte is **unidentified**: it might belong to a file listed in a table not yet read. Gaps and late file bytes can't be told apart until all tables are known.
+- The installer spools the first `budget` unidentified bytes, in stream order. Spooling all of them means no second pass. The peak spool on disk is `min(budget, unidentified)`; once all tables are known, spooled gap bytes are dropped.
+- Late file bytes after the spool fills up are read again in pass 2: from the checkpoint at or before the first such byte (checkpoints every `checkpoint_bytes` of the image, from offset 0) to the end of the last one.
+- Files that share bytes (several entries with the same extent) are counted per byte, not per file.
+
+`xcat-cli layout` prints the plan for several budgets.
