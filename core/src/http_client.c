@@ -136,6 +136,8 @@ xc_err xc_http_resource_init(xc_http_resource *r, const char *url, size_t len)
 typedef struct attempt {
     uint64_t first; /* requested range */
     uint64_t last;
+    bool whole; /* xc_http_get: no Range; a 200 with its whole body, at most `max` bytes */
+    uint64_t max;
     xc_http_data_fn fn;
     void *ctx;
 
@@ -162,11 +164,14 @@ static xc_err build_request(xc_http_client *c, const xc_url *u, const attempt *a
     }
     w_str(&w, "\r\nUser-Agent: xiso-cartographer/");
     w_str(&w, xc_version_string());
-    w_str(&w, USER_AGENT_SUFFIX "\r\nAccept-Encoding: identity\r\nRange: bytes=");
-    w_u64(&w, a->first);
-    w_str(&w, "-");
-    w_u64(&w, a->last);
-    w_str(&w, "\r\n");
+    w_str(&w, USER_AGENT_SUFFIX "\r\nAccept-Encoding: identity\r\n");
+    if (!a->whole) {
+        w_str(&w, "Range: bytes=");
+        w_u64(&w, a->first);
+        w_str(&w, "-");
+        w_u64(&w, a->last);
+        w_str(&w, "\r\n");
+    }
     c->last_section = NULL;
     if (c->cfg.auth != NULL && !w.overflow && w.cap - w.n > 2) {
         size_t added = 0;
@@ -252,11 +257,13 @@ static xc_err deliver(xc_http_client *c, attempt *a, const uint8_t *data, size_t
     return err;
 }
 
-/* §5: streams the body of a 206 to the callback. The first bytes are in buf[pos, have). */
+/*
+ * §5: streams a body to the callback. The first bytes are in buf[pos, have). `remaining` is
+ * its length when `sized`; otherwise the body is chunked and ends with its last chunk.
+ */
 static xc_err read_body(xc_http_client *c, attempt *a, const xc_http_response *resp, size_t pos,
-                        size_t have)
+                        size_t have, bool sized, uint64_t remaining)
 {
-    uint64_t remaining = resp->range_last - resp->range_first + 1U;
     xc_http_chunked ch;
     xc_http_chunked_init(&ch);
     uint8_t *buf = c->cfg.buf;
@@ -268,13 +275,17 @@ static xc_err read_body(xc_http_client *c, attempt *a, const xc_http_response *r
                 size_t data_len = 0;
                 xc_err err =
                     xc_http_chunked_feed(&ch, buf + pos, have - pos, &used, &data, &data_len);
-                if (err != XC_OK || (uint64_t)data_len > remaining) {
+                if (err != XC_OK || (sized && (uint64_t)data_len > remaining)) {
                     xc_http_client_close(c);
                     return XC_ERR_HTTP_PROTOCOL;
                 }
                 pos += used;
+                if (a->whole && (uint64_t)data_len > a->max - a->delivered) {
+                    xc_http_client_close(c);
+                    return XC_ERR_LIMIT;
+                }
                 if (data_len > 0) {
-                    remaining -= data_len;
+                    remaining -= sized ? data_len : 0U;
                     err = deliver(c, a, data, data_len);
                     if (err != XC_OK) {
                         return err;
@@ -282,7 +293,7 @@ static xc_err read_body(xc_http_client *c, attempt *a, const xc_http_response *r
                 }
             }
             if (xc_http_chunked_done(&ch)) {
-                if (remaining != 0) {
+                if (sized && remaining != 0) {
                     xc_http_client_close(c);
                     return XC_ERR_HTTP_PROTOCOL;
                 }
@@ -379,13 +390,26 @@ static xc_err run_attempt(xc_http_client *c, xc_http_resource *r, attempt *a)
         return err;
     }
     c->last_status = resp.status;
-    if (resp.status == 206) {
+    if (resp.status == 206 && !a->whole) {
         err = check_partial(r, a, &resp);
         if (err != XC_OK) {
             xc_http_client_close(c);
             return err;
         }
-        return read_body(c, a, &resp, head_len, have);
+        return read_body(c, a, &resp, head_len, have, true,
+                         resp.range_last - resp.range_first + 1U);
+    }
+    if (resp.status == 200 && a->whole) {
+        /* §5: a whole body must say where it ends, so a dropped connection is noticed. */
+        if (!resp.chunked && !resp.has_length) {
+            xc_http_client_close(c);
+            return XC_ERR_HTTP_PROTOCOL;
+        }
+        if (resp.has_length && resp.length > a->max) {
+            xc_http_client_close(c);
+            return XC_ERR_LIMIT;
+        }
+        return read_body(c, a, &resp, head_len, have, resp.has_length, resp.length);
     }
 
     /* Anything but a 206: its body isn't wanted, so the connection can't be reused. */
@@ -401,6 +425,8 @@ static xc_err run_attempt(xc_http_client *c, xc_http_resource *r, attempt *a)
     switch (resp.status) {
     case 200:
         return XC_ERR_HTTP_NO_RANGE;
+    case 206:
+        return XC_ERR_HTTP_PROTOCOL; /* to a request without Range */
     case 401:
     case 403:
         return XC_ERR_HTTP_DENIED;
@@ -447,9 +473,10 @@ static uint32_t backoff_ms(xc_http_client *c, unsigned failures)
     return lo + next_rand(c) % (d - lo + 1U);
 }
 
-/* Streams [first, last] with redirects, retries and resume. */
+/* Streams [first, last] with redirects, retries and resume; or, when `max` > 0, the whole
+ * body of at most `max` bytes, from its start again after each failure (xc_http_get). */
 static xc_err fetch(xc_http_client *c, xc_http_resource *r, uint64_t first, uint64_t last,
-                    xc_http_data_fn fn, void *ctx)
+                    uint64_t max, xc_http_data_fn fn, void *ctx)
 {
     uint64_t pos = first;
     unsigned failures = 0;
@@ -462,9 +489,11 @@ static xc_err fetch(xc_http_client *c, xc_http_resource *r, uint64_t first, uint
         a.last = last;
         a.fn = fn;
         a.ctx = ctx;
+        a.whole = max > 0;
+        a.max = max;
         xc_err err = run_attempt(c, r, &a);
-        pos += a.delivered;
-        if (a.delivered > 0) {
+        pos += a.whole ? 0U : a.delivered;
+        if (a.delivered > 0 && !a.whole) { /* a whole body starts over, so it isn't progress */
             failures = 0;
             redirects = 0;
         }
@@ -478,13 +507,13 @@ static xc_err fetch(xc_http_client *c, xc_http_resource *r, uint64_t first, uint
             memcpy(&r->effective, &r->scratch, sizeof r->effective);
             continue;
         }
-        if (err == XC_OK && (a.empty || pos > last)) {
+        if (err == XC_OK && (a.whole || a.empty || pos > last)) {
             return XC_OK;
         }
         if (err == XC_OK) {
             continue; /* the server sent less than asked for (§6): ask for the rest */
         }
-        if (pos > last && a.retryable) {
+        if (!a.whole && pos > last && a.retryable) {
             return XC_OK; /* every byte arrived; only the end of a chunked body was lost */
         }
         if (!a.retryable) {
@@ -531,7 +560,7 @@ xc_err xc_http_probe(xc_http_client *c, xc_http_resource *r)
     if (r->size_known) {
         return XC_OK;
     }
-    return fetch(c, r, 0, 0, discard, NULL);
+    return fetch(c, r, 0, 0, 0, discard, NULL);
 }
 
 xc_err xc_http_read(xc_http_client *c, xc_http_resource *r, uint64_t offset, uint64_t len,
@@ -550,7 +579,16 @@ xc_err xc_http_read(xc_http_client *c, xc_http_resource *r, uint64_t offset, uin
     if (len == 0) {
         return XC_OK;
     }
-    return fetch(c, r, offset, offset + len - 1U, fn, ctx);
+    return fetch(c, r, offset, offset + len - 1U, 0, fn, ctx);
+}
+
+xc_err xc_http_get(xc_http_client *c, xc_http_resource *r, uint64_t max_len, xc_http_data_fn fn,
+                   void *ctx)
+{
+    if (c == NULL || r == NULL || fn == NULL || max_len == 0) {
+        return XC_ERR_INVALID_ARG;
+    }
+    return fetch(c, r, 0, 0, max_len, fn, ctx);
 }
 
 /* --- xc_source adapter ------------------------------------------------------------------- */

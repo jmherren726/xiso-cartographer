@@ -847,6 +847,134 @@ static void test_head_too_large(void)
     TEST_ASSERT_EQUAL_INT(0, F.nsleeps);
 }
 
+/* --- xc_http_get ------------------------------------------------------------------------- */
+
+static int g_get_mode;  /* how serve_whole answers */
+static int g_get_drops; /* drop this many responses partway */
+
+enum { WHOLE_CL, WHOLE_CHUNKED, WHOLE_NO_LENGTH, WHOLE_206, WHOLE_REDIRECT };
+
+/* A generated file (like archive.org's /metadata): 200 with the whole body; Range ignored. */
+static void serve_whole(fake *f, fconn *c, const req *r)
+{
+    TEST_ASSERT_FALSE(r->has_range);
+    uint64_t last = f->size - 1U;
+    if (g_get_mode == WHOLE_REDIRECT && strcmp(r->target, "/final") != 0) {
+        out_fmt(c, "HTTP/1.1 302 Found\r\nLocation: /final\r\nContent-Length: 0\r\n\r\n");
+        return;
+    }
+    if (g_get_mode == WHOLE_206) {
+        serve(c, 0, last, f->size, CL, "");
+        return;
+    }
+    out_fmt(c, "HTTP/1.1 200 OK\r\n");
+    if (g_get_mode == WHOLE_CHUNKED) {
+        out_fmt(c, "Transfer-Encoding: chunked\r\n\r\n");
+        for (uint64_t p = 0; p <= last;) {
+            uint64_t n = last - p + 1U < 4000U ? last - p + 1U : 4000U;
+            out_fmt(c, "%" PRIx64 "\r\n", n);
+            out_body(c, p, p + n - 1U);
+            out_fmt(c, "\r\n");
+            p += n;
+        }
+        out_fmt(c, "0\r\n\r\n");
+    } else if (g_get_mode == WHOLE_NO_LENGTH) {
+        out_fmt(c, "Connection: close\r\n\r\n");
+        out_body(c, 0, last);
+        c->close_after = true;
+    } else {
+        out_fmt(c, "Content-Length: %" PRIu64 "\r\n\r\n", f->size);
+        out_body(c, 0, last);
+    }
+    if (g_get_drops > 0) {
+        g_get_drops--;
+        c->has_fail = true;
+        c->fail_at = c->out_len / 2U;
+        c->fail_err = XC_ERR_NET_IO;
+    }
+}
+
+static int g_restarts;
+
+/* Like collect, but a body may start over at 0 after a retry. */
+static xc_err collect_whole(void *ctx, uint64_t offset, const uint8_t *data, size_t len)
+{
+    if (offset == 0 && got_len > 0) {
+        g_restarts++;
+        got_len = 0;
+    }
+    return collect(ctx, offset, data, len);
+}
+
+static xc_err get_all(uint64_t max)
+{
+    got_len = 0;
+    g_restarts = 0;
+    return xc_http_get(&client, &res, max, collect_whole, NULL);
+}
+
+static void test_get(void)
+{
+    static const int framings[] = {WHOLE_CL, WHOLE_CHUNKED, WHOLE_REDIRECT};
+    for (size_t i = 0; i < sizeof framings / sizeof framings[0]; i++) {
+        g_get_mode = framings[i];
+        g_get_drops = 0;
+        start(serve_whole, "http://h/listing");
+        TEST_ASSERT_EQUAL_INT(XC_OK, get_all(FILE_SIZE));
+        check_got(0, FILE_SIZE);
+        TEST_ASSERT_FALSE(res.size_known);
+        /* The 200 was read to its end, so it's kept alive; a redirect's isn't (§9). */
+        int connects = framings[i] == WHOLE_REDIRECT ? 2 : 1;
+        TEST_ASSERT_EQUAL_INT(connects, F.connects);
+        TEST_ASSERT_EQUAL_INT(XC_OK, get_all(FILE_SIZE)); /* straight to where it led */
+        check_got(0, FILE_SIZE);
+        TEST_ASSERT_EQUAL_INT(connects, F.connects);
+        xc_http_client_close(&client);
+    }
+    TEST_ASSERT_EQUAL_STRING("/final", res.effective.target);
+
+    /* One byte over the limit, announced or not. */
+    for (int mode = WHOLE_CL; mode <= WHOLE_CHUNKED; mode++) {
+        g_get_mode = mode;
+        start(serve_whole, "http://h/listing");
+        TEST_ASSERT_EQUAL_INT(XC_ERR_LIMIT, get_all(FILE_SIZE - 1U));
+        TEST_ASSERT_EQUAL_INT(1, F.nlog); /* not retried */
+        xc_http_client_close(&client);
+    }
+
+    /* A body that doesn't say where it ends, and a 206 to a request without Range. */
+    for (int mode = WHOLE_NO_LENGTH; mode <= WHOLE_206; mode++) {
+        g_get_mode = mode;
+        start(serve_whole, "http://h/listing");
+        TEST_ASSERT_EQUAL_INT(XC_ERR_HTTP_PROTOCOL, get_all(FILE_SIZE));
+        TEST_ASSERT_EQUAL_INT(1, F.nlog);
+        xc_http_client_close(&client);
+    }
+    TEST_ASSERT_EQUAL_INT(XC_ERR_INVALID_ARG, xc_http_get(&client, &res, 0, collect_whole, NULL));
+}
+
+static void test_get_retries(void)
+{
+    /* Dropped twice partway: retried, and the body starts over from 0 each time. */
+    for (int mode = WHOLE_CL; mode <= WHOLE_CHUNKED; mode++) {
+        g_get_mode = mode;
+        g_get_drops = 2;
+        start(serve_whole, "http://h/listing");
+        TEST_ASSERT_EQUAL_INT(XC_OK, get_all(FILE_SIZE));
+        check_got(0, FILE_SIZE);
+        TEST_ASSERT_EQUAL_INT(2, g_restarts);
+        TEST_ASSERT_EQUAL_INT(3, F.nlog);
+        TEST_ASSERT_EQUAL_INT(2, F.nsleeps);
+        xc_http_client_close(&client);
+    }
+    /* A partial body isn't progress: a server that always drops is given up on. */
+    g_get_mode = WHOLE_CL;
+    g_get_drops = 1000;
+    start(serve_whole, "http://h/listing");
+    TEST_ASSERT_EQUAL_INT(XC_ERR_NET_IO, get_all(FILE_SIZE));
+    TEST_ASSERT_EQUAL_INT((int)XC_HTTP_DEFAULT_ATTEMPTS, F.nlog);
+}
+
 static void test_source_adapter(void)
 {
     start(serve_req, "http://h/f");
@@ -882,6 +1010,8 @@ int main(void)
     RUN_TEST(test_expired_redirect);
     RUN_TEST(test_cancel_and_unsupported);
     RUN_TEST(test_head_too_large);
+    RUN_TEST(test_get);
+    RUN_TEST(test_get_retries);
     RUN_TEST(test_source_adapter);
     return UNITY_END();
 }

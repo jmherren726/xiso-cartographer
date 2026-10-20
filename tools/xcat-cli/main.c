@@ -757,12 +757,30 @@ static xc_err read_local(const char *path, size_t max_len, char **data, size_t *
 
 typedef struct mem_ctx {
     char *buf;
+    size_t len;
+    size_t cap;
 } mem_ctx;
 
+/* xc_http_data_fn into a growing buffer, kept one byte larger than the body. A body that
+ * starts over at 0 (xc_http_get after a retry) replaces what came before. */
 static xc_err to_mem(void *ctx, uint64_t offset, const uint8_t *data, size_t len)
 {
     mem_ctx *m = ctx;
-    memcpy(m->buf + (size_t)offset, data, len);
+    m->len = (size_t)offset;
+    if (m->cap - m->len <= len) {
+        size_t cap = m->cap == 0 ? (size_t)64 * 1024 : m->cap;
+        while (cap - m->len <= len) {
+            cap *= 2;
+        }
+        char *grown = realloc(m->buf, cap);
+        if (grown == NULL) {
+            return XC_ERR_NOMEM;
+        }
+        m->buf = grown;
+        m->cap = cap;
+    }
+    memcpy(m->buf + m->len, data, len);
+    m->len += len;
     return XC_OK;
 }
 
@@ -789,26 +807,20 @@ static xc_err map_fetch(void *ctx, const char *location, bool is_url, size_t max
     }
     static xc_http_resource res; /* large; one fetch at a time */
     xc_err err = xc_http_resource_init(&res, location, strlen(location));
+    mem_ctx m = {NULL, 0, 0};
     if (err == XC_OK) {
-        err = xc_http_probe(&fc->env.client, &res);
+        err = xc_http_get(&fc->env.client, &res, max_len, to_mem, &m);
     }
-    if (err == XC_OK && res.size > max_len) {
-        err = XC_ERR_LIMIT;
-    }
-    mem_ctx m = {NULL};
-    if (err == XC_OK) {
-        m.buf = malloc((size_t)res.size + 1);
+    if (err == XC_OK && m.buf == NULL) {
+        m.buf = malloc(1); /* an empty body */
         err = m.buf != NULL ? XC_OK : XC_ERR_NOMEM;
-    }
-    if (err == XC_OK) {
-        err = xc_http_read(&fc->env.client, &res, 0, res.size, to_mem, &m);
     }
     if (err != XC_OK) {
         free(m.buf);
         return err;
     }
     *data = m.buf;
-    *len = (size_t)res.size;
+    *len = m.len;
     return XC_OK;
 }
 

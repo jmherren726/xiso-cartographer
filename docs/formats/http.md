@@ -72,6 +72,8 @@ Range: bytes=<first>-<last>
 
 Lines end in CRLF and the head ends with an empty line. There is no body. `Connection: keep-alive` is implied by HTTP/1.1.
 
+**Whole small files** (`xc_http_get`): maps loaded by `@include`, and archive.org item listings ([archiveorg.md](archiveorg.md)), which archive.org generates on the fly and serves without `Range` support. The request is the same, minus the `Range` line. The answer must be a `200` (after redirects), whose body is chunked or has a `Content-Length`, and is at most a limit the caller gives (1 MiB for a map, 4 MiB for a listing). A body over the limit fails without a retry. A body that doesn't say where it ends can't show it was cut short, so it's a protocol error, as is a `206`. After a failure in the middle, the next attempt fetches the whole file again (§7.2). A cut-off body isn't progress, so it doesn't reset the count of failed attempts.
+
 ## 4. Response head
 
 ### 4.1 Framing
@@ -151,3 +153,4 @@ Before every request hop, including each redirect target, the client asks the cr
 |---|---|---|
 | 1 | 2026-10-14 | First version. |
 | 1 | 2026-10-16 | Clarified for M5: TLS failures aren't retried (§7.2); how `https` connects (§9). No change for plain HTTP. |
+| 1 | 2026-10-20 | §3: whole small files without `Range`, for map includes and archive.org listings (M6). Range requests are unchanged. |

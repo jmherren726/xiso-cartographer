@@ -125,6 +125,16 @@ typedef xc_err (*xc_http_data_fn)(void *ctx, uint64_t offset, const uint8_t *dat
 xc_err xc_http_read(xc_http_client *c, xc_http_resource *r, uint64_t offset, uint64_t len,
                     xc_http_data_fn fn, void *ctx);
 
+/*
+ * Fetches a whole small file without Range (§3, §6): a 200 whose body is chunked or has a
+ * Content-Length, after redirects. For listings and maps, which servers may generate on the
+ * fly. XC_ERR_LIMIT once the body is longer than `max_len` bytes. A failure in the middle is
+ * retried like a read (§7.2), and the body is then delivered again from offset 0, so `fn` must
+ * accept starting over. `r`'s size and validators aren't used or set.
+ */
+xc_err xc_http_get(xc_http_client *c, xc_http_resource *r, uint64_t max_len, xc_http_data_fn fn,
+                   void *ctx);
+
 /* An xc_source over HTTP: every read_at, and every read_stream (a whole span), is one
  * xc_http_read. */
 typedef struct xc_http_source {
