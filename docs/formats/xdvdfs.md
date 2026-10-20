@@ -119,3 +119,13 @@ A directory whose table points back to an ancestor is caught by the depth limit.
 - Files that share bytes (several entries with the same extent) are counted per byte, not per file.
 
 `xcat-cli layout` prints the plan for several budgets.
+
+## 9. Partial listings
+
+A reader that gets the image as a stream ([stream-install.md](stream-install.md)) has only some directory tables at a time. `xc_xdvdfs_list_partial()` lists with the tables it has:
+
+- before reading a table, it asks the caller whether the table's first bytes (rule 1 of §3) are available;
+- an unavailable table's directory is listed and marked **pending**, and nothing below it is listed. An unavailable root gives an empty listing with the root pending;
+- every other rule applies as in §3–§7, to what is listed. Limits count only listed entries.
+
+Once every table is available, the result is the same as `xc_xdvdfs_list()`'s.

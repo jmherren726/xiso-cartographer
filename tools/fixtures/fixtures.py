@@ -92,6 +92,12 @@ FIXTURES = {
     "redump-xgd1": ("xgd1", small_tree),
     "redump-xgd2": ("xgd2", small_tree),
     "redump-xgd3": ("xgd3", small_tree),
+    # Tables after their files (each subdirectory's before its parent's), for installs from
+    # a sequential stream (Deflate zips, ADR 0009); padding between files.
+    "late": ("xiso", small_tree, "tables-last", 16),
+    "late-deep": ("xiso", deep_tree, "tables-last", 0),
+    "late-xgd3": ("xgd3", small_tree, "tables-last", 16),
+    "late-root": ("xiso", deep_tree, "root-last", 0),
 }
 LARGE = {"large": ("xiso", large_tree)}
 
@@ -99,8 +105,10 @@ LARGE = {"large": ("xiso", large_tree)}
 IMAGE_HASH_LIMIT = 64 * 1024 * 1024
 
 
-def build(name: str, layout_name: str, tree, out: str) -> dict:
-    image = Image(name=name, layout=layout_name, root=tree(name))
+def build(name: str, layout_name: str, tree, out: str, order: str = "tables-first",
+          gap_sectors: int = 0) -> dict:
+    image = Image(name=name, layout=layout_name, root=tree(name), order=order,
+                  gap_sectors=gap_sectors)
     iso = os.path.join(out, f"{name}.iso")
     write(image, iso)
     digest = sha256_file(iso) if image.size <= IMAGE_HASH_LIMIT else None
@@ -144,8 +152,8 @@ def main(argv: list[str] | None = None) -> int:
 
     os.makedirs(args.out, exist_ok=True)
     for name in names:
-        layout_name, tree = table[name]
-        m = build(name, layout_name, tree, args.out)
+        layout_name, tree, *order = table[name]
+        m = build(name, layout_name, tree, args.out, *order)
         print(f"{name}: {layout_name}, {m['image_size']:,} bytes, "
               f"{len(m['files'])} files, {len(m['dirs'])} dirs")
     return 0

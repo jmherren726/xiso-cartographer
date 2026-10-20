@@ -14,6 +14,7 @@ add_library(xcat
   src/install.c
   src/journal.c
   src/map.c
+  src/seq.c
   src/source.c
   src/sntp.c
   src/text.c

@@ -618,12 +618,22 @@ static void test_fixture(void)
     TEST_ASSERT_EQUAL_size_t(l.dir_count, nd);
     TEST_ASSERT_EQUAL_UINT64(total, l.total_file_bytes);
 
-    /* The generator writes every table before any file data (tools/fixtures/README.md). */
+    /* The generator writes every table before any file data, or with "late*" fixtures the
+       root table after every file (tools/fixtures/README.md). */
     xc_xdvdfs_order o;
     TEST_ASSERT_EQUAL_INT(XC_OK, xc_xdvdfs_stream_order(&vol, &l, &o));
-    TEST_ASSERT_EQUAL_size_t(0, o.late_files);
     TEST_ASSERT_EQUAL_size_t(l.dir_count + 1, o.tables);
-    TEST_ASSERT_TRUE(o.tables_end <= o.data_start);
+    if (strncmp(fixture_name, "late", 4) == 0) {
+        size_t nonempty = 0;
+        for (size_t i = 0; i < l.file_count; i++) {
+            nonempty += l.files[i].size > 0;
+        }
+        TEST_ASSERT_EQUAL_size_t(nonempty, o.late_files); /* the root table comes last */
+        TEST_ASSERT_TRUE(o.data_end <= o.tables_end);
+    } else {
+        TEST_ASSERT_EQUAL_size_t(0, o.late_files);
+        TEST_ASSERT_TRUE(o.tables_end <= o.data_start);
+    }
     free(dirs);
     xc_xdvdfs_listing_free(&l);
 }

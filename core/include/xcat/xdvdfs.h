@@ -6,6 +6,7 @@
  * docs/formats/xdvdfs.md; every input is treated as hostile.
  */
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -52,6 +53,11 @@ typedef struct xc_xdvdfs_listing {
     size_t dir_count;
     uint64_t total_file_bytes;
     char *paths_; /* storage for every path; internal */
+    /* xc_xdvdfs_list_partial() only (§9): tables that weren't available. dir_pending[i] is
+       true when dirs[i]'s table wasn't read, so nothing below it is listed; NULL if none. */
+    bool *dir_pending;
+    size_t pending_count; /* includes the root when root_pending */
+    bool root_pending;
 } xc_xdvdfs_listing;
 
 /* Fills `out` with the defaults from docs/formats/xdvdfs.md §6. */
@@ -73,6 +79,19 @@ xc_err xc_xdvdfs_list(const xc_source *src, const xc_xdvdfs_volume *vol,
 
 /* Frees everything in a listing and zeroes it. Safe on a zeroed listing. */
 void xc_xdvdfs_listing_free(xc_xdvdfs_listing *listing);
+
+/* True if the first `len` bytes of the directory table at absolute `offset` can be read. */
+typedef bool (*xc_xdvdfs_have_fn)(void *ctx, uint64_t offset, size_t len);
+
+/*
+ * Like xc_xdvdfs_list(), for a reader that gets the image as a stream (§9): a table that
+ * `have` says isn't available yet isn't read. Its directory is listed and marked pending,
+ * and nothing below it is listed. Once every table is available, the result equals
+ * xc_xdvdfs_list()'s, checks included.
+ */
+xc_err xc_xdvdfs_list_partial(const xc_source *src, const xc_xdvdfs_volume *vol,
+                              const xc_xdvdfs_limits *limits, xc_xdvdfs_have_fn have,
+                              void *have_ctx, xc_xdvdfs_listing *out);
 
 /*
  * Where directory tables sit relative to file data (docs/formats/xdvdfs.md §8). A

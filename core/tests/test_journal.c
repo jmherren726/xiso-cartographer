@@ -13,7 +13,7 @@ static xc_xdvdfs_entry entries[] = {
     {"media/100%.wav", 0x40000, 0, 0, 0},
     {"caf\xC3\xA9/-", 0x50000, 1, 160, 0},
 };
-static xc_xdvdfs_listing listing = {entries, 4, NULL, 0, 0, NULL};
+static xc_xdvdfs_listing listing = {entries, 4, NULL, 0, 0, NULL, NULL, 0, false};
 static xc_journal_id image;
 static xc_journal_state st;
 static char buf[65536];

@@ -12,7 +12,9 @@ target_compile_definitions(unity PUBLIC UNITY_SUPPORT_64
 find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
 option(XCAT_LARGE_FIXTURES "Also generate and test the >4 GiB sparse fixture" OFF)
 set(XCAT_FIXTURES_DIR ${CMAKE_BINARY_DIR}/fixtures)
-set(XCAT_FIXTURES small deep redump-xgd1 redump-xgd2 redump-xgd3)
+# The late* fixtures put their directory tables after their files (sequential installs).
+set(XCAT_FIXTURES small deep redump-xgd1 redump-xgd2 redump-xgd3 late late-deep late-xgd3 late-root)
+set(XCAT_LATE_FIXTURES late late-deep late-xgd3 late-root)
 set(_fixture_args)
 if(XCAT_LARGE_FIXTURES)
   list(APPEND XCAT_FIXTURES large)
@@ -115,22 +117,30 @@ xcat_add_test(test_hash)
 xcat_add_test(test_zip ARGS ${XCAT_FIXTURES_DIR})
 add_dependencies(test_zip xcat_zip_fixtures)
 xcat_add_test(test_zip_read ARGS ${XCAT_FIXTURES_DIR})
+xcat_add_test(test_seq ARGS ${XCAT_FIXTURES_DIR})
+add_dependencies(test_seq xcat_fixtures)
 add_dependencies(test_zip_read xcat_zip_fixtures)
 xcat_add_test(test_tls ARGS ${PROJECT_SOURCE_DIR}/tools/fixtures/tls)
 target_link_libraries(test_tls PRIVATE bearssl)
 
-# FATX installability (ADR 0008): every fixture can be installed except "deep", whose names
+# FATX installability (ADR 0008): every fixture can be installed except "deep" (and
+# "late-deep" and "late-root", the same tree), whose names
 # of 43 and 255 characters can't be stored on FATX; `xcat-cli check` must refuse it (exit 3).
 foreach(_name IN LISTS XCAT_FIXTURES)
   add_test(NAME check_${_name} COMMAND xcat-cli check ${XCAT_FIXTURES_DIR}/${_name}.iso)
   xcat_test_env(check_${_name})
 endforeach()
-set_tests_properties(check_deep PROPERTIES WILL_FAIL TRUE)
+set_tests_properties(check_deep check_late-deep check_late-root PROPERTIES WILL_FAIL TRUE)
 
-# `xcat-cli layout` runs on every fixture (all have their tables first; test_xdvdfs checks the numbers).
+# `xcat-cli layout` runs on every fixture (test_xdvdfs checks the numbers): the late* ones
+# need a second pass, the others don't.
 foreach(_name IN LISTS XCAT_FIXTURES)
   add_test(NAME layout_${_name} COMMAND xcat-cli layout ${XCAT_FIXTURES_DIR}/${_name}.iso)
-  set_tests_properties(layout_${_name} PROPERTIES PASS_REGULAR_EXPRESSION "one sequential pass can install it")
+  if(_name IN_LIST XCAT_LATE_FIXTURES)
+    set_tests_properties(layout_${_name} PROPERTIES PASS_REGULAR_EXPRESSION "one sequential pass is not enough")
+  else()
+    set_tests_properties(layout_${_name} PROPERTIES PASS_REGULAR_EXPRESSION "one sequential pass can install it")
+  endif()
   xcat_test_env(layout_${_name})
 endforeach()
 
@@ -253,3 +263,20 @@ file(GLOB _zip_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/zip/*.seed)
 xcat_add_fuzzer(fuzz_zip SEEDS ${_zip_seeds})
 file(GLOB _zip_inflate_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/zip-inflate/*.seed)
 xcat_add_fuzzer(fuzz_zip_inflate SEEDS ${_zip_inflate_seeds})
+
+# Sequential extraction seeds: whole fixture images (tables first, tables last, root last),
+# copied from the generated fixtures (outside fuzz-seeds/, which fuzz_xdvdfs reads whole).
+set(_seq_seeds)
+foreach(_name IN ITEMS small late late-root)
+  set(_seed ${CMAKE_BINARY_DIR}/fuzz-seeds-seq/${_name}.seed)
+  add_custom_command(
+    OUTPUT ${_seed}
+    COMMAND ${CMAKE_COMMAND} -E copy ${XCAT_FIXTURES_DIR}/${_name}.iso ${_seed}
+    DEPENDS ${XCAT_FIXTURES_DIR}/${_name}.iso
+    VERBATIM)
+  list(APPEND _seq_seeds ${_seed})
+endforeach()
+add_custom_target(xcat_seq_seeds ALL DEPENDS ${_seq_seeds})
+add_dependencies(xcat_seq_seeds xcat_fixtures)
+xcat_add_fuzzer(fuzz_seq SEEDS ${_seq_seeds})
+add_dependencies(fuzz_seq_replay xcat_seq_seeds)

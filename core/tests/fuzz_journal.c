@@ -27,7 +27,7 @@ static xc_xdvdfs_entry entries[] = {
     {"media/100%.wav", 4325376, 0, 0, 0},
     {"x/y/z.dat", 4325376, 1, 2112, 0},
 };
-static xc_xdvdfs_listing listing = {entries, 4, NULL, 0, 0, NULL};
+static xc_xdvdfs_listing listing = {entries, 4, NULL, 0, 0, NULL, NULL, 0, false};
 
 static void check(int ok)
 {
