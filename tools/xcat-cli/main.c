@@ -12,9 +12,11 @@
  * (xcat/install.h); a name ending in .zip installs the zip's image (docs/formats/zip.md)
  *   xcat-cli ntp [options] [server]     ask a time server like the console (docs/formats/sntp.md)
  *   xcat-cli zip [options] <zip|url>    list a zip and check its image (docs/formats/zip.md)
+ *   xcat-cli catalog <file> [query | --title <id>[@variant] | --name <name>]
+ *                                       check a catalog, list or look up games (catalog.md)
  *
- * Exit status: 0 success, 1 failure (for map: any error line), 2 usage error, 3 not
- * installable (check).
+ * Exit status: 0 success, 1 failure (for map: any error line; for catalog: also a lookup
+ * that finds nothing), 2 usage error, 3 not installable (check).
  */
 #include <ctype.h>
 #include <inttypes.h>
@@ -24,6 +26,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "xcat/catalog.h"
 #include "xcat/crc32.h"
 #include "xcat/credentials.h"
 #include "xcat/extract.h"
@@ -54,6 +57,7 @@ static int usage(void)
         "                        [title]\n"
         "       xcat-cli ntp [--port <n>] [--timeout <ms>] [--floor <unix-seconds>] [server]\n"
         "       xcat-cli zip [net options] <zip|url>\n"
+        "       xcat-cli catalog <catalog.bin> [query | --title <id>[@variant] | --name <name>]\n"
         "net options: --timeout <ms>, --attempts <n>, --credentials <file>,\n"
         "             --ca-file <pem> (trust these CAs instead of the built-in ones),\n"
         "             --now <unix-seconds> (for tests: the time certificates are checked at)\n"
@@ -1330,8 +1334,164 @@ static int cmd_ntp(int argc, char **argv)
     return 0;
 }
 
+/* --- catalog --------------------------------------------------------------------------- */
+
+static void print_hex(const uint8_t *p, size_t n)
+{
+    for (size_t i = 0; i < n; i++) {
+        (void)printf("%02x", p[i]);
+    }
+}
+
+static void print_game(const xc_catalog_game *g)
+{
+    (void)printf("%s", g->title);
+    if (g->year != 0) {
+        (void)printf(" (%u)", (unsigned)g->year);
+    }
+    if (g->developer[0] != '\0' || g->publisher[0] != '\0') {
+        (void)printf(" - %s / %s", g->developer[0] != '\0' ? g->developer : "?",
+                     g->publisher[0] != '\0' ? g->publisher : "?");
+    }
+    if (g->genres[0] != '\0') {
+        (void)printf(" [%s]", g->genres);
+    }
+    if (g->wikidata != 0) {
+        (void)printf(" Q%" PRIu32, g->wikidata);
+    }
+    (void)printf("\n");
+}
+
+static void print_release(const xc_catalog_release *r, bool details)
+{
+    (void)printf("  %08" PRIX32 "@%-16s %s  %" PRIu64 " bytes", r->title_id, r->variant, r->name,
+                 r->size);
+    if (r->redump_id != 0) {
+        (void)printf("  redump %" PRIu32, r->redump_id);
+    }
+    (void)printf("\n");
+    if (details) {
+        (void)printf("    region: %s\n    crc32 %08" PRIx32 "  md5 ",
+                     r->region[0] != '\0' ? r->region : "?", r->crc32);
+        print_hex(r->md5, sizeof r->md5);
+        (void)printf("  sha1 ");
+        print_hex(r->sha1, sizeof r->sha1);
+        (void)printf("\n");
+    }
+}
+
+/* A game and every release of it (releases are sorted by title ID, not game). */
+static void print_game_releases(const xc_catalog *cat, uint32_t game,
+                                const xc_catalog_release *only)
+{
+    xc_catalog_game g;
+    (void)xc_catalog_game_at(cat, game, &g);
+    print_game(&g);
+    if (only != NULL) {
+        print_release(only, true);
+        return;
+    }
+    for (size_t i = 0; i < cat->release_count; i++) {
+        xc_catalog_release r;
+        (void)xc_catalog_release_at(cat, i, &r);
+        if (r.game == game) {
+            print_release(&r, false);
+        }
+    }
+}
+
+/* "<8 hex digits>[@<variant>]" (map.md §4.1). */
+static bool parse_title_key(const char *s, uint32_t *id, const char **variant)
+{
+    uint32_t v = 0;
+    for (int i = 0; i < 8; i++) {
+        int c = (unsigned char)s[i];
+        if (!isxdigit(c)) {
+            return false;
+        }
+        v = v << 4U | (uint32_t)(isdigit(c) ? c - '0' : (tolower(c) - 'a' + 10));
+    }
+    if (s[8] != '\0' && s[8] != '@') {
+        return false;
+    }
+    *id = v;
+    *variant = s[8] == '@' ? s + 9 : NULL;
+    return true;
+}
+
+/*
+ * xcat-cli catalog <catalog.bin> [--title <id>[@variant] | --name <name> | <query>]: checks a
+ * catalog (docs/formats/catalog.md) and lists its games, or looks one release up the way a
+ * map entry is (by title ID and variant, or by name).
+ */
+static int cmd_catalog(int argc, char **argv)
+{
+    bool by_name = argc == 3 && strcmp(argv[1], "--name") == 0;
+    bool by_title = argc == 3 && strcmp(argv[1], "--title") == 0;
+    uint32_t id = 0;
+    const char *variant = NULL;
+    if (argc < 1 || argc > 3 || (argc == 3 && !by_name && !by_title) ||
+        (by_title && !parse_title_key(argv[2], &id, &variant))) {
+        return usage();
+    }
+    const char *path = argv[0];
+    char *data = NULL;
+    size_t len = 0;
+    xc_err err = read_local(path, XC_CATALOG_MAX_SIZE, &data, &len);
+    xc_catalog cat = {0};
+    if (err == XC_OK) {
+        err = xc_catalog_open(&cat, data, len);
+    }
+    if (err != XC_OK) {
+        free(data);
+        return fail(path, err);
+    }
+    (void)printf("catalog %s: version 1.%u, %" PRIu32 " games, %" PRIu32
+                 " releases, snapshot: %s\n",
+                 path, (unsigned)cat.minor, cat.game_count, cat.release_count,
+                 cat.snapshot[0] != '\0' ? cat.snapshot : "?");
+    int rc = 0;
+    if (argc == 3) {
+        size_t found = XC_CATALOG_NONE;
+        size_t count = 0;
+        if (by_name) {
+            found = xc_catalog_find_name(&cat, argv[2]);
+            count = found != XC_CATALOG_NONE ? 1 : 0;
+        } else if (variant != NULL) {
+            found = xc_catalog_find_release(&cat, id, variant);
+            count = found != XC_CATALOG_NONE ? 1 : 0;
+        } else {
+            found = xc_catalog_find_title(&cat, id, &count); /* [found, found + count) */
+        }
+        for (size_t i = 0; i < count; i++) {
+            xc_catalog_release r;
+            (void)xc_catalog_release_at(&cat, found + i, &r);
+            print_game_releases(&cat, r.game, &r);
+        }
+        if (count == 0) {
+            (void)printf("%s: not in catalog\n", argv[2]);
+            rc = 1;
+        }
+    } else {
+        const char *query = argc == 2 ? argv[1] : "";
+        size_t shown = 0;
+        for (size_t i = 0; i < cat.game_count; i++) {
+            if (xc_catalog_game_matches(&cat, i, query)) {
+                print_game_releases(&cat, (uint32_t)i, NULL);
+                shown++;
+            }
+        }
+        (void)printf("%zu game%s\n", shown, shown == 1 ? "" : "s");
+    }
+    free(data);
+    return rc;
+}
+
 int main(int argc, char **argv)
 {
+    if (argc >= 2 && strcmp(argv[1], "catalog") == 0) {
+        return cmd_catalog(argc - 2, argv + 2);
+    }
     if (argc >= 2 && strcmp(argv[1], "ntp") == 0) {
         return cmd_ntp(argc - 2, argv + 2);
     }

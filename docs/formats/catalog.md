@@ -1,6 +1,6 @@
 # Catalog format (`catalog.bin`), version 1.0
 
-**Status:** Normative. Written in M7, before the reader (`xcat/catalog.h`) and the pipeline (`tools/catalog/`) that implement it. The reasons, and where the data comes from, are in [ADR 0014](../adr/0014-catalog-sources-and-format.md).
+**Status:** Normative. Read by `xcat/catalog.h` and `xcat-cli catalog`, and written by `tools/catalog/catalog_bin.py` (M7); the pipeline that feeds the writer comes next. The reasons, and where the data comes from, are in [ADR 0014](../adr/0014-catalog-sources-and-format.md).
 
 The catalog lists the original Xbox games the app knows about: one **game** per work (Halo: Combat Evolved), and one **release** per pressed disc of it (USA, Europe, a Platinum Hits re-release). A release has the title ID from its XBE certificate, a variant name for map keys ([map.md §4.1](map.md#41-key)), its Redump name, and the size and hashes of its full-disc image. The pipeline builds the catalog on a PC; the console reads it from `E:\Apps\xcat\catalog.bin`, next to the XBE.
 

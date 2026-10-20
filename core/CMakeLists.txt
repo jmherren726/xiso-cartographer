@@ -4,6 +4,7 @@ include(${PROJECT_SOURCE_DIR}/cmake/miniz.cmake)
 
 add_library(xcat
   src/archiveorg.c
+  src/catalog.c
   src/crc32.c
   src/credentials.c
   src/error.c
