@@ -230,6 +230,11 @@ static bool on_retry(void *ctx, const xc_http_retry *r)
 static void load_credentials(void)
 {
     if (!xc_nx_exists(CRED_FILE)) {
+        /* credentials.md §2: not an error, but say so; a .txt name is an easy mistake */
+        out("No credentials: %s doesn't exist%s\n", CRED_FILE,
+            xc_nx_exists(CRED_FILE ".txt") ? " (there is a credentials.txt: rename it to "
+                                             "credentials, without .txt)"
+                                           : "");
         return;
     }
     xc_nx_file f = {NULL};
@@ -680,6 +685,8 @@ static bool install(const xc_source *src, const char *name, const char *etag,
         out("   %s was removed; start again to rewrite it\n", result.bad_file);
     } else if (err == XC_ERR_HTTP_DENIED && client.last_section != NULL) {
         out("   login missing or expired for [%s]\n", client.last_section);
+    } else if (err == XC_ERR_HTTP_DENIED && !have_creds) {
+        out("   no login was sent: no credentials were loaded from %s\n", CRED_FILE);
     } else if (client.last_status != 0 && (err == XC_ERR_HTTP_STATUS || err == XC_ERR_HTTP_DENIED ||
                                            err == XC_ERR_HTTP_NOT_FOUND)) {
         out("   HTTP %d\n", client.last_status);
