@@ -80,6 +80,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - archive.org item listings (`xcat/archiveorg.h`, docs/formats/archiveorg.md, ADR 0013, M6): reads the answer of `https://archive.org/metadata/<item>` with a new strict, bounded JSON pull parser (4 MiB, nesting 32 deep) and chooses the item's original `.iso`, `.xiso` and `.zip` files, each with a name (the file name without its extension; generated entries are keyed by name, not title ID), a percent-encoded download URL, the size and whichever MD5, SHA-1 and CRC-32 are given. Missing (`{}`) and taken-down (`is_dark`) items are told apart; files with a bad name or size are skipped and counted. Unit tests and a fuzz target (`fuzz_archiveorg`, also in CI). M6 builds no PC login helper (owner decision): tokens go in the credentials file until M8's on-box login.
 
+- Whole-file GET in the HTTP client (`xc_http_get`, docs/formats/http.md §3): no `Range`; a `200` with a chunked or `Content-Length` body, up to a limit, fetched again in full after a failure. archive.org's `/metadata` listings need it: they ignore `Range` and arrive chunked with no length. `@include` over HTTP now uses it too (in `xcat-cli` and on the console), so maps can come from servers without `Range` support.
+
 ### Changed
 
 - Roadmap: zip support moves from optional M9b to M5b, right after HTTPS (ADR 0009 accepted).
