@@ -74,6 +74,14 @@ typedef struct xc_seq_req {
     uint8_t *buf;                   /* I/O buffer, at least 64 KiB */
     size_t buf_size;
     unsigned max_passes; /* 0 = XC_SEQ_DEFAULT_MAX_PASSES */
+    /* Read pass 1 to the stream's end even once nothing more is needed, e.g. so a zip
+       member's CRC-32 covers every byte (zip.md §9). */
+    bool full_first_pass;
+    /* A file an earlier attempt already finished (journal.md §6.8): it isn't written, and
+       file_done isn't called for it. May be NULL. */
+    bool (*is_done)(void *ctx, const xc_xdvdfs_entry *file);
+    /* If not NULL, gets the final listing on success; the caller frees it. */
+    xc_xdvdfs_listing *listing_out;
     /*
      * Called after each directory table has been parsed, with everything known so far
      * (`complete` once every table is known), before any file under it is written; for
@@ -83,7 +91,7 @@ typedef struct xc_seq_req {
                          bool complete);
     /* After a file was written and ended (complete = true), with its CRC-32. May be NULL. */
     xc_err (*file_done)(void *ctx, const xc_xdvdfs_entry *file, uint32_t crc32);
-    /* About every MiB. Return false to cancel (XC_ERR_CANCELLED). May be NULL. */
+    /* About every MiB and after each file. Return false to cancel (XC_ERR_CANCELLED). */
     bool (*progress)(void *ctx, const xc_seq_progress *p);
     void *ctx;
 } xc_seq_req;
@@ -94,6 +102,7 @@ typedef struct xc_seq_result {
     size_t file_count;       /* when every table is known */
     size_t files_written;    /* as they passed */
     size_t files_from_spool; /* copied out of the spool */
+    size_t files_skipped;    /* is_done */
     uint64_t bytes_written;
     uint64_t streamed;      /* image bytes delivered, all passes */
     uint64_t reread;        /* of those, in passes 2 and later */

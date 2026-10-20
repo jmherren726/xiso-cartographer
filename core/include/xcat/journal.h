@@ -25,10 +25,16 @@ extern "C" {
 #define XC_JOURNAL_MAX_LINE 8192                      /* §3.1, without the LF */
 #define XC_JOURNAL_MAX_VALIDATOR 127                  /* as xc_http_resource's (http.md §4.3) */
 #define XC_JOURNAL_VERSION_MAJOR 1
-#define XC_JOURNAL_VERSION_MINOR 2 /* 1.1: part checkpoints (ADR 0011); 1.2: hash state */
+#define XC_JOURNAL_VERSION_MINOR 3 /* 1.1: part (ADR 0011); 1.2: hash; 1.3: zip identity */
 
 /* §4: what an install is from. */
 typedef struct xc_journal_id {
+    /* §4.1 (v1.3): an image read from a Deflate zip member, whose listing isn't known when
+       the install starts. Then image_size, member_crc and compressed_size identify it, and
+       partition_offset, listing_crc and file_count are 0. */
+    bool zip;
+    uint32_t member_crc;
+    uint64_t compressed_size;
     uint64_t image_size;
     uint64_t partition_offset;
     uint32_t listing_crc;
@@ -44,6 +50,10 @@ uint32_t xc_journal_listing_crc(const xc_xdvdfs_listing *listing);
 void xc_journal_make_id(xc_journal_id *id, const xc_xdvdfs_listing *listing,
                         uint64_t partition_offset, uint64_t image_size, const char *etag,
                         const char *last_modified);
+
+/* §4.1: the identity of a Deflate zip member's image. */
+void xc_journal_make_zip_id(xc_journal_id *id, uint64_t size, uint32_t member_crc,
+                            uint64_t compressed_size, const char *etag, const char *last_modified);
 
 /* §4: same image? Validators only count where both sides have one. */
 bool xc_journal_same_image(const xc_journal_id *a, const xc_journal_id *b);
@@ -94,6 +104,35 @@ typedef struct xc_journal_state {
 xc_err xc_journal_read(const char *data, size_t len, const xc_xdvdfs_listing *listing,
                        const xc_journal_id *image, xc_journal_state *state);
 void xc_journal_state_free(xc_journal_state *state);
+
+/* A `done` record of a zip journal (§6.8), path decoded. */
+typedef struct xc_journal_done {
+    char *path;
+    uint32_t size;
+    uint32_t crc;
+} xc_journal_done;
+
+typedef struct xc_journal_zip_state {
+    bool valid; /* as in xc_journal_state */
+    const char *why;
+    xc_journal_id id;
+    xc_journal_done *done; /* sorted by path, each path once */
+    size_t done_count;
+    bool torn;
+} xc_journal_zip_state;
+
+/*
+ * §6.8: reads a journal whose identity is a zip member's (§4.1) against `image`, before the
+ * image's listing is known. `done` records are kept by path; the caller checks each against
+ * the listing as it learns it. Returns XC_OK (state->valid as above) or XC_ERR_NOMEM. Free
+ * with xc_journal_zip_state_free.
+ */
+xc_err xc_journal_read_zip(const char *data, size_t len, const xc_journal_id *image,
+                           xc_journal_zip_state *state);
+void xc_journal_zip_state_free(xc_journal_zip_state *state);
+
+/* The record for `path`, or NULL. */
+const xc_journal_done *xc_journal_zip_find(const xc_journal_zip_state *state, const char *path);
 
 #ifdef __cplusplus
 }

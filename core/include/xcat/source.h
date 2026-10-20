@@ -47,6 +47,16 @@ typedef struct xc_mem_source {
 
 void xc_source_memory(xc_source *src, xc_mem_source *mem, const void *data, size_t len);
 
+/* A window [base, base + size) of another source, seen from offset 0 (a stored zip member,
+   docs/formats/zip.md §6). It streams when `inner` does. `win` must outlive `src`. */
+typedef struct xc_window_source {
+    const xc_source *inner;
+    uint64_t base;
+} xc_window_source;
+
+void xc_source_window(xc_source *src, xc_window_source *win, const xc_source *inner, uint64_t base,
+                      uint64_t size);
+
 #ifdef __cplusplus
 }
 #endif

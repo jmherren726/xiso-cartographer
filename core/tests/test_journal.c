@@ -102,7 +102,7 @@ static void test_round_trip(void)
     TEST_ASSERT_EQUAL_UINT64(0x18300000U, st.id.partition_offset);
     /* The lines look as journal.md §1 shows them. */
     buf[used] = '\0';
-    TEST_ASSERT_EQUAL_INT(0, strncmp(buf, "# xcat-journal v1.2 *", 21));
+    TEST_ASSERT_EQUAL_INT(0, strncmp(buf, "# xcat-journal v1.3 *", 21));
     TEST_ASSERT_NOT_NULL(strstr(buf, "\nimage 7825162240 405798912 "));
     TEST_ASSERT_NOT_NULL(strstr(buf, "\nvalidators \"5e1f-61a2c3\" Wed,%2014%20Oct%202026"));
     TEST_ASSERT_NOT_NULL(strstr(buf, "\nsource http://192.168.1.20:8080/x%20y.iso *"));
@@ -282,14 +282,14 @@ static void test_invalid_records(void)
 static void test_newer_minor_records_are_skipped(void)
 {
     start();
-    /* Rewrite the header as v1.3, then add a record type a v1.2 reader doesn't know. */
+    /* Rewrite the header as v1.4, then add a record type a v1.3 reader doesn't know. */
     char rest[4096];
     char *nl = memchr(buf, '\n', used);
     TEST_ASSERT_NOT_NULL(nl);
     size_t tail = used - (size_t)(nl + 1 - buf);
     memcpy(rest, nl + 1, tail);
     used = 0;
-    raw_line("# xcat-journal v1.3");
+    raw_line("# xcat-journal v1.4");
     memcpy(buf + used, rest, tail);
     used += tail;
     raw_line("sig sha1 0123");

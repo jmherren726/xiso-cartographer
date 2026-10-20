@@ -1,6 +1,6 @@
 # Installing from a stream (sequential extraction)
 
-**Status:** Normative for `core/src/seq.c` (`xcat/seq.h`, M5b). It implements [ADR 0009 amendment 1](../adr/0009-install-from-zip-archives.md#amendment-1-2026-10-19-adaptive-spool): installing an image that can only be read front to back, such as a Deflate zip member ([zip.md §9](zip.md#9-reading-a-member)). The spool's files on the console's disk and resuming after a power cut come in a later M5b MR, which adds their sections here.
+**Status:** Normative for `core/src/seq.c` (`xcat/seq.h`, M5b), which `xc_install` uses for Deflate zip members (`xcat-cli install <zip>`). There, the spool chunks are files named `.xcat-spool-<k>` in the install folder, kept in the drive's free space minus a 256 MiB reserve, and the stream restarts at the zip checkpoint before each later pass ([zip.md §10](zip.md#10-checkpoints)). It implements [ADR 0009 amendment 1](../adr/0009-install-from-zip-archives.md#amendment-1-2026-10-19-adaptive-spool): installing an image that can only be read front to back, such as a Deflate zip member ([zip.md §9](zip.md#9-reading-a-member)). Resuming in the middle of a stream after a power cut comes in a later M5b MR, which adds its sections here; until then an interrupted install keeps its finished files and starts the stream again ([journal.md §6.8](journal.md)).
 
 The words **must**, **must not**, **should** and **may** are used as in RFC 2119. Offsets are absolute in the image.
 
@@ -34,11 +34,11 @@ For each byte, in this order:
 3. otherwise, while not all is known, and from the partition start on: **unidentified**, so it is spooled (§4), unless it's already in the spool, or belongs to a file already written (a later pass);
 4. otherwise: discarded.
 
-A file that becomes known after its first byte has passed is **late**. Empty files are written as soon as they're known. Two non-empty files that share bytes can't both be written from one stream, so the install is refused (`XC_ERR_UNSUPPORTED`).
+A file that becomes known after its first byte has passed is **late**. A file an earlier attempt finished (the caller says which, [journal.md §6.8](journal.md)) counts as written. Empty files are written as soon as they're known. Two non-empty files that share bytes can't both be written from one stream, so the install is refused (`XC_ERR_UNSUPPORTED`).
 
 ### 3.3 End of a stream
 
-A pass stops reading as soon as all is known and every direct file is written. Then:
+A pass stops reading as soon as all is known and every direct file is written, except that a caller may ask for the whole of pass 1 (a zip member's CRC-32 then covers every byte, [zip.md §9](zip.md#9-reading-a-member)). Then:
 
 1. Every late file whose bytes are all in the spool is copied out of it, in offset order. Once all is known, a chunk is deleted as soon as no remaining late file needs it.
 2. If anything is still missing, another pass is needed (§3.4). Otherwise the install is done, and any chunk left is deleted.

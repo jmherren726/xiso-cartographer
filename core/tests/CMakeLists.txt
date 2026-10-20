@@ -34,14 +34,19 @@ add_custom_command(
   VERBATIM)
 add_custom_target(xcat_fixtures ALL DEPENDS ${_fixture_outputs})
 
-# Zips of the small fixture, stored and Deflate (tools/fixtures/zipgen.py).
-set(_zip_outputs ${XCAT_FIXTURES_DIR}/small-stored.zip ${XCAT_FIXTURES_DIR}/small-deflate.zip
-  ${XCAT_FIXTURES_DIR}/small-deflate0.zip)
+# Zips of the small and late fixtures, stored and Deflate (tools/fixtures/zipgen.py).
+set(_zip_outputs)
+foreach(_name IN ITEMS small late)
+  foreach(_kind IN ITEMS stored deflate deflate0)
+    list(APPEND _zip_outputs ${XCAT_FIXTURES_DIR}/${_name}-${_kind}.zip)
+  endforeach()
+endforeach()
 add_custom_command(
   OUTPUT ${_zip_outputs}
   COMMAND ${Python3_EXECUTABLE} -I ${PROJECT_SOURCE_DIR}/tools/fixtures/zipgen.py
-          --fixtures ${XCAT_FIXTURES_DIR} small
+          --fixtures ${XCAT_FIXTURES_DIR} small late
   DEPENDS ${PROJECT_SOURCE_DIR}/tools/fixtures/zipgen.py ${XCAT_FIXTURES_DIR}/small.iso
+          ${XCAT_FIXTURES_DIR}/late.iso
   COMMENT "Generating zip test fixtures"
   VERBATIM)
 add_custom_target(xcat_zip_fixtures ALL DEPENDS ${_zip_outputs})
@@ -103,7 +108,7 @@ xcat_add_test(test_credentials)
 xcat_add_test(test_map)
 xcat_add_test(test_journal)
 xcat_add_test(test_install ARGS ${XCAT_FIXTURES_DIR})
-add_dependencies(test_install xcat_fixtures)
+add_dependencies(test_install xcat_fixtures xcat_zip_fixtures)
 xcat_add_test(test_xdvdfs ARGS ${XCAT_FIXTURES_DIR} ${XCAT_FIXTURES})
 add_dependencies(test_xdvdfs xcat_fixtures)
 xcat_add_test(test_extract)

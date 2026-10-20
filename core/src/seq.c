@@ -180,16 +180,12 @@ static bool progress(seq *s, bool force)
         return true;
     }
     s->next_progress = s->pos + PROGRESS_STEP;
-    size_t done = 0;
-    for (size_t i = 0; i < s->listing.file_count; i++) {
-        done += s->state[i] == F_DONE;
-    }
     xc_seq_progress p;
     p.pass = s->pass;
     p.offset = s->pos;
     p.image_size = s->req->image_size;
     p.spool_bytes = s->spool_bytes;
-    p.files_done = done;
+    p.files_done = s->done.n; /* every path in it is a finished file */
     p.file_count = s->listing.file_count;
     p.all_known = s->all_known;
     p.current = s->writing != NONE ? s->listing.files[s->writing].path : NULL;
@@ -632,7 +628,11 @@ static xc_err finish(seq *s, bool from_spool)
     } else {
         s->res->files_written++;
     }
-    return s->req->file_done != NULL ? s->req->file_done(s->req->ctx, f, s->crc) : XC_OK;
+    err = s->req->file_done != NULL ? s->req->file_done(s->req->ctx, f, s->crc) : XC_OK;
+    if (err == XC_OK && !progress(s, true)) {
+        err = XC_ERR_CANCELLED; /* a report after every file, too */
+    }
+    return err;
 }
 
 /* Makes the directories the listing has that don't exist yet (parents come first). */
@@ -676,6 +676,15 @@ static xc_err classify(seq *s, uint64_t at)
         const xc_xdvdfs_entry *f = &s->listing.files[i];
         if (pathset_has(&s->done, f->path)) {
             s->state[i] = F_DONE;
+            continue;
+        }
+        if (s->req->is_done != NULL && s->req->is_done(s->req->ctx, f)) {
+            s->state[i] = F_DONE; /* an earlier attempt wrote it */
+            xc_err err = pathset_add(&s->done, f->path);
+            if (err != XC_OK) {
+                return err;
+            }
+            s->res->files_skipped++;
             continue;
         }
         if (f->size == 0) {
@@ -943,7 +952,8 @@ static void consume(seq *s, const uint8_t *data, uint64_t n)
         if (s->err == XC_OK && !progress(s, false)) {
             return;
         }
-        if (s->vol_known && s->all_known && s->writing == NONE && s->dcur == NONE) {
+        if (s->vol_known && s->all_known && s->writing == NONE && s->dcur == NONE &&
+            !(s->pass == 1 && s->req->full_first_pass)) {
             s->stop = true; /* §3.3: nothing ahead is needed */
         }
     }
@@ -1166,6 +1176,10 @@ xc_err xc_seq_extract(const xc_seq_req *req, xc_seq_result *res)
             err = drop_chunk(&s, (uint32_t)j);
         }
         (void)progress(&s, true);
+        if (req->listing_out != NULL) {
+            *req->listing_out = s.listing;
+            memset(&s.listing, 0, sizeof s.listing);
+        }
     }
     cleanup(&s);
     return err;

@@ -1,6 +1,6 @@
-# Install journal format (`xcat-journal`), version 1.2
+# Install journal format (`xcat-journal`), version 1.3
 
-**Status:** Normative. Implemented by `xcat/journal.h` (format, reading) and `xcat/install.h` (the life cycle of §2, §6 and §7), M4; `hash` records and whole-image hashes (`xcat/hash.h`) since M5. The reasons behind it are in [ADR 0004](../adr/0004-streaming-install.md) §4: installs must survive cable pulls and power cuts, and resume without downloading finished files again.
+**Status:** Normative. Implemented by `xcat/journal.h` (format, reading) and `xcat/install.h` (the life cycle of §2, §6 and §7), M4; `hash` records and whole-image hashes (`xcat/hash.h`) since M5; the `zip` identity (§4.1, §6.8) since M5b. The reasons behind it are in [ADR 0004](../adr/0004-streaming-install.md) §4: installs must survive cable pulls and power cuts, and resume without downloading finished files again.
 
 The journal is a small text file in the install folder. It says which image the install comes from and which files are already complete. The installer appends one line per finished file and deletes the journal when the install is complete and verified. No user ever edits it.
 
@@ -9,7 +9,7 @@ The words **must**, **must not**, **should** and **may** are used as in RFC 2119
 ## 1. Example
 
 ```
-# xcat-journal v1.2 *5B6A2C1E
+# xcat-journal v1.3 *5B6A2C1E
 image 4610330624 0 2D84F0A7 21 *0C59D2B1
 validators "5e1f-61a2c3"  Wed,%2014%20Oct%202026%2010:00:00%20GMT *A33E1F09
 source http://192.168.1.20:8080/xbox/Game%20(Europe).xiso.iso *7F10B2C4
@@ -52,6 +52,16 @@ The lines right after the header identify the image. They **must** appear in thi
 
 The journal **matches** an image when the image size, partition offset, listing digest and file count are equal, and each validator is equal where both the journal and the server have one. Otherwise it belongs to a different image (§6).
 
+### 4.1 Deflate zip members (v1.3)
+
+An image read from a Deflate zip member ([stream-install.md](stream-install.md)) has no listing when its install starts: the directory tables arrive with the stream. Its journal has a `zip` line in place of the `image` line:
+
+| Line | Fields | Meaning |
+|---|---|---|
+| `zip` | `<size> <member-crc32> <compressed-size>` | The member's uncompressed size, CRC-32 and compressed size, from the zip's central directory ([zip.md §4](zip.md#4-central-directory)) |
+
+It matches when those three values are equal and the validators match as above. A `zip` journal never matches an `image` one. A stored member has its listing up front, so its journal has an `image` line like a bare image's.
+
 ## 5. Records
 
 ```
@@ -79,6 +89,7 @@ Later minor versions may add other record types.
 5. **Valid and matching:** the `done` files are skipped. Before trusting one, the installer checks that the file exists with the recorded size; if it doesn't, the file is written again.
 6. A file with `part` lines but no `done` line resumes at its last checkpoint, if the file on disk is at least that long: the installer cuts it back to `bytes`, continues the CRC-32 from `crc32`, and downloads only the rest. Otherwise the file is written again from the start. A v1.0 reader skips `part` lines (§3.3), which also just rewrites the file.
 7. **Hashes (v1.2).** The installer restores both hashes from the last `hash` line and reads the image on from its `offset`, discarding the bytes of files that are already done. That is only possible when no file still to be written (or continued, §6.6) starts before that offset. If one does (a `done` file was missing, §6.5), or the journal has no `hash` line (a v1.0 or v1.1 journal), hashing starts again from the image's first byte: the files already done are read again, but not written.
+8. **Zip journals (v1.3, §4.1).** They are read before the listing is known: each `done` line is kept by path, and is checked when the file becomes known. The path must be in the listing, and the size must match, or the line doesn't count and the file is written again. The file must also still be on disk with that size (§6.5). Two `done` lines for one path, a malformed record, or any other record type make the journal invalid. Their install restarts the stream from the start (resuming in the middle of the stream comes later), so a power cut costs the download so far, but no finished file.
 
 ## 7. Verification
 
@@ -95,3 +106,4 @@ If files overlap in the image (two entries sharing data), a single front-to-back
 | 1.0 | 2026-10-15 | First version. |
 | 1.1 | 2026-10-15 | `part` checkpoint records inside large files ([ADR 0011](../adr/0011-checkpoints-inside-large-files.md)); §6.6. |
 | 1.2 | 2026-10-17 | `hash` records: whole-image MD5 and SHA-1 state for trimmed xisos ([ADR 0004](../adr/0004-streaming-install.md) §5, ADR 0012); §6.7 and §7. |
+| 1.3 | 2026-10-20 | `zip` identity for Deflate zip members ([ADR 0009](../adr/0009-install-from-zip-archives.md)); §4.1 and §6.8. |

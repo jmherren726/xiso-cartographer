@@ -38,6 +38,9 @@ CFLAGS += -I$(CORE_DIR)/include -I$(PLATFORM_DIR)/include -std=c11 -Wall -Wextra
 # BearSSL: the whole-image hashes of installs (core/src/hash.c, journal.md §7), and HTTPS.
 include $(CURDIR)/tls.mk
 
+# Zip archives (ADR 0009): core/src/install.c installs their images.
+include $(CURDIR)/zip.mk
+
 # SDL2 (prebuilt in the nxdk image) only for reading the controllers: the dashboard shortcut.
 NXDK_SDL = y
 

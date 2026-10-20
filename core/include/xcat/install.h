@@ -30,6 +30,9 @@ extern "C" {
 #define XC_INSTALL_MAX_PROBLEMS 8                   /* FATX problems reported (all are counted) */
 #define XC_INSTALL_MAX_NUMBERED 99                  /* "Title (2)" ... "Title (99)" (ADR 0008) */
 #define XC_INSTALL_CHECKPOINT (64U * 1024U * 1024U) /* bytes between checkpoints (ADR 0011) */
+/* Free space a Deflate zip install never lets its spool use (ADR 0009 amendment 1). */
+#define XC_INSTALL_SPOOL_RESERVE ((uint64_t)256 * 1024 * 1024)
+#define XC_INSTALL_SPOOL_PREFIX ".xcat-spool-" /* + chunk number: spool files in the folder */
 
 /*
  * File access for the install, in the platform's own path syntax: the module
@@ -61,6 +64,14 @@ typedef struct xc_install_io {
     /* A source reading an installed file, for verification. */
     xc_err (*open_file)(void *ctx, const char *path, xc_source *src, void **handle);
     void (*close_file)(void *ctx, void *handle);
+    /*
+     * Spool files for Deflate zip installs (docs/formats/stream-install.md §4). Optional:
+     * without them such installs fail with XC_ERR_UNSUPPORTED. They needn't be durable, and
+     * may keep the last file open between calls.
+     */
+    xc_err (*spool_append)(void *ctx, const char *path, const void *data, size_t len);
+    xc_err (*spool_read)(void *ctx, const char *path, uint64_t pos, void *buf, size_t len);
+    xc_err (*spool_remove)(void *ctx, const char *path);
     void *ctx;
 } xc_install_io;
 
@@ -83,8 +94,12 @@ typedef struct xc_install_progress {
 typedef bool (*xc_install_progress_fn)(void *ctx, const xc_install_progress *p);
 
 typedef struct xc_install_req {
-    const xc_source *src; /* the image; read_stream is used when present */
-    const char *etag;     /* the server's validators, NULL if none (journal.md §4) */
+    const xc_source *src; /* the image (or zip); read_stream is used when present */
+    /* The source is a zip archive holding the image (docs/formats/zip.md): a stored member
+       installs like a bare image, a Deflate one from a stream (stream-install.md). */
+    bool zip;
+    uint64_t spool_reserve; /* Deflate zips: 0 = XC_INSTALL_SPOOL_RESERVE */
+    const char *etag;       /* the server's validators, NULL if none (journal.md §4) */
     const char *last_modified;
     const char *source_name; /* URL or path, for the journal and messages */
     const char *games_dir;   /* e.g. "E:\\Games" */
@@ -126,6 +141,13 @@ typedef struct xc_install_result {
     bool hash_restarted;       /* a resume had to hash the image from its first byte again */
     uint8_t md5[XC_MD5_BYTES]; /* when computed (also on XC_ERR_IMAGE_HASH) */
     uint8_t sha1[XC_SHA1_BYTES];
+    /* zips (req->zip) */
+    char zip_member[256];  /* the image's name in the zip */
+    uint16_t zip_method;   /* 0 stored, 8 Deflate; on XC_ERR_ZIP_UNSUPPORTED, the method seen */
+    unsigned passes;       /* Deflate: passes over the member (stream-install.md §3) */
+    uint64_t reread_bytes; /* Deflate: image bytes read again in passes 2 and later */
+    uint64_t spool_peak;   /* Deflate: the spool's largest size */
+    size_t files_from_spool;
     uint64_t space_needed; /* when XC_ERR_NO_SPACE */
     uint64_t space_free;
     char bad_file[256];     /* XC_ERR_VERIFY: the first file that didn't match */

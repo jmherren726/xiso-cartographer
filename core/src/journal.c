@@ -140,11 +140,25 @@ static bool validator_same(const char *a, const char *b)
     return a[0] == '\0' || b[0] == '\0' || strcmp(a, b) == 0;
 }
 
+void xc_journal_make_zip_id(xc_journal_id *id, uint64_t size, uint32_t member_crc,
+                            uint64_t compressed_size, const char *etag, const char *last_modified)
+{
+    memset(id, 0, sizeof *id);
+    id->zip = true;
+    id->image_size = size;
+    id->member_crc = member_crc;
+    id->compressed_size = compressed_size;
+    copy_validator(id->etag, etag);
+    copy_validator(id->last_modified, last_modified);
+}
+
 bool xc_journal_same_image(const xc_journal_id *a, const xc_journal_id *b)
 {
-    return a->image_size == b->image_size && a->partition_offset == b->partition_offset &&
-           a->listing_crc == b->listing_crc && a->file_count == b->file_count &&
-           validator_same(a->etag, b->etag) && validator_same(a->last_modified, b->last_modified);
+    return a->zip == b->zip && a->member_crc == b->member_crc &&
+           a->compressed_size == b->compressed_size && a->image_size == b->image_size &&
+           a->partition_offset == b->partition_offset && a->listing_crc == b->listing_crc &&
+           a->file_count == b->file_count && validator_same(a->etag, b->etag) &&
+           validator_same(a->last_modified, b->last_modified);
 }
 
 xc_err xc_journal_format_start(const xc_journal_id *id, const char *source_url, char *out,
@@ -154,16 +168,25 @@ xc_err xc_journal_format_start(const xc_journal_id *id, const char *source_url, 
         return XC_ERR_INVALID_ARG;
     }
     wbuf w = {out, cap, 0, 0, false};
-    w_str(&w, "# xcat-journal v1.2");
+    w_str(&w, "# xcat-journal v1.3");
     w_end_line(&w);
-    w_str(&w, "image ");
-    w_fmt(&w, "%" PRIu64, id->image_size);
-    w_str(&w, " ");
-    w_fmt(&w, "%" PRIu64, id->partition_offset);
-    w_str(&w, " ");
-    w_hex32(&w, id->listing_crc);
-    w_str(&w, " ");
-    w_fmt(&w, "%" PRIu64, id->file_count);
+    if (id->zip) {
+        w_str(&w, "zip ");
+        w_fmt(&w, "%" PRIu64, id->image_size);
+        w_str(&w, " ");
+        w_hex32(&w, id->member_crc);
+        w_str(&w, " ");
+        w_fmt(&w, "%" PRIu64, id->compressed_size);
+    } else {
+        w_str(&w, "image ");
+        w_fmt(&w, "%" PRIu64, id->image_size);
+        w_str(&w, " ");
+        w_fmt(&w, "%" PRIu64, id->partition_offset);
+        w_str(&w, " ");
+        w_hex32(&w, id->listing_crc);
+        w_str(&w, " ");
+        w_fmt(&w, "%" PRIu64, id->file_count);
+    }
     w_end_line(&w);
     w_str(&w, "validators ");
     w_validator(&w, id->etag);
@@ -462,11 +485,20 @@ static bool read_identity(reader *r, xc_journal_state *st, bool *torn, bool *too
     }
     char *f[6];
     rec = next_record(r, torn, too_long);
-    if (rec == NULL || split_fields(rec, f, 6) != 5 || strcmp(f[0], "image") != 0 ||
-        !parse_dec(f[1], UINT64_MAX, &st->id.image_size) ||
-        !parse_dec(f[2], UINT64_MAX, &st->id.partition_offset) ||
-        !parse_hex32(f[3], &st->id.listing_crc) ||
-        !parse_dec(f[4], UINT64_MAX, &st->id.file_count)) {
+    size_t nf = rec != NULL ? split_fields(rec, f, 6) : 0;
+    if (nf == 4 && strcmp(f[0], "zip") == 0 && *minor >= 3) {
+        /* §4.1 (v1.3) */
+        st->id.zip = true;
+        if (!parse_dec(f[1], UINT64_MAX, &st->id.image_size) ||
+            !parse_hex32(f[2], &st->id.member_crc) ||
+            !parse_dec(f[3], UINT64_MAX, &st->id.compressed_size)) {
+            return false;
+        }
+    } else if (nf != 5 || strcmp(f[0], "image") != 0 ||
+               !parse_dec(f[1], UINT64_MAX, &st->id.image_size) ||
+               !parse_dec(f[2], UINT64_MAX, &st->id.partition_offset) ||
+               !parse_hex32(f[3], &st->id.listing_crc) ||
+               !parse_dec(f[4], UINT64_MAX, &st->id.file_count)) {
         return false;
     }
     rec = next_record(r, torn, too_long);
@@ -609,4 +641,139 @@ void xc_journal_state_free(xc_journal_state *st)
         st->part_crc = NULL;
         st->done_count = 0;
     }
+}
+
+/* --- zip journals (§6.8) ---------------------------------------------------------------- */
+
+static int done_cmp(const void *a, const void *b)
+{
+    const xc_journal_done *x = a;
+    const xc_journal_done *y = b;
+    return strcmp(x->path, y->path);
+}
+
+static xc_err zip_invalid(xc_journal_zip_state *st, const char *why)
+{
+    for (size_t i = 0; i < st->done_count; i++) {
+        free(st->done[i].path);
+    }
+    st->done_count = 0;
+    st->valid = false;
+    st->why = why;
+    return XC_OK;
+}
+
+xc_err xc_journal_read_zip(const char *data, size_t len, const xc_journal_id *image,
+                           xc_journal_zip_state *st)
+{
+    if (st == NULL || image == NULL || (data == NULL && len > 0)) {
+        return XC_ERR_INVALID_ARG;
+    }
+    memset(st, 0, sizeof *st);
+    if (len > XC_JOURNAL_MAX_FILE) {
+        return zip_invalid(st, "journal larger than 4 MiB");
+    }
+    reader r = {malloc(len + 1), len, 0};
+    if (r.text == NULL) {
+        return XC_ERR_NOMEM;
+    }
+    if (len > 0) {
+        memcpy(r.text, data, len);
+    }
+    r.text[len] = '\0';
+    bool torn = false;
+    bool too_long = false;
+    unsigned long minor = 0;
+    xc_journal_state id_state;
+    memset(&id_state, 0, sizeof id_state);
+    xc_err err = XC_OK;
+    if (!read_identity(&r, &id_state, &torn, &too_long, &minor)) {
+        err = zip_invalid(st, "journal unreadable (missing or damaged identity)");
+    } else if (!xc_journal_same_image(&id_state.id, image)) {
+        err = zip_invalid(st, "the folder holds an unfinished install of a different image");
+    } else {
+        st->valid = true;
+        st->id = id_state.id;
+    }
+    size_t cap = 0;
+    char *rec = NULL;
+    while (st->valid && (rec = next_record(&r, &torn, &too_long)) != NULL) {
+        char *f[5];
+        size_t nf = split_fields(rec, f, 5);
+        if (nf >= 1 && strcmp(f[0], "done") != 0) {
+            if (minor <= XC_JOURNAL_VERSION_MINOR) {
+                err = zip_invalid(st, "journal has an unknown record");
+            }
+            continue; /* a newer minor version's record (§3.3) */
+        }
+        uint64_t size = 0;
+        uint32_t crc = 0;
+        if (nf != 4 || !parse_dec(f[1], UINT32_MAX, &size) || !parse_hex32(f[2], &crc) ||
+            !decode(f[3]) || f[3][0] == '\0') {
+            err = zip_invalid(st, "journal has a malformed record");
+            break;
+        }
+        if (st->done_count == cap) {
+            size_t ncap = cap > 0 ? cap * 2 : 64;
+            xc_journal_done *v = realloc(st->done, ncap * sizeof *v);
+            if (v == NULL) {
+                err = XC_ERR_NOMEM;
+                break;
+            }
+            st->done = v;
+            cap = ncap;
+        }
+        size_t plen = strlen(f[3]) + 1;
+        char *path = malloc(plen);
+        if (path == NULL) {
+            err = XC_ERR_NOMEM;
+            break;
+        }
+        memcpy(path, f[3], plen);
+        st->done[st->done_count].path = path;
+        st->done[st->done_count].size = (uint32_t)size;
+        st->done[st->done_count].crc = crc;
+        st->done_count++;
+    }
+    if (err == XC_OK && st->valid) {
+        if (too_long) {
+            err = zip_invalid(st, "journal has an overlong line");
+        } else if (st->done_count > 0) {
+            qsort(st->done, st->done_count, sizeof *st->done, done_cmp);
+            for (size_t i = 1; i < st->done_count; i++) {
+                if (strcmp(st->done[i - 1].path, st->done[i].path) == 0) {
+                    err = zip_invalid(st, "journal lists a file twice");
+                    break;
+                }
+            }
+        }
+    }
+    st->torn = torn;
+    free(r.text);
+    if (err != XC_OK) {
+        xc_journal_zip_state_free(st);
+    }
+    return err;
+}
+
+void xc_journal_zip_state_free(xc_journal_zip_state *st)
+{
+    if (st == NULL) {
+        return;
+    }
+    for (size_t i = 0; i < st->done_count; i++) {
+        free(st->done[i].path);
+    }
+    free(st->done);
+    st->done = NULL;
+    st->done_count = 0;
+}
+
+const xc_journal_done *xc_journal_zip_find(const xc_journal_zip_state *st, const char *path)
+{
+    if (st == NULL || path == NULL || st->done_count == 0) {
+        return NULL;
+    }
+    xc_journal_done key = {(char *)path, 0, 0};
+    return bsearch(&key, st->done, st->done_count, sizeof *st->done, done_cmp);
 }
