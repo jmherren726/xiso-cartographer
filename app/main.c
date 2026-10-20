@@ -367,7 +367,7 @@ static xc_err to_mem(void *ctx, uint64_t offset, const uint8_t *data, size_t len
     mem_ctx *m = ctx;
     m->len = (size_t)offset;
     if (m->cap - m->len <= len) {
-        size_t cap = m->cap == 0 ? 64 * 1024 : m->cap;
+        size_t cap = m->cap == 0 ? (size_t)64 * 1024 : m->cap;
         while (cap - m->len <= len) {
             cap *= 2;
         }
