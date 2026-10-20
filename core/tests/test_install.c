@@ -200,6 +200,15 @@ static xc_err f_spool_remove(void *ctx, const char *path)
     return XC_OK;
 }
 
+static int spool_syncs;
+
+static xc_err f_spool_sync(void *ctx)
+{
+    (void)ctx;
+    spool_syncs++;
+    return XC_OK;
+}
+
 /* The sink: paths below the root, '/' turned into the io's separator ('/'). */
 static void sink_path(char *out, const char *rel)
 {
@@ -322,10 +331,10 @@ static void f_close_file(void *ctx, void *handle)
 }
 
 static const xc_install_io memio = {
-    '/',         f_exists,     f_size,         f_read_all,   f_append,
-    f_write_all, f_remove,     f_free,         f_open_sink,  f_close_sink,
-    f_open_file, f_close_file, f_spool_append, f_spool_read, f_spool_remove,
-    NULL,
+    '/',          f_exists,     f_size,         f_read_all,   f_append,
+    f_write_all,  f_remove,     f_free,         f_open_sink,  f_close_sink,
+    f_open_file,  f_close_file, f_spool_append, f_spool_read, f_spool_remove,
+    f_spool_sync, NULL,
 };
 
 /* --- the image and the request -------------------------------------------------------- */
@@ -365,6 +374,7 @@ void setUp(void)
     fs.appends_before_failure = -1;
     spool_files_now = 0;
     spool_files_peak = 0;
+    spool_syncs = 0;
     cancel_after = -1;
     cancel_in = NULL;
     syncs = 0;
@@ -533,7 +543,7 @@ static void test_resume_inside_a_file(void)
     size_t parts = count_lines(journal, "part ", "media/intro.xmv");
     TEST_ASSERT_TRUE(parts >= 1);
     TEST_ASSERT_NOT_NULL(strstr((char *)find(journal)->data, "part 16384 "));
-    TEST_ASSERT_NOT_NULL(strstr((char *)find(journal)->data, "# xcat-journal v1.3 *"));
+    TEST_ASSERT_NOT_NULL(strstr((char *)find(journal)->data, "# xcat-journal v1.4 *"));
     cancel_in = NULL;
     TEST_ASSERT_EQUAL_INT(XC_OK, xc_install(&req, &res));
     TEST_ASSERT_TRUE(res.resumed);
@@ -736,6 +746,10 @@ static void test_zip_deflate_late_tables(void)
     expect_finished();
 }
 
+/* The files, the reserve, the checkpoints and states (16 x 41 KiB and 2 x 64 KiB here), and
+   256 KiB to spare. */
+#define TIGHT_DISK (197333U + 65536U + 16U * 41204U + 2U * 65536U + 262144U)
+
 static void test_zip_tight_space_second_pass(void)
 {
     use_zip("late-deflate");
@@ -743,7 +757,7 @@ static void test_zip_tight_space_second_pass(void)
     req.checkpoint_bytes = 65536; /* spool chunks and zip checkpoints every 64 KiB */
     req.spool_reserve = 65536;
     fs.track_usage = true;
-    fs.free_bytes = 197333U + 65536U + 262144U; /* the files, the reserve, 256 KiB to spare */
+    fs.free_bytes = TIGHT_DISK;
     TEST_ASSERT_EQUAL_INT(XC_OK, xc_install(&req, &res));
     TEST_ASSERT_TRUE(res.passes >= 2);
     TEST_ASSERT_TRUE(res.reread_bytes > 0);
@@ -815,6 +829,161 @@ static void test_zip_damaged_member(void)
     free(copy);
 }
 
+/* --- resuming a Deflate zip in the middle of the stream (stream-install.md §7) ---------- */
+
+#define ZDIR "E:/Games/Small Game/"
+
+/* A fresh file system and request for `zip`, states saved every 64 KiB. */
+static void zip_attempt_setup(const char *zip)
+{
+    setUp();
+    use_zip(zip);
+    req.checkpoint_bytes = 65536;
+}
+
+/*
+ * Cuts the install at its `appends`-th durable append (a journal line, a checkpoint), as a
+ * power cut there would, then resumes; the install must finish.
+ */
+static void cut_and_resume(const char *zip, int appends, uint64_t *resumed_at, size_t *continued)
+{
+    fs.appends_before_failure = appends;
+    xc_err err = xc_install(&req, &res);
+    fs.appends_before_failure = -1;
+    if (err == XC_OK) {
+        expect_finished(); /* it finished first */
+        return;
+    }
+    TEST_ASSERT_EQUAL_INT(XC_ERR_IO, err);
+    err = xc_install(&req, &res);
+    char msg[512];
+    (void)snprintf(msg, sizeof msg, "%s, cut at append %d: %s", zip, appends, res.current_file);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(XC_OK, err, msg);
+    TEST_ASSERT_TRUE(res.resumed);
+    expect_finished();
+    *resumed_at = *resumed_at > res.zip_resumed_at ? *resumed_at : res.zip_resumed_at;
+    *continued += res.files_continued;
+}
+
+static void test_zip_resume_mid_stream(void)
+{
+    static const char *zips[] = {"late-deflate", "small-deflate", "late-stored"};
+    for (size_t z = 0; z < sizeof zips / sizeof zips[0]; z++) {
+        uint64_t resumed_at = 0;
+        size_t continued = 0;
+        for (int appends = 1; appends < 60; appends += 2) {
+            zip_attempt_setup(zips[z]);
+            cut_and_resume(zips[z], appends, &resumed_at, &continued);
+        }
+        if (z < 2) {
+            TEST_ASSERT_TRUE_MESSAGE(resumed_at > 0, zips[z]); /* not from the start again */
+        }
+    }
+}
+
+static void test_zip_state_files(void)
+{
+    zip_attempt_setup("late-deflate");
+    fs.appends_before_failure = 20;
+    TEST_ASSERT_EQUAL_INT(XC_ERR_IO, xc_install(&req, &res));
+    fs.appends_before_failure = -1;
+    const char *journal = ZDIR ".xcat-journal";
+    TEST_ASSERT_TRUE(count_lines(journal, "state ", NULL) > 0);
+    TEST_ASSERT_TRUE(spool_syncs > 0);
+    node *ck = find(ZDIR XC_INSTALL_ZIP_CHECKPOINTS);
+    TEST_ASSERT_NOT_NULL(ck);
+    TEST_ASSERT_EQUAL_size_t(0, ck->len % xc_zip_checkpoint_size(XC_ZIP_DEFLATE));
+    TEST_ASSERT_TRUE(find(ZDIR ".xcat-state-0") != NULL || find(ZDIR ".xcat-state-1") != NULL);
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_install(&req, &res));
+    TEST_ASSERT_TRUE(res.zip_resumed_at > 0);
+    expect_finished(); /* the state and checkpoint files are gone too */
+}
+
+static void test_zip_resume_tight_space(void)
+{
+    uint64_t resumed_at = 0;
+    size_t continued = 0;
+    unsigned most_passes = 0;
+    for (int appends = 1; appends < 120; appends += 3) {
+        zip_attempt_setup("late-deflate");
+        req.cluster_size = 0;
+        req.spool_reserve = 65536; /* as in test_zip_tight_space_second_pass */
+        fs.track_usage = true;
+        fs.free_bytes = TIGHT_DISK;
+        cut_and_resume("late-deflate", appends, &resumed_at, &continued);
+        most_passes = res.passes > most_passes ? res.passes : most_passes;
+    }
+    TEST_ASSERT_TRUE(resumed_at > 0);
+    TEST_ASSERT_TRUE(most_passes >= 2);
+}
+
+/* A cancelled install, then `damage` applied to its folder, then a resume that finishes. */
+static void resume_after(void (*damage)(void))
+{
+    zip_attempt_setup("late-deflate");
+    fs.appends_before_failure = 20;
+    TEST_ASSERT_EQUAL_INT(XC_ERR_IO, xc_install(&req, &res));
+    fs.appends_before_failure = -1;
+    TEST_ASSERT_TRUE(count_prefix(ZDIR ".xcat-spool-") > 0);
+    damage();
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_install(&req, &res));
+    TEST_ASSERT_TRUE(res.resumed);
+    expect_finished();
+}
+
+static void flip_state_files(void)
+{
+    for (int k = 0; k < 2; k++) {
+        node *n = find(k == 0 ? ZDIR ".xcat-state-0" : ZDIR ".xcat-state-1");
+        if (n != NULL) {
+            n->data[n->len / 2] ^= 0x01U;
+        }
+    }
+}
+
+static void tear_checkpoints(void)
+{
+    node *n = find(ZDIR XC_INSTALL_ZIP_CHECKPOINTS);
+    TEST_ASSERT_NOT_NULL(n);
+    n->len -= 1000; /* a power cut during the last append */
+}
+
+static void drop_checkpoints(void)
+{
+    drop(ZDIR XC_INSTALL_ZIP_CHECKPOINTS);
+}
+
+static void test_zip_damaged_state_starts_again(void)
+{
+    resume_after(flip_state_files);
+    TEST_ASSERT_EQUAL_UINT64(0, res.zip_resumed_at);
+}
+
+static void test_zip_torn_checkpoints(void)
+{
+    resume_after(tear_checkpoints);
+    resume_after(drop_checkpoints);
+    TEST_ASSERT_EQUAL_UINT64(0, res.zip_resumed_at); /* no checkpoint at the state's offset */
+}
+
+static void test_zip_stale_spool_without_states(void)
+{
+    /* without spool_sync no state is saved; the spool files left are deleted on resume */
+    static xc_install_io no_sync;
+    no_sync = memio;
+    no_sync.spool_sync = NULL;
+    zip_attempt_setup("late-deflate");
+    req.io = &no_sync;
+    fs.appends_before_failure = 3; /* the start, then two files out of the spool */
+    TEST_ASSERT_EQUAL_INT(XC_ERR_IO, xc_install(&req, &res));
+    fs.appends_before_failure = -1;
+    TEST_ASSERT_TRUE(count_prefix(ZDIR ".xcat-spool-") > 0);
+    TEST_ASSERT_EQUAL_size_t(0, count_lines(ZDIR ".xcat-journal", "state ", NULL));
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_install(&req, &res));
+    TEST_ASSERT_EQUAL_UINT64(0, res.zip_resumed_at);
+    expect_finished();
+}
+
 static void test_zip_not_a_zip(void)
 {
     req.zip = true; /* small.iso is no zip */
@@ -858,6 +1027,12 @@ int main(int argc, char **argv)
     RUN_TEST(test_zip_other_member_is_another_image);
     RUN_TEST(test_zip_without_spool_io);
     RUN_TEST(test_zip_damaged_member);
+    RUN_TEST(test_zip_resume_mid_stream);
+    RUN_TEST(test_zip_state_files);
+    RUN_TEST(test_zip_resume_tight_space);
+    RUN_TEST(test_zip_damaged_state_starts_again);
+    RUN_TEST(test_zip_torn_checkpoints);
+    RUN_TEST(test_zip_stale_spool_without_states);
     RUN_TEST(test_zip_not_a_zip);
     int rc = UNITY_END();
     if (zip_open) {

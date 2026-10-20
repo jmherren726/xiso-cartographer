@@ -1108,6 +1108,9 @@ static int cmd_install(int argc, char **argv)
                              r.passes, r.passes == 1 ? "" : "es", mib(r.reread_bytes),
                              r.files_from_spool, r.files_from_spool == 1 ? "" : "s",
                              mib(r.spool_peak));
+                if (r.zip_resumed_at > 0) {
+                    (void)printf(", continued %.1f MiB into the image", mib(r.zip_resumed_at));
+                }
             }
             (void)printf("\n");
         }

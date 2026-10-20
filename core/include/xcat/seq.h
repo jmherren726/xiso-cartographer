@@ -8,7 +8,8 @@
  * other byte that might belong to a file is spooled to disk, keeping the latest when space
  * runs out. When the stream ends, late files are copied out of the spool, and what the spool
  * dropped is read again in further passes. The platform provides the stream, the sink and
- * the spool storage.
+ * the spool storage. The engine's state can be saved at a checkpoint of the stream and the
+ * install continued from it after a power cut (stream-install.md §7).
  */
 
 #include <stdbool.h>
@@ -26,6 +27,7 @@ extern "C" {
 
 #define XC_SEQ_DEFAULT_CHUNK ((uint64_t)64 * 1024 * 1024) /* image bytes per spool chunk */
 #define XC_SEQ_DEFAULT_MAX_PASSES 16U
+#define XC_SEQ_MAX_STATE ((size_t)64 * 1024 * 1024) /* a saved state's largest size (§7.2) */
 
 /*
  * Spool storage: numbered chunk files, each holding unidentified bytes of one interval of
@@ -41,6 +43,14 @@ typedef struct xc_seq_spool {
     /* Free bytes on the drive that holds the spool and the game. */
     xc_err (*free_space)(void *ctx, uint64_t *bytes);
     void *ctx;
+    /*
+     * Optional: the size of chunk `chunk`'s file, 0 if there is none. With it, chunk files
+     * an earlier attempt left are found when the install starts (§7.3): kept if a resumed
+     * state names them, deleted otherwise. Without it there must be none.
+     */
+    xc_err (*size)(void *ctx, uint32_t chunk, uint64_t *bytes);
+    /* Optional: makes every append so far durable. Without it no state is saved (§7.1). */
+    xc_err (*sync)(void *ctx);
 } xc_seq_spool;
 
 /*
@@ -94,6 +104,10 @@ typedef struct xc_seq_req {
     /* About every MiB and after each file. Return false to cancel (XC_ERR_CANCELLED). */
     bool (*progress)(void *ctx, const xc_seq_progress *p);
     void *ctx;
+    /* A state saved by xc_seq_save() in an earlier attempt, to continue from (§7.3), or
+       NULL to start at the image's first byte. */
+    const uint8_t *resume;
+    size_t resume_len;
 } xc_seq_req;
 
 typedef struct xc_seq_result {
@@ -111,16 +125,40 @@ typedef struct xc_seq_result {
     uint64_t spool_peak;
     uint64_t space_needed; /* XC_ERR_NO_SPACE */
     uint64_t space_free;
-    char current_file[256]; /* on failure: the file being written */
+    uint64_t resumed_at;      /* req->resume: the stream offset it continued from */
+    bool file_continued;      /* the file open at that offset was continued, not rewritten */
+    uint64_t bytes_continued; /* ... the bytes it had kept */
+    size_t stale_chunks;      /* spool files of an earlier attempt that were deleted */
+    bool state_rejected;      /* req->resume was damaged, so the install started again at 0 */
+    char current_file[256];   /* on failure: the file being written */
 } xc_seq_result;
 
 /*
  * Runs the install (stream-install.md §3). XC_ERR_NOT_XDVDFS, XC_ERR_CORRUPT, XC_ERR_LIMIT
  * (entries, depth, or more than max_passes passes), XC_ERR_UNSUPPORTED (files that share
  * data), XC_ERR_NO_SPACE, XC_ERR_CANCELLED, or what the stream, sink, spool or a callback
- * returned. `res` may be NULL.
+ * returned. A damaged req->resume (§7.2) isn't an error: the install starts again at the
+ * image's first byte (res->state_rejected). `res` may be NULL.
  */
 xc_err xc_seq_extract(const xc_seq_req *req, xc_seq_result *res);
+
+/*
+ * Saves the engine's state at stream offset `at` (stream-install.md §7.1), for a stream
+ * function to call between two deliveries, typically at a zip checkpoint. `stream_ctx` is
+ * the `fn_ctx` the stream function was given, and `at` the offset of the next byte it will
+ * deliver. The file being written and the spool are made durable first. On success, *out
+ * is a malloc'd state of *len bytes, or NULL when none can be saved at this offset (§7.1);
+ * the caller frees it. Errors come from the sink or the spool, or are XC_ERR_NOMEM.
+ */
+xc_err xc_seq_save(void *stream_ctx, uint64_t at, uint8_t **out, size_t *len);
+
+/*
+ * Checks a saved state's header and CRC-32 against the image (§7.2) and returns the stream
+ * offset it continues from. XC_ERR_CORRUPT if it's damaged or for another image size or
+ * chunk size (0 = XC_SEQ_DEFAULT_CHUNK).
+ */
+xc_err xc_seq_state_offset(const uint8_t *state, size_t len, uint64_t image_size,
+                           uint64_t chunk_bytes, uint64_t *offset);
 
 #ifdef __cplusplus
 }

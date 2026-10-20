@@ -102,7 +102,7 @@ static void test_round_trip(void)
     TEST_ASSERT_EQUAL_UINT64(0x18300000U, st.id.partition_offset);
     /* The lines look as journal.md §1 shows them. */
     buf[used] = '\0';
-    TEST_ASSERT_EQUAL_INT(0, strncmp(buf, "# xcat-journal v1.3 *", 21));
+    TEST_ASSERT_EQUAL_INT(0, strncmp(buf, "# xcat-journal v1.4 *", 21));
     TEST_ASSERT_NOT_NULL(strstr(buf, "\nimage 7825162240 405798912 "));
     TEST_ASSERT_NOT_NULL(strstr(buf, "\nvalidators \"5e1f-61a2c3\" Wed,%2014%20Oct%202026"));
     TEST_ASSERT_NOT_NULL(strstr(buf, "\nsource http://192.168.1.20:8080/x%20y.iso *"));
@@ -282,14 +282,14 @@ static void test_invalid_records(void)
 static void test_newer_minor_records_are_skipped(void)
 {
     start();
-    /* Rewrite the header as v1.4, then add a record type a v1.3 reader doesn't know. */
+    /* Rewrite the header as v1.5, then add a record type a v1.4 reader doesn't know. */
     char rest[4096];
     char *nl = memchr(buf, '\n', used);
     TEST_ASSERT_NOT_NULL(nl);
     size_t tail = used - (size_t)(nl + 1 - buf);
     memcpy(rest, nl + 1, tail);
     used = 0;
-    raw_line("# xcat-journal v1.4");
+    raw_line("# xcat-journal v1.5");
     memcpy(buf + used, rest, tail);
     used += tail;
     raw_line("sig sha1 0123");
@@ -476,6 +476,114 @@ static void test_part_records(void)
                           xc_journal_format_part("a", 0, 1, buf, sizeof buf, &used));
 }
 
+/* --- zip journals (§4.1, §6.8, §6.9) --------------------------------------------------- */
+
+static xc_journal_id zip_id;
+static xc_journal_zip_state zst;
+
+static void zip_start(void)
+{
+    xc_journal_make_zip_id(&zip_id, 7825162240U, 0x2862EC8CU, 3000000000U, "\"e\"", NULL);
+    size_t n = 0;
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_journal_format_start(&zip_id, "http://h/x.zip", buf + used,
+                                                         sizeof buf - used, &n));
+    used += n;
+}
+
+static void zip_state(uint64_t seq, uint64_t offset, uint32_t bytes, uint32_t crc)
+{
+    size_t n = 0;
+    TEST_ASSERT_EQUAL_INT(
+        XC_OK, xc_journal_format_state(seq, offset, bytes, crc, buf + used, sizeof buf - used, &n));
+    used += n;
+}
+
+static void zip_drop(uint32_t chunk)
+{
+    size_t n = 0;
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_journal_format_drop(chunk, buf + used, sizeof buf - used, &n));
+    used += n;
+}
+
+static void zip_read_back(void)
+{
+    xc_journal_zip_state_free(&zst);
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_journal_read_zip(buf, used, &zip_id, &zst));
+}
+
+static void test_zip_states_and_drops(void)
+{
+    zip_start();
+    zip_drop(3); /* before any state: doesn't matter */
+    zip_state(1, 67108864, 4428, 0x01020304U);
+    zip_drop(0);
+    done(0, 7U);
+    zip_state(2, 134217728, 5000, 0xA0B0C0D0U);
+    zip_drop(1);
+    zip_drop(4294967295U);
+    zip_read_back();
+    TEST_ASSERT_TRUE(zst.valid);
+    TEST_ASSERT_TRUE(zst.has_state);
+    TEST_ASSERT_EQUAL_UINT64(2, zst.state_seq);
+    TEST_ASSERT_EQUAL_UINT64(134217728, zst.state_offset);
+    TEST_ASSERT_EQUAL_UINT32(5000, zst.state_bytes);
+    TEST_ASSERT_EQUAL_HEX32(0xA0B0C0D0U, zst.state_crc);
+    TEST_ASSERT_EQUAL_size_t(2, zst.drop_count); /* only the ones after the last state */
+    TEST_ASSERT_EQUAL_UINT32(1, zst.drops[0]);
+    TEST_ASSERT_EQUAL_UINT32(4294967295U, zst.drops[1]);
+    TEST_ASSERT_EQUAL_size_t(1, zst.done_count);
+
+    /* a torn last line (a power cut during the append) is ignored */
+    used -= 3;
+    zip_read_back();
+    TEST_ASSERT_TRUE(zst.valid && zst.torn);
+    TEST_ASSERT_EQUAL_UINT64(2, zst.state_seq);
+    TEST_ASSERT_EQUAL_size_t(1, zst.drop_count);
+    xc_journal_zip_state_free(&zst);
+}
+
+static void test_zip_bad_state_records(void)
+{
+    static const char *bad[] = {
+        "state 1 67108864 4428",            /* a field missing */
+        "state 0 67108864 4428 01020304",   /* seq 0 */
+        "state 1 67108865 4428 01020304",   /* not a multiple of 32 KiB */
+        "state 1 7825195008 4428 01020304", /* past the image's end */
+        "state 1 65536 0 01020304",         /* empty */
+        "state 1 65536 67108865 01020304",  /* over 64 MiB */
+        "state 1 65536 4428 0102030",       /* short CRC */
+        "drop",                             /* no chunk */
+        "drop 4294967296",                  /* too big */
+        "drop -1",
+    };
+    for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+        used = 0;
+        zip_start();
+        raw_line(bad[i]);
+        zip_read_back();
+        TEST_ASSERT_FALSE_MESSAGE(zst.valid, bad[i]);
+        TEST_ASSERT_FALSE(zst.has_state);
+        TEST_ASSERT_EQUAL_size_t(0, zst.drop_count);
+    }
+    /* the sequence numbers only go up */
+    used = 0;
+    zip_start();
+    zip_state(5, 65536, 100, 0);
+    zip_state(5, 131072, 100, 0);
+    zip_read_back();
+    TEST_ASSERT_FALSE(zst.valid);
+    TEST_ASSERT_EQUAL_INT(XC_ERR_INVALID_ARG, xc_journal_format_state(0, 0, 1, 0, buf, 64, &used));
+    TEST_ASSERT_EQUAL_INT(XC_ERR_INVALID_ARG, xc_journal_format_state(1, 1, 1, 0, buf, 64, &used));
+    TEST_ASSERT_EQUAL_INT(XC_ERR_INVALID_ARG, xc_journal_format_state(1, 0, 0, 0, buf, 64, &used));
+    xc_journal_zip_state_free(&zst);
+
+    /* an image journal has no state records */
+    used = 0;
+    start();
+    raw_line("state 1 65536 100 00000000");
+    expect_invalid("unknown record");
+}
+
 static void test_format_limits(void)
 {
     char small[32];
@@ -507,6 +615,8 @@ int main(void)
     RUN_TEST(test_part_records);
     RUN_TEST(test_hash_records);
     RUN_TEST(test_hash_in_old_journal_is_unknown);
+    RUN_TEST(test_zip_states_and_drops);
+    RUN_TEST(test_zip_bad_state_records);
     RUN_TEST(test_format_limits);
     return UNITY_END();
 }

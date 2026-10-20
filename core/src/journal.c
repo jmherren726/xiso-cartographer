@@ -168,7 +168,7 @@ xc_err xc_journal_format_start(const xc_journal_id *id, const char *source_url, 
         return XC_ERR_INVALID_ARG;
     }
     wbuf w = {out, cap, 0, 0, false};
-    w_str(&w, "# xcat-journal v1.3");
+    w_str(&w, "# xcat-journal v1.4");
     w_end_line(&w);
     if (id->zip) {
         w_str(&w, "zip ");
@@ -229,6 +229,38 @@ xc_err xc_journal_format_part(const char *path, uint32_t bytes, uint32_t crc, ch
     w_hex32(&w, crc);
     w_str(&w, " ");
     w_enc(&w, path);
+    w_end_line(&w);
+    return w_result(&w, len);
+}
+
+xc_err xc_journal_format_state(uint64_t seq, uint64_t offset, uint32_t bytes, uint32_t crc,
+                               char *out, size_t cap, size_t *len)
+{
+    if (seq == 0 || offset % XC_JOURNAL_STATE_ALIGN != 0 || bytes == 0 ||
+        bytes > XC_JOURNAL_MAX_STATE || out == NULL || len == NULL) {
+        return XC_ERR_INVALID_ARG;
+    }
+    wbuf w = {out, cap, 0, 0, false};
+    w_str(&w, "state ");
+    w_fmt(&w, "%" PRIu64, seq);
+    w_str(&w, " ");
+    w_fmt(&w, "%" PRIu64, offset);
+    w_str(&w, " ");
+    w_fmt(&w, "%" PRIu64, bytes);
+    w_str(&w, " ");
+    w_hex32(&w, crc);
+    w_end_line(&w);
+    return w_result(&w, len);
+}
+
+xc_err xc_journal_format_drop(uint32_t chunk, char *out, size_t cap, size_t *len)
+{
+    if (out == NULL || len == NULL) {
+        return XC_ERR_INVALID_ARG;
+    }
+    wbuf w = {out, cap, 0, 0, false};
+    w_str(&w, "drop ");
+    w_fmt(&w, "%" PRIu64, chunk);
     w_end_line(&w);
     return w_result(&w, len);
 }
@@ -658,6 +690,8 @@ static xc_err zip_invalid(xc_journal_zip_state *st, const char *why)
         free(st->done[i].path);
     }
     st->done_count = 0;
+    st->has_state = false;
+    st->drop_count = 0;
     st->valid = false;
     st->why = why;
     return XC_OK;
@@ -696,10 +730,52 @@ xc_err xc_journal_read_zip(const char *data, size_t len, const xc_journal_id *im
         st->id = id_state.id;
     }
     size_t cap = 0;
+    size_t drop_cap = 0;
     char *rec = NULL;
     while (st->valid && (rec = next_record(&r, &torn, &too_long)) != NULL) {
-        char *f[5];
-        size_t nf = split_fields(rec, f, 5);
+        char *f[6];
+        size_t nf = split_fields(rec, f, 6);
+        if (nf >= 1 && strcmp(f[0], "state") == 0) {
+            /* §5, §6.9 (v1.4): the last one counts; drops before it no longer matter */
+            uint64_t seq = 0;
+            uint64_t off = 0;
+            uint64_t bytes = 0;
+            uint32_t crc = 0;
+            if (nf != 5 || !parse_dec(f[1], UINT64_MAX, &seq) ||
+                !parse_dec(f[2], image->image_size, &off) ||
+                !parse_dec(f[3], XC_JOURNAL_MAX_STATE, &bytes) || !parse_hex32(f[4], &crc) ||
+                off % XC_JOURNAL_STATE_ALIGN != 0 || bytes == 0 ||
+                seq <= (st->has_state ? st->state_seq : 0)) {
+                err = zip_invalid(st, "journal has a malformed record");
+                break;
+            }
+            st->has_state = true;
+            st->state_seq = seq;
+            st->state_offset = off;
+            st->state_bytes = (uint32_t)bytes;
+            st->state_crc = crc;
+            st->drop_count = 0;
+            continue;
+        }
+        if (nf >= 1 && strcmp(f[0], "drop") == 0) {
+            uint64_t chunk = 0;
+            if (nf != 2 || !parse_dec(f[1], UINT32_MAX, &chunk)) {
+                err = zip_invalid(st, "journal has a malformed record");
+                break;
+            }
+            if (st->drop_count == drop_cap) {
+                size_t ncap = drop_cap > 0 ? drop_cap * 2 : 16;
+                uint32_t *v = realloc(st->drops, ncap * sizeof *v);
+                if (v == NULL) {
+                    err = XC_ERR_NOMEM;
+                    break;
+                }
+                st->drops = v;
+                drop_cap = ncap;
+            }
+            st->drops[st->drop_count++] = (uint32_t)chunk;
+            continue;
+        }
         if (nf >= 1 && strcmp(f[0], "done") != 0) {
             if (minor <= XC_JOURNAL_VERSION_MINOR) {
                 err = zip_invalid(st, "journal has an unknown record");
@@ -767,6 +843,10 @@ void xc_journal_zip_state_free(xc_journal_zip_state *st)
     free(st->done);
     st->done = NULL;
     st->done_count = 0;
+    free(st->drops);
+    st->drops = NULL;
+    st->drop_count = 0;
+    st->has_state = false;
 }
 
 const xc_journal_done *xc_journal_zip_find(const xc_journal_zip_state *st, const char *path)

@@ -28,6 +28,8 @@ Output is git-ignored, deterministic (byte-identical on every run and platform) 
 
 CMake also zips `small` with [zipgen.py](zipgen.py): `small-stored.zip` (stored, Zip64 sizes in the local header) `small-deflate.zip` (Deflate level 9, like archive.org's zips) and `small-deflate0.zip` (Deflate level 0: stored Deflate blocks), each with a `readme.txt` before the image. `test_zip`, `test_zip_read` and `xcat-cli zip` read them. Zip64 end records and broken zips are built byte by byte in `core/tests/test_zip.c`; the fuzz seeds (zip archives, and raw Deflate streams for `fuzz_zip_inflate`) come from [zip_seeds.py](zip_seeds.py).
 
+The `fuzz_seq` seeds are fixture images; [seq_seed.py](seq_seed.py) also writes copies with two bytes appended, which make the fuzzer cut the power and resume (`core/tests/fuzz_seq.c`).
+
 Negative cases (corrupt or hostile images) belong to the M1 parser tests and fuzzing, not this generator. The generator refuses to write invalid images.
 
 ## Manifest (`<name>.json`, `<name>.tsv`)

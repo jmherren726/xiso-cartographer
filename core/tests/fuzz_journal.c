@@ -10,8 +10,9 @@
  * Checked after each read; a violation aborts: an invalid journal reports no done
  * files; a valid one only marks files of the listing, at most once each, and
  * matches the image (§4). Each is also read as a Deflate zip journal (§6.8): a valid one
- * has its done paths sorted, unique and findable. Seeds are in core/tests/fuzz-seeds/journal/
- * (written without CRCs, like the second form). Built like fuzz_http.c.
+ * has its done paths sorted, unique and findable, and its state within the image (§6.9). Seeds are
+ * in core/tests/fuzz-seeds/journal/ (written without CRCs, like the second form). Built like
+ * fuzz_http.c.
  */
 #include <stdint.h>
 #include <stdlib.h>
@@ -67,7 +68,7 @@ static void read_and_check(const char *text, size_t len, const xc_journal_id *im
     err = xc_journal_read_zip(text, len, &zip, &zs);
     check(err == XC_OK);
     if (!zs.valid) {
-        check(zs.why != NULL && zs.done_count == 0);
+        check(zs.why != NULL && zs.done_count == 0 && !zs.has_state && zs.drop_count == 0);
     } else {
         check(zs.id.zip && xc_journal_same_image(&zs.id, &zip));
         for (size_t i = 0; i < zs.done_count; i++) {
@@ -75,6 +76,11 @@ static void read_and_check(const char *text, size_t len, const xc_journal_id *im
             check(i == 0 || strcmp(zs.done[i - 1].path, zs.done[i].path) < 0);
             check(xc_journal_zip_find(&zs, zs.done[i].path) == &zs.done[i]);
         }
+        /* §6.9 (v1.4): a state stands at a 32 KiB boundary inside the image */
+        check(!zs.has_state || (zs.state_seq > 0 && zs.state_offset % XC_JOURNAL_STATE_ALIGN == 0 &&
+                                zs.state_offset <= zip.image_size && zs.state_bytes > 0 &&
+                                zs.state_bytes <= XC_JOURNAL_MAX_STATE));
+        check(zs.drop_count == 0 || zs.drops != NULL);
     }
     xc_journal_zip_state_free(&zs);
 }

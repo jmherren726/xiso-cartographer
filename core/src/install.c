@@ -89,6 +89,13 @@ typedef struct job {
     path_crc *crcs;
     size_t ncrcs, cap_crcs;
     unsigned pass;
+    /* stream-install.md §7: saved states */
+    bool states;         /* the spool and the sink can be made durable */
+    void *seq_ctx;       /* the engine, as the stream function sees it */
+    uint64_t state_seq;  /* of the last `state` line, 0 if none */
+    size_t state_len[2]; /* the state files' sizes, as this attempt wrote them */
+    size_t cks_on_file;  /* checkpoints in the checkpoints file */
+    char ck_path[XC_INSTALL_MAX_PATH];
     xc_xdvdfs_volume vol;
     xc_xdvdfs_listing listing;
     xc_journal_id id;
@@ -628,19 +635,10 @@ static uint64_t zip_checkpoint_every(const job *j)
     return every;
 }
 
-/* Keeps a checkpoint, or checks a later pass against the one pass 1 kept (zip.md §9.5). */
-static xc_err on_zip_checkpoint(void *ctx, const xc_zip_position *pos, const uint8_t *blob,
-                                size_t len)
+/* Keeps a checkpoint in memory (sorted, one per offset). */
+static xc_err keep_checkpoint(job *j, size_t at, const xc_zip_position *pos, const uint8_t *blob,
+                              size_t len)
 {
-    job *j = ctx;
-    size_t at = 0;
-    while (at < j->nzcks && j->zcks[at].pos.offset < pos->offset) {
-        at++;
-    }
-    if (at < j->nzcks && j->zcks[at].pos.offset == pos->offset) {
-        /* the same bytes again: their CRC-32 so far must match */
-        return j->zcks[at].pos.crc32 == pos->crc32 ? XC_OK : XC_ERR_ZIP_CRC;
-    }
     if (j->nzcks == j->cap_zcks) {
         size_t cap = j->cap_zcks > 0 ? j->cap_zcks * 2 : 32;
         zck *v = realloc(j->zcks, cap * sizeof *v);
@@ -663,6 +661,82 @@ static xc_err on_zip_checkpoint(void *ctx, const xc_zip_position *pos, const uin
     return XC_OK;
 }
 
+static size_t checkpoint_at(const job *j, uint64_t offset)
+{
+    size_t at = 0;
+    while (at < j->nzcks && j->zcks[at].pos.offset < offset) {
+        at++;
+    }
+    return at;
+}
+
+static bool state_path(const job *j, uint64_t seq, char *out)
+{
+    char name[32];
+    (void)snprintf(name, sizeof name, "%s%u", XC_INSTALL_STATE_PREFIX, (unsigned)(seq % 2U));
+    return join(j, out, j->res->folder, name);
+}
+
+/*
+ * stream-install.md §7.1: the engine's state at `offset` goes to the state file not named by
+ * the last `state` line, then a new `state` line names it.
+ */
+static xc_err save_state(job *j, uint64_t offset)
+{
+    uint8_t *state = NULL;
+    size_t len = 0;
+    xc_err err = xc_seq_save(j->seq_ctx, offset, &state, &len);
+    if (err != XC_OK || state == NULL) {
+        return err;
+    }
+    char path[XC_INSTALL_MAX_PATH];
+    uint64_t seq = j->state_seq + 1;
+    err = state_path(j, seq, path) ? j->io->write_all(j->io->ctx, path, state, len) : XC_ERR_LIMIT;
+    uint32_t crc = xc_crc32(0, state, len);
+    free(state);
+    size_t n = 0;
+    if (err == XC_OK) {
+        err = xc_journal_format_state(seq, offset, (uint32_t)len, crc, j->line, sizeof j->line, &n);
+    }
+    if (err == XC_OK) {
+        err = j->io->append(j->io->ctx, j->journal_path, j->line, n);
+    }
+    if (err == XC_OK) {
+        j->state_seq = seq;
+        j->state_len[seq % 2U] = len;
+    }
+    return err;
+}
+
+/*
+ * Keeps a checkpoint, or checks a later pass against the one pass 1 kept (zip.md §9.5); then
+ * saves the engine's state there (stream-install.md §7.1). A new checkpoint is appended to
+ * the checkpoints file first, so a state never names an offset without one.
+ */
+static xc_err on_zip_checkpoint(void *ctx, const xc_zip_position *pos, const uint8_t *blob,
+                                size_t len)
+{
+    job *j = ctx;
+    size_t at = checkpoint_at(j, pos->offset);
+    xc_err err = XC_OK;
+    if (at < j->nzcks && j->zcks[at].pos.offset == pos->offset) {
+        /* the same bytes again: their CRC-32 so far must match */
+        if (j->zcks[at].pos.crc32 != pos->crc32) {
+            return XC_ERR_ZIP_CRC;
+        }
+    } else {
+        err = keep_checkpoint(j, at, pos, blob, len);
+        if (err == XC_OK && j->states) {
+            err = j->io->append(j->io->ctx, j->ck_path, blob, len);
+            j->cks_on_file += err == XC_OK ? 1U : 0U;
+        }
+    }
+    if (err == XC_OK && j->states) {
+        err = save_state(j, pos->offset);
+    }
+    return err;
+}
+
 /* xc_seq_stream_fn: the member from the last checkpoint at or before `from`. */
 static xc_err zip_stream(void *ctx, uint64_t from, xc_source_data_fn fn, void *fn_ctx)
 {
@@ -683,6 +757,7 @@ static xc_err zip_stream(void *ctx, uint64_t from, xc_source_data_fn fn, void *f
     q.resume = best != NULL ? best->blob : NULL;
     q.resume_len = best != NULL ? best->len : 0;
     j->pass++;
+    j->seq_ctx = fn_ctx;
     return xc_zip_read_member(&q, NULL);
 }
 
@@ -710,17 +785,70 @@ static xc_err spool_read(void *ctx, uint32_t chunk, uint64_t pos, uint8_t *buf, 
                                       : XC_ERR_LIMIT;
 }
 
+/* stream-install.md §7.3: once a state exists, a `drop` line comes before the file goes. */
 static xc_err spool_drop(void *ctx, uint32_t chunk)
 {
     job *j = ctx;
     char path[XC_INSTALL_MAX_PATH];
-    return spool_path(j, chunk, path) ? j->io->spool_remove(j->io->ctx, path) : XC_ERR_LIMIT;
+    if (!spool_path(j, chunk, path)) {
+        return XC_ERR_LIMIT;
+    }
+    xc_err err = XC_OK;
+    if (j->state_seq > 0) {
+        size_t n = 0;
+        err = xc_journal_format_drop(chunk, j->line, sizeof j->line, &n);
+        if (err == XC_OK) {
+            err = j->io->append(j->io->ctx, j->journal_path, j->line, n);
+        }
+    }
+    return err == XC_OK ? j->io->spool_remove(j->io->ctx, path) : err;
+}
+
+static xc_err spool_size(void *ctx, uint32_t chunk, uint64_t *bytes)
+{
+    job *j = ctx;
+    char path[XC_INSTALL_MAX_PATH];
+    *bytes = 0;
+    if (!spool_path(j, chunk, path)) {
+        return XC_ERR_LIMIT;
+    }
+    return j->io->exists(j->io->ctx, path) ? j->io->file_size(j->io->ctx, path, bytes) : XC_OK;
+}
+
+static xc_err spool_sync(void *ctx)
+{
+    job *j = ctx;
+    return j->io->spool_sync(j->io->ctx);
+}
+
+/*
+ * stream-install.md §7.1: what the checkpoints file and the state files will still take. It
+ * comes out of the spool's share, so the reserve stays free. A state file is assumed to grow
+ * by up to 64 KiB between two states.
+ */
+static uint64_t state_growth(const job *j)
+{
+    if (!j->states) {
+        return 0;
+    }
+    uint64_t each = xc_zip_checkpoint_size(j->member.method);
+    uint64_t total = j->member.size / zip_checkpoint_every(j);
+    uint64_t growth = total > j->cks_on_file ? (total - j->cks_on_file) * each : 0;
+    for (size_t k = 0; k < 2; k++) {
+        uint64_t last = j->state_len[j->state_seq % 2U];
+        uint64_t room = last + 65536U;
+        growth += room > j->state_len[k] ? room - j->state_len[k] : 0;
+    }
+    return growth;
 }
 
 static xc_err spool_free(void *ctx, uint64_t *bytes)
 {
     job *j = ctx;
-    return j->io->free_space(j->io->ctx, j->req->games_dir, bytes);
+    xc_err err = j->io->free_space(j->io->ctx, j->req->games_dir, bytes);
+    uint64_t growth = state_growth(j);
+    *bytes = *bytes > growth ? *bytes - growth : 0;
+    return err;
 }
 
 static xc_err seq_listing(void *ctx, const xc_xdvdfs_volume *vol, const xc_xdvdfs_listing *l,
@@ -800,6 +928,112 @@ static bool seq_progress(void *ctx, const xc_seq_progress *sp)
     return report(j);
 }
 
+/*
+ * stream-install.md §7.3: the checkpoints an earlier attempt kept. A damaged tail (a power cut
+ * during an append) or a checkpoint from another build ends the list, and the file is then
+ * rewritten with what's left, so later appends line up again.
+ */
+static xc_err load_checkpoints(job *j)
+{
+    const xc_install_io *io = j->io;
+    size_t each = xc_zip_checkpoint_size(j->member.method);
+    uint64_t every = zip_checkpoint_every(j);
+    uint64_t most = j->member.size / every + 1;
+    if (each == 0 || most > SIZE_MAX / each || !io->exists(io->ctx, j->ck_path)) {
+        return XC_OK;
+    }
+    char *data = NULL;
+    size_t len = 0;
+    xc_err err = io->read_all(io->ctx, j->ck_path, (size_t)most * each, &data, &len);
+    if (err == XC_ERR_NOMEM) {
+        return err;
+    }
+    size_t good = 0;
+    for (; err == XC_OK && good + each <= len; good += each) {
+        const uint8_t *blob = (const uint8_t *)data + good;
+        xc_zip_position pos;
+        if (xc_zip_checkpoint_position(blob, each, &j->member, &pos) != XC_OK ||
+            pos.offset % every != 0) {
+            break;
+        }
+        size_t at = checkpoint_at(j, pos.offset);
+        if (at < j->nzcks && j->zcks[at].pos.offset == pos.offset) {
+            break;
+        }
+        err = keep_checkpoint(j, at, &pos, blob, each);
+        j->cks_on_file += err == XC_OK ? 1U : 0U;
+    }
+    if (err == XC_ERR_NOMEM) {
+        free(data);
+        return err;
+    }
+    if (err != XC_OK || good != len) {
+        err = good > 0 ? io->write_all(io->ctx, j->ck_path, data, good)
+                       : io->remove(io->ctx, j->ck_path);
+    }
+    free(data);
+    return err;
+}
+
+/*
+ * stream-install.md §7.3: the state the last `state` line names, if it's there as written
+ * and a checkpoint exists at its offset; otherwise none, and the stream starts again at 0.
+ */
+static xc_err load_state(job *j, uint8_t **state, size_t *len)
+{
+    const xc_journal_zip_state *z = &j->zjournal;
+    *state = NULL;
+    *len = 0;
+    j->state_seq = z->has_state ? z->state_seq : 0;
+    size_t at = checkpoint_at(j, z->state_offset);
+    char path[XC_INSTALL_MAX_PATH];
+    if (!z->has_state || !j->states || at == j->nzcks ||
+        j->zcks[at].pos.offset != z->state_offset || !state_path(j, z->state_seq, path)) {
+        return XC_OK;
+    }
+    char *data = NULL;
+    size_t n = 0;
+    xc_err err = j->io->read_all(j->io->ctx, path, z->state_bytes, &data, &n);
+    if (err == XC_ERR_NOMEM) {
+        return err;
+    }
+    uint64_t offset = 0;
+    if (err != XC_OK || n != z->state_bytes || xc_crc32(0, data, n) != z->state_crc ||
+        xc_seq_state_offset((const uint8_t *)data, n, j->member.size, zip_checkpoint_every(j),
+                            &offset) != XC_OK ||
+        offset != z->state_offset) {
+        free(data);
+        return XC_OK;
+    }
+    /* chunk files dropped after the state was saved may have been made again since */
+    for (size_t i = 0; i < z->drop_count; i++) {
+        if (spool_path(j, z->drops[i], j->path) && j->io->exists(j->io->ctx, j->path)) {
+            err = j->io->spool_remove(j->io->ctx, j->path);
+            if (err != XC_OK) {
+                free(data);
+                return err;
+            }
+        }
+    }
+    *state = (uint8_t *)data;
+    *len = n;
+    return XC_OK;
+}
+
+/* §2.4: a finished install leaves no state files behind. */
+static void remove_state_files(job *j)
+{
+    char path[XC_INSTALL_MAX_PATH];
+    for (uint64_t k = 0; k < 2; k++) {
+        if (state_path(j, k, path) && j->io->exists(j->io->ctx, path)) {
+            (void)j->io->remove(j->io->ctx, path);
+        }
+    }
+    if (j->io->exists(j->io->ctx, j->ck_path)) {
+        (void)j->io->remove(j->io->ctx, j->ck_path);
+    }
+}
+
 static xc_err run_zip_install(job *j)
 {
     const xc_install_req *req = j->req;
@@ -814,13 +1048,24 @@ static xc_err run_zip_install(job *j)
     if (err != XC_OK) {
         return err;
     }
+    if (!join(j, j->ck_path, res->folder, XC_INSTALL_ZIP_CHECKPOINTS)) {
+        return XC_ERR_LIMIT;
+    }
     xc_sink sink;
     void *sink_handle = NULL;
     err = io->open_sink(io->ctx, res->folder, &sink, &sink_handle);
     if (err != XC_OK) {
         return err;
     }
-    if (!res->resumed) {
+    j->states = io->spool_sync != NULL && sink.sync != NULL;
+    uint8_t *state = NULL;
+    size_t state_len = 0;
+    if (res->resumed) {
+        err = load_checkpoints(j);
+        if (err == XC_OK) {
+            err = load_state(j, &state, &state_len);
+        }
+    } else {
         size_t len = 0;
         char *start = malloc((size_t)3 * XC_JOURNAL_MAX_LINE);
         err = start != NULL ? xc_journal_format_start(&j->id, req->source_name, start,
@@ -834,7 +1079,13 @@ static xc_err run_zip_install(job *j)
     xc_seq_result sr;
     memset(&sr, 0, sizeof sr);
     if (err == XC_OK) {
-        xc_seq_spool spool = {spool_append, spool_read, spool_drop, spool_free, j};
+        xc_seq_spool spool = {spool_append,
+                              spool_read,
+                              spool_drop,
+                              spool_free,
+                              j,
+                              spool_size,
+                              j->states ? spool_sync : NULL};
         xc_seq_req q;
         memset(&q, 0, sizeof q);
         q.image_size = j->member.size;
@@ -854,7 +1105,16 @@ static xc_err run_zip_install(job *j)
         q.progress = seq_progress;
         q.ctx = j;
         q.listing_out = &j->listing;
+        q.resume = state;
+        q.resume_len = state_len;
         err = xc_seq_extract(&q, &sr);
+        j->p.current = NULL; /* it pointed into the engine's listing, which is gone */
+        if (err != XC_OK) {
+            (void)snprintf(res->current_file, sizeof res->current_file, "%s", sr.current_file);
+        }
+        res->zip_resumed_at = sr.resumed_at;
+        res->files_continued = sr.file_continued ? 1U : 0U;
+        res->bytes_continued = sr.bytes_continued;
         res->passes = sr.passes;
         res->reread_bytes = sr.reread;
         res->spool_peak = sr.spool_peak;
@@ -868,10 +1128,12 @@ static xc_err run_zip_install(job *j)
         }
         j->vol = sr.vol;
     }
+    free(state);
     io->close_sink(io->ctx, sink_handle);
     if (err != XC_OK) {
         return err;
     }
+    remove_state_files(j);
     res->file_count = j->listing.file_count;
     res->hash_note = "zip: every byte checked by the member's CRC-32 instead (zip.md §9)";
 

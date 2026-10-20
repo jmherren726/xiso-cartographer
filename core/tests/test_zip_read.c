@@ -89,7 +89,6 @@ static void open_zip(const char *name)
 
 /* --- what the callbacks saw ------------------------------------------------------- */
 
-static uint64_t got_from; /* first offset delivered */
 static uint64_t got_next; /* next offset expected */
 static uint64_t fail_at;  /* on_data fails once an offset reaches this; UINT64_MAX never */
 static size_t ck_count;
@@ -131,7 +130,6 @@ static xc_err on_checkpoint(void *ctx, const xc_zip_position *pos, const uint8_t
 static void reset_seen(uint64_t from)
 {
     memset(got, 0, iso_len);
-    got_from = from;
     got_next = from;
     fail_at = UINT64_MAX;
     ck_fail = XC_OK;

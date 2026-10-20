@@ -134,21 +134,27 @@ static void io_close_file(void *ctx, void *handle)
 
 /*
  * Spool files (xcat/install.h): one is kept open between calls, since a Deflate zip install
- * appends to the same chunk many times in a row. Not durable (stream-install.md §4). One
- * install at a time per process.
+ * appends to the same chunk many times in a row. A file that was appended to is flushed to
+ * disk when another is opened, so spool_sync only has the open one left to do
+ * (stream-install.md §7.1). One install at a time per process.
  */
 static struct {
     char path[4096];
     FILE *f;
+    bool dirty; /* appended to since it was last flushed to disk */
 } spool;
 
-static void spool_close(void)
+static bool spool_close(void)
 {
+    bool ok = true;
     if (spool.f != NULL) {
-        (void)fclose(spool.f);
+        ok = !spool.dirty || xc_host_sync(spool.f);
+        ok = fclose(spool.f) == 0 && ok;
         spool.f = NULL;
     }
+    spool.dirty = false;
     spool.path[0] = '\0';
+    return ok;
 }
 
 static FILE *spool_open(const char *path)
@@ -156,8 +162,7 @@ static FILE *spool_open(const char *path)
     if (spool.f != NULL && strcmp(spool.path, path) == 0) {
         return spool.f;
     }
-    spool_close();
-    if (strlen(path) >= sizeof spool.path) {
+    if (!spool_close() || strlen(path) >= sizeof spool.path) {
         return NULL;
     }
     spool.f = xc_host_fopen(path, "a+b");
@@ -174,6 +179,7 @@ static xc_err io_spool_append(void *ctx, const char *path, const void *data, siz
     if (f == NULL || fseek(f, 0, SEEK_END) != 0) {
         return XC_ERR_IO;
     }
+    spool.dirty = true;
     return fwrite(data, 1, len, f) == len ? XC_OK : XC_ERR_IO;
 }
 
@@ -192,9 +198,23 @@ static xc_err io_spool_remove(void *ctx, const char *path)
 {
     (void)ctx;
     if (strcmp(spool.path, path) == 0) {
-        spool_close();
+        spool.dirty = false; /* going anyway */
+        (void)spool_close();
     }
     return xc_host_remove(path) ? XC_OK : XC_ERR_IO;
+}
+
+static xc_err io_spool_sync(void *ctx)
+{
+    (void)ctx;
+    if (spool.f == NULL || !spool.dirty) {
+        return XC_OK;
+    }
+    if (!xc_host_sync(spool.f)) {
+        return XC_ERR_IO;
+    }
+    spool.dirty = false;
+    return XC_OK;
 }
 
 void xc_host_install_io(xc_install_io *io)
@@ -219,4 +239,5 @@ void xc_host_install_io(xc_install_io *io)
     io->spool_append = io_spool_append;
     io->spool_read = io_spool_read;
     io->spool_remove = io_spool_remove;
+    io->spool_sync = io_spool_sync;
 }

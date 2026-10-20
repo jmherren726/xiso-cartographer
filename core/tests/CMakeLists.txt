@@ -281,6 +281,20 @@ foreach(_name IN ITEMS small late late-root)
     VERBATIM)
   list(APPEND _seq_seeds ${_seed})
 endforeach()
+# ... and with a power cut and a resume (stream-install.md §7): <image> <cut> <disk>
+foreach(_v IN ITEMS "late;0x40;0" "late;0x21;0x40" "late-root;0x52;0x40" "late;0xC8;0")
+  list(GET _v 0 _name)
+  list(GET _v 1 _cut)
+  list(GET _v 2 _disk)
+  set(_seed ${CMAKE_BINARY_DIR}/fuzz-seeds-seq/${_name}-cut-${_cut}-${_disk}.seed)
+  add_custom_command(
+    OUTPUT ${_seed}
+    COMMAND ${Python3_EXECUTABLE} -I ${PROJECT_SOURCE_DIR}/tools/fixtures/seq_seed.py
+            ${XCAT_FIXTURES_DIR}/${_name}.iso ${_seed} ${_cut} ${_disk}
+    DEPENDS ${XCAT_FIXTURES_DIR}/${_name}.iso ${PROJECT_SOURCE_DIR}/tools/fixtures/seq_seed.py
+    VERBATIM)
+  list(APPEND _seq_seeds ${_seed})
+endforeach()
 add_custom_target(xcat_seq_seeds ALL DEPENDS ${_seq_seeds})
 add_dependencies(xcat_seq_seeds xcat_fixtures)
 xcat_add_fuzzer(fuzz_seq SEEDS ${_seq_seeds})

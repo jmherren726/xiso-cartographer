@@ -388,6 +388,30 @@ def s_zip_resume(e: Env) -> None:
     e.check_installed("small")
 
 
+def s_zip_resume_mid_stream(e: Env) -> None:
+    """stream-install.md 7: a kill after a saved state continues the stream there, not from 0."""
+    cp = ["--checkpoint", "65536"]
+    for zip_name, fixture, states in (("small-deflate.zip", "small", 3),
+                                      ("late-deflate.zip", "late", 6)):
+        url = serve_file(e, zip_name)
+        title = fixture.capitalize()
+        e.kill_when(url + "?rate=60000",
+                    lambda js, n=states: sum(1 for j in js if j.startswith("state ")) >= n,
+                    title, cp)
+        folder = os.path.join(e.games, title)
+        e.expect(any(n.startswith(".xcat-state-") for n in os.listdir(folder)),
+                 f"{zip_name}: no state file after the interruption")
+        r = e.run(url, title, cp)
+        e.expect(r.returncode == 0, f"{zip_name}: resume: exit {r.returncode}")
+        m = re.search(r"continued ([0-9.]+) MiB into the image", r.stdout)
+        e.expect(m is not None and float(m.group(1)) > 0,
+                 f"{zip_name}: the stream started again from the start")
+        left = [n for n in os.listdir(folder) if n.startswith((".xcat-state-", ".xcat-spool-",
+                                                               ".xcat-zip-"))]
+        e.expect(not left, f"{zip_name}: files left behind: {left}")
+        e.check_installed(fixture, title)
+
+
 def s_zip_refused(e: Env) -> None:
     """Zips the installer can't use are refused with a reason (zip.md 2, 5, 6)."""
     import zipfile
@@ -438,6 +462,7 @@ SCENARIOS = {
     "zip_fixtures": s_zip_fixtures,
     "zip_https": s_zip_https,
     "zip_resume": s_zip_resume,
+    "zip_resume_mid_stream": s_zip_resume_mid_stream,
     "zip_refused": s_zip_refused,
     "zip_damaged": s_zip_damaged,
     "https": s_https,

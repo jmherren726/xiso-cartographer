@@ -33,6 +33,9 @@ extern "C" {
 /* Free space a Deflate zip install never lets its spool use (ADR 0009 amendment 1). */
 #define XC_INSTALL_SPOOL_RESERVE ((uint64_t)256 * 1024 * 1024)
 #define XC_INSTALL_SPOOL_PREFIX ".xcat-spool-" /* + chunk number: spool files in the folder */
+/* Resuming a Deflate zip install in the middle of the stream (stream-install.md §7): */
+#define XC_INSTALL_STATE_PREFIX ".xcat-state-"             /* + 0 or 1: the engine's state */
+#define XC_INSTALL_ZIP_CHECKPOINTS ".xcat-zip-checkpoints" /* the zip checkpoints, in order */
 
 /*
  * File access for the install, in the platform's own path syntax: the module
@@ -72,6 +75,11 @@ typedef struct xc_install_io {
     xc_err (*spool_append)(void *ctx, const char *path, const void *data, size_t len);
     xc_err (*spool_read)(void *ctx, const char *path, uint64_t pos, void *buf, size_t len);
     xc_err (*spool_remove)(void *ctx, const char *path);
+    /*
+     * Optional: makes every spool append so far durable, in every spool file (§7.1). Without
+     * it, a Deflate zip install that's interrupted starts its stream again from the start.
+     */
+    xc_err (*spool_sync)(void *ctx);
     void *ctx;
 } xc_install_io;
 
@@ -148,7 +156,8 @@ typedef struct xc_install_result {
     uint64_t reread_bytes; /* Deflate: image bytes read again in passes 2 and later */
     uint64_t spool_peak;   /* Deflate: the spool's largest size */
     size_t files_from_spool;
-    uint64_t space_needed; /* when XC_ERR_NO_SPACE */
+    uint64_t zip_resumed_at; /* Deflate: the stream offset a resume continued from, or 0 */
+    uint64_t space_needed;   /* when XC_ERR_NO_SPACE */
     uint64_t space_free;
     char bad_file[256];     /* XC_ERR_VERIFY: the first file that didn't match */
     char current_file[256]; /* on any failure: the file being written or checked */

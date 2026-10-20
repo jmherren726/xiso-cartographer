@@ -25,7 +25,9 @@ extern "C" {
 #define XC_JOURNAL_MAX_LINE 8192                      /* §3.1, without the LF */
 #define XC_JOURNAL_MAX_VALIDATOR 127                  /* as xc_http_resource's (http.md §4.3) */
 #define XC_JOURNAL_VERSION_MAJOR 1
-#define XC_JOURNAL_VERSION_MINOR 3 /* 1.1: part (ADR 0011); 1.2: hash; 1.3: zip identity */
+#define XC_JOURNAL_VERSION_MINOR 4    /* 1.1: part (ADR 0011); 1.2: hash; 1.3: zip; 1.4: state */
+#define XC_JOURNAL_STATE_ALIGN 32768U /* §5: a `state` offset's multiple */
+#define XC_JOURNAL_MAX_STATE ((size_t)64 * 1024 * 1024) /* §5: a state file's largest size */
 
 /* §4: what an install is from. */
 typedef struct xc_journal_id {
@@ -79,6 +81,14 @@ xc_err xc_journal_format_hash(uint64_t offset, const uint8_t md5_state[XC_MD5_BY
                               const uint8_t sha1_state[XC_SHA1_BYTES], char *out, size_t cap,
                               size_t *len);
 
+/* One `state` line (§5, v1.4): state file `seq`, of `bytes` bytes with CRC-32 `crc`, continues
+   the stream at `offset`. */
+xc_err xc_journal_format_state(uint64_t seq, uint64_t offset, uint32_t bytes, uint32_t crc,
+                               char *out, size_t cap, size_t *len);
+
+/* One `drop` line (§5, v1.4): spool chunk `chunk` is being deleted. */
+xc_err xc_journal_format_drop(uint32_t chunk, char *out, size_t cap, size_t *len);
+
 /* What a journal says about the image it's read against (§6). */
 typedef struct xc_journal_state {
     bool valid;           /* false: invalid or another image; don't reuse the folder (§6.4) */
@@ -119,6 +129,14 @@ typedef struct xc_journal_zip_state {
     xc_journal_done *done; /* sorted by path, each path once */
     size_t done_count;
     bool torn;
+    /* §6.9 (v1.4): the last `state` line, and the `drop` lines after it */
+    bool has_state;
+    uint64_t state_seq;
+    uint64_t state_offset;
+    uint32_t state_bytes;
+    uint32_t state_crc;
+    uint32_t *drops;
+    size_t drop_count;
 } xc_journal_zip_state;
 
 /*
