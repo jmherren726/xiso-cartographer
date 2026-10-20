@@ -1127,6 +1127,11 @@ static int cmd_install(int argc, char **argv)
             (void)printf("\n");
         }
         print_image_hash(&r);
+        if (r.has_title_id) {
+            (void)printf("title id %08" PRIX32 " \"%s\" (default.xbe)\n", r.title_id, r.title_name);
+        } else {
+            (void)printf("no title id: %s\n", r.title_note != NULL ? r.title_note : "?");
+        }
     } else {
         if (err == XC_ERR_IMAGE_HASH) {
             print_image_hash(&r);

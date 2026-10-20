@@ -633,9 +633,10 @@ static void log_zip(const xc_install_result *r)
     }
 }
 
-/* Installs one image; true if it ended installed and verified. */
+/* Installs one image; true if it ended installed and verified. `listing` is the map entry
+   when an archive.org listing describes the file (archiveorg.md §8), else NULL. */
 static bool install(const xc_source *src, const char *name, const char *etag,
-                    const char *last_modified)
+                    const char *last_modified, const xc_map_entry *listing)
 {
     char title[128];
     title_from(name, title, sizeof title);
@@ -661,6 +662,14 @@ static bool install(const xc_source *src, const char *name, const char *etag,
     req.progress = on_progress;
     req.progress_ctx = &u;
     req.zip = xc_zip_is_zip_name(name);
+    if (listing != NULL && listing->name != NULL) {
+        req.expect_size = listing->size;
+        /* A zip's hashes are the zip's, not the image's: its member's CRC-32 covers that. */
+        req.expect_md5 = listing->has_md5 && !req.zip ? listing->md5 : NULL;
+        req.expect_sha1 = listing->has_sha1 && !req.zip ? listing->sha1 : NULL;
+        out("  archive.org says: %llu bytes%s\n", (unsigned long long)listing->size,
+            req.expect_md5 != NULL || req.expect_sha1 != NULL ? ", MD5/SHA-1 compared" : "");
+    }
     xc_err err = xc_install(&req, &result);
     xc_nx_spool_close();
     end_phase(&u, now_ms(), last_bytes_done);
@@ -689,7 +698,17 @@ static bool install(const xc_source *src, const char *name, const char *etag,
             log_zip(&result);
         }
         log_image_hash(&result);
+        if (result.has_title_id) {
+            out("  title ID %08lX, \"%s\" (from default.xbe)\n", (unsigned long)result.title_id,
+                result.title_name);
+        } else {
+            out("  no title ID: %s\n", result.title_note != NULL ? result.title_note : "?");
+        }
         return true;
+    }
+    if (err == XC_ERR_SOURCE_SIZE) {
+        out("  archive.org's listing says %llu bytes; the server's file has %llu\n",
+            (unsigned long long)req.expect_size, (unsigned long long)src->size);
     }
     out("  NOT INSTALLED: %s\n", xc_err_str(err));
     if (err == XC_ERR_ZIP_UNSUPPORTED && result.zip_method != 0 && result.zip_method != 8) {
@@ -734,8 +753,9 @@ static bool install(const xc_source *src, const char *name, const char *etag,
     return false;
 }
 
-static bool install_url(const char *url)
+static bool install_url(const xc_map_entry *e)
 {
+    const char *url = e->url;
     if (!network()) {
         out("\n%s\n  NOT INSTALLED: no network\n", url);
         return false;
@@ -759,7 +779,7 @@ static bool install_url(const char *url)
         return false;
     }
     bool ok = install(&src, url, res.etag[0] != '\0' ? res.etag : NULL,
-                      res.last_modified[0] != '\0' ? res.last_modified : NULL);
+                      res.last_modified[0] != '\0' ? res.last_modified : NULL, e);
     if (is_https(url) && tls != NULL) {
         /* After redirects: the server the data came from (ADR 0005 asks to watch the suite). */
         xc_tls_info info;
@@ -782,7 +802,7 @@ static bool install_file(const char *path)
         out("\n%s\n  can't read it: %s\n", path, xc_err_str(err));
         return false;
     }
-    bool ok = install(&src, path, NULL, NULL);
+    bool ok = install(&src, path, NULL, NULL, NULL);
     xc_nx_file_close(&f);
     return ok;
 }
@@ -837,9 +857,9 @@ static int list_local(char names[MAX_LOCAL][XC_NX_PATH_MAX])
 
 typedef struct game {
     char label[LABEL_MAX];
-    const char *url;  /* a map entry, or */
-    const char *path; /* a file in E:\xcat\isos */
-    int result;       /* 0 not tried this run, 1 installed, -1 failed */
+    const xc_map_entry *entry; /* a map entry, or */
+    const char *path;          /* a file in E:\xcat\isos */
+    int result;                /* 0 not tried this run, 1 installed, -1 failed */
 } game;
 
 /* One line per map entry and local file, in that order. */
@@ -853,7 +873,7 @@ static game *catalog(const xc_map *map, char local[][XC_NX_PATH_MAX], int nlocal
     for (size_t i = 0; i < map->entry_count; i++) {
         const xc_map_entry *e = &map->entries[i];
         game *g = &games[i];
-        g->url = e->url;
+        g->entry = e;
         if (e->name != NULL) {
             /* From an archive.org listing: its name and size. */
             snprintf(g->label, sizeof g->label, "%.60s  %u MiB", e->name,
@@ -932,7 +952,7 @@ static void pick_and_install(game *games, int count)
             game *g = &games[cur];
             debugClearScreen();
             out("\nPicked: %s\n", g->label);
-            bool ok = g->url != NULL ? install_url(g->url) : install_file(g->path);
+            bool ok = g->entry != NULL ? install_url(g->entry) : install_file(g->path);
             g->result = ok ? 1 : -1;
             out("%s\n", ok ? "Installed and verified." : "Not installed.");
             debugPrint("\nPress A to go back to the list.\n");

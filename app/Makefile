@@ -30,6 +30,7 @@ SRCS = $(CURDIR)/main.c \
        $(CORE_DIR)/src/text.c \
        $(CORE_DIR)/src/url.c \
        $(CORE_DIR)/src/version.c \
+       $(CORE_DIR)/src/xbe.c \
        $(CORE_DIR)/src/xdvdfs.c \
        $(PLATFORM_DIR)/src/nx_install.c \
        $(PLATFORM_DIR)/src/nx_net.c \

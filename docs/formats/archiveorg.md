@@ -1,6 +1,6 @@
 # archive.org item metadata (`@archiveorg`)
 
-**Status:** Normative. §1–§6 are implemented by `xcat/archiveorg.h` (M6), and §7 by the map loader (`xcat/map.h`, `xcat-cli map`). The install checks (§8) follow later in M6. The reasons are in [ADR 0013](../adr/0013-archiveorg-source.md).
+**Status:** Normative. §1–§6 are implemented by `xcat/archiveorg.h` (M6), §7 by the map loader (`xcat/map.h`, `xcat-cli map`), and §8 by `xc_install` (`expect_size`, the expected hashes, the title ID from `xcat/xbe.h`) and the console. The reasons are in [ADR 0013](../adr/0013-archiveorg-source.md).
 
 `@archiveorg <identifier>` in a map ([map.md §5.2](map.md#52-archiveorg-identifier)) turns the image files of one archive.org item into map entries. The item's listing comes from archive.org's public metadata API. It is input from the network, so every field is checked.
 
@@ -100,12 +100,10 @@ The directive's entries are inserted at its position, so [map.md §4.3](map.md#4
 
 ## 8. Installing a generated entry
 
-*(Implemented later in M6.)*
-
-- Before anything is written, the size of the file on the server (from its `Content-Range` or `Content-Length`) **must** equal the listing's size. Otherwise the install fails with "The file on archive.org isn't the one its listing describes".
-- A trimmed xiso is hashed whole ([journal.md §7](journal.md#7-verification)), and its MD5 and SHA-1, where given, are compared like `xcat-cli install --md5/--sha1`.
-- A zip's MD5, SHA-1 and CRC-32 cover the zip, not the image. The member's CRC-32 covers every byte of the image ([zip.md §9](zip.md)), so the zip isn't hashed again. A full-disc `.iso` skips its video partition, so it isn't hashed whole either.
-- The title ID from the installed `default.xbe` is recorded with the install.
+- Before anything is written, the size of the file on the server (from its `Content-Range`) **must** equal the listing's size. Otherwise the install fails with "The file isn't the size its listing gives (a different file?)" (`XC_ERR_SOURCE_SIZE`), and the console logs both sizes.
+- For an `.iso` or `.xiso` file, the listing's MD5 and SHA-1 are passed on as the expected hashes. They are compared when the image is a trimmed xiso, which is hashed whole ([journal.md §7](journal.md#7-verification)), like `xcat-cli install --md5/--sha1`. A full-disc `.iso` skips its video partition, so it isn't hashed whole, and its hashes go unused.
+- A zip's MD5, SHA-1 and CRC-32 cover the zip, not the image, so they aren't passed on. The member's CRC-32 covers every byte of the image ([zip.md §9](zip.md)).
+- After verification, the title ID and name from the installed `default.xbe` ([xbe.md](xbe.md)) are reported and written to the marker ([journal.md §7.1](journal.md#71-the-marker)).
 
 ## 9. Changes
 
