@@ -11,6 +11,8 @@ Every change climbs as far up this ladder as it affects (see [HANDOFF.md §4](HA
 3. **xemu:** manual for now. Needs your own BIOS/MCPX/HDD files, which can't go in CI. See [build-xbox.md](build-xbox.md#run-in-xemu).
 4. **Real hardware:** manual. See [build-xbox.md](build-xbox.md#run-on-hardware).
 
+**From M6 the app installs only what you pick** ([build-xbox.md](build-xbox.md#what-the-app-does-m6)). Where an earlier procedure below says "launch the app", launch it, press A, then highlight that procedure's entry and press A. After a power cut, pick the same entry again to resume.
+
 Steps 3 and 4 are required for every milestone that touches the platform layer. Record each run in the results log below and in the MR description.
 
 ## Hardware test bench
