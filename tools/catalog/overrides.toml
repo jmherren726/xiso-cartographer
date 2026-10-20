@@ -1,0 +1,29 @@
+# Human corrections to the catalog (ADR 0014 decision 3; tools/catalog/README.md).
+# Our own work, released under CC0 1.0. Reviewed in PRs; build.py never edits it.
+# Releases are named by their exact Redump name, games by their Wikidata Q number.
+
+# Datfile categories that become releases. Redump's Xbox datfile also has Demos,
+# Coverdiscs, Preproduction, Applications, Bonus Discs and Add-Ons.
+categories = ["Games"]
+
+# Redump names left out of the catalog.
+exclude = []
+
+# Title IDs for releases whose serial doesn't give one, or gives the wrong one
+# (an install's marker shows the real title ID). "Redump name" = "4D530004"
+[title_id]
+
+# The game a release belongs to: "Redump name" = "Q12345", or "none" for a game of its
+# own without Wikidata data.
+[game]
+
+# Display titles: "Q12345" = "Title", or, for a game without Wikidata data, the Redump
+# name of one of its releases = "Title".
+[title]
+
+# Variant names (map keys, map.md §4.1). Changing a published one breaks users' maps.
+# "Redump name" = "US-X"
+[variant]
+
+# Codes for Redump regions build.py doesn't know: "Region" = "XX".
+[region]

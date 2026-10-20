@@ -1,26 +1,73 @@
 # Catalog pipeline
 
-Builds `catalog.bin` ([catalog.md](../../docs/formats/catalog.md)) and `CREDITS.txt` from Wikidata and Redump ([ADR 0014](../../docs/adr/0014-catalog-sources-and-format.md), [SOURCES.md](SOURCES.md)).
+Builds `catalog.bin` ([catalog.md](../../docs/formats/catalog.md)) and `CREDITS.txt` from Wikidata and Redump ([ADR 0014](../../docs/adr/0014-catalog-sources-and-format.md), [SOURCES.md](SOURCES.md)). Python 3.11 or newer, standard library only.
 
-**Status (M7):** the writer, [`catalog_bin.py`](catalog_bin.py), exists: it sorts, interns strings and lays out `catalog.bin` the same way on every machine, and refuses what the console's reader (`xcat/catalog.h`) would refuse. Fetching, joining and `overrides.toml` land in the next PR. `xcat-cli catalog <file>` checks a catalog and lists or looks up its games.
+| File | Does |
+|---|---|
+| [`fetch.py`](fetch.py) | Fetches the raw inputs into a cache outside the repo |
+| [`sources.py`](sources.py) | Parses them: Redump's datfile, list pages and disc pages; Wikidata's SPARQL answers (and holds the queries) |
+| [`build.py`](build.py) | Checks the cache against `inputs.lock`, joins, applies `overrides.toml`, writes the outputs |
+| [`catalog_bin.py`](catalog_bin.py) | Writes (and, for reports and tests, reads) `catalog.bin` |
+| [`overrides.toml`](overrides.toml) | Human corrections, reviewed in PRs |
+| `inputs.lock` | SHA-256 of the inputs and of the catalog they build (written by `build.py --update-lock`, from the first snapshot on) |
+| [`test_pipeline.py`](test_pipeline.py) | Tests on a synthetic cache (CTest `catalog_pipeline`) |
 
-## Steps
+## Running it
 
-1. **Fetch** (deliberate, occasional, never in CI): Wikidata through SPARQL, Redump's Xbox discs one request at a time, at least 1 s apart. Every raw response goes to a cache outside the repo, and its SHA-256 goes into `inputs.lock`.
-2. **Build** (offline, deterministic): read the cache, refuse inputs whose hashes don't match `inputs.lock`, join and normalise, apply `overrides.toml`, write `catalog.bin` and `CREDITS.txt`, and print the catalog's SHA-256 (also recorded in `inputs.lock`).
-3. **Check:** the same schema checks the console's reader makes, plus a report of releases matched by name only and games without metadata, for review.
+A refresh is a deliberate, occasional run by a maintainer, never part of a normal build or of CI (ADR 0014 decision 7):
 
-## Title IDs from serials
+```bash
+python3 -I tools/catalog/fetch.py --cache ~/xcat-catalog-cache
+```
 
-A Redump serial `XX-NNN` (two upper-case letters, a hyphen, a decimal number up to 65,535) gives the title ID `XX` as two bytes followed by the number as 16 bits: `MS-004` → `4D530004`, `EA-013` → `4541000D`. A release with several serials uses the first one that fits. One with none that fits needs a title ID in `overrides.toml`; until it has one, it is left out and listed in the report.
+```bash
+python3 -I tools/catalog/build.py --cache ~/xcat-catalog-cache --out build/catalog --update-lock --previous <last release's catalog.bin>
+```
+
+Then review `build/catalog/report.txt`, fix what needs fixing in `overrides.toml`, rebuild, and commit `overrides.toml` and `inputs.lock` together. Without `--update-lock`, `build.py` refuses a cache that doesn't match the lock, and a catalog that differs from the one the lock records. That is how anyone with the same inputs checks a release's catalog.
+
+### Fetching
+
+`fetch.py` asks each host one request at a time, at least 1 s apart, with backoff on errors and a User-Agent that names the project. Redump's robots.txt allows everything (checked 2026-10-20).
+
+1. Wikidata: the six queries in `sources.WIKIDATA_QUERIES` (games and their English labels, developers, publishers, genres, dates, Redump IDs).
+2. Redump's Xbox datfile: every disc's Redump name and full-disc size, CRC-32, MD5 and SHA-1. It has no serials.
+3. Redump's Xbox list pages (27 in 2026), for the disc numbers.
+4. One page per disc, for its serial and region, and its track's SHA-1, which ties it to its datfile entry. Pages already cached aren't fetched again (`--refresh-discs` does), so only the first fetch takes long: about 2,700 discs, 45 minutes.
+
+The cache layout is in `fetch.py`'s header. `meta.json` records the fetch dates, which become the catalog's `snapshot`.
+
+### Inputs lock
+
+`inputs.lock` has one line per group of inputs (`meta`, `wikidata`, `redump-datfile`, `redump-list`, `redump-disc`): the number of files and the SHA-256 of their sorted `path NUL sha256` lines. A last line gives the SHA-256 of `catalog.bin`. A mismatch names the group that changed.
+
+## Releases
+
+A release is a datfile entry whose category is in `overrides.toml`'s `categories` (default `Games`; the datfile also has Demos, Coverdiscs, Preproduction, Applications, Bonus Discs and Add-Ons), that holds exactly one `.iso`, and that `exclude` doesn't name. Its disc page is the one whose track has the same SHA-1. Its region is the first tag of its Redump name.
+
+### Title IDs from serials
+
+A Redump serial `XX-NNN` (two upper-case letters, a hyphen, a decimal number up to 65,535) gives the title ID `XX` as two bytes followed by the number as 16 bits: `MS-004` → `4D530004`, `EA-013` → `4541000D`. A release with several serials uses the first one that fits. One with none that fits, or with no disc page, needs a title ID in `[title_id]`; until it has one, it is left out and listed in the report.
+
+## Games
+
+A release joins a game in this order:
+
+1. `[game]` in `overrides.toml`: a Wikidata game, or `none`.
+2. The Wikidata game that links its Redump disc number (P5290).
+3. The one Wikidata game whose English label matches its title. Titles are compared as letters and digits only, in lower case, with `&` read as "and", after Redump's title is turned around (`Elder Scrolls III, The - Morrowind` → `The Elder Scrolls III: Morrowind`). Two or more matches is no match.
+4. The one Wikidata game that other releases with its title ID joined.
+5. Otherwise, a game without Wikidata data, shared by the releases whose titles compare equal. Its title is Redump's, turned around as above.
+
+The report lists every join made by steps 3 and 4, for review. A game's developers, publishers and genres are its English labels, joined with `, ` in §6.1 order, dropping the last until they fit 255 bytes; its year is the earliest publication date. `[title]` replaces a display title.
 
 ## Variant names
 
 Map keys pick a release with `<title-id>@<variant>` ([map.md §4.1](../../docs/formats/map.md#41-key)). Variants are derived the same way on every build:
 
-1. Each Redump region becomes a code: `USA` → `US`, `Europe` → `EU`, `Japan` → `JP`, `Asia` → `AS`, `Korea` → `KR`, `Australia` → `AU`, `World` → `WW`, and any other country its ISO 3166-1 alpha-2 code (`Germany` → `DE`, `France` → `FR`). The codes are joined with `-` in Redump's order: `USA, Europe` → `US-EU`. A region with no code is an error in the build report, and is fixed in `overrides.toml`.
-2. If two releases of the same title ID now share a variant, each of them gets `-` and its version or edition appended, as upper-case letters and digits only (`Platinum Hits` → `US-PLATINUMHITS`, `v1.01` → `US-V101`).
-3. If they still collide, they get `-2`, `-3`, … in order of Redump disc number, and the first keeps its name.
+1. Each Redump region becomes a code: `USA` → `US`, `Europe` → `EU`, `Japan` → `JP`, `Asia` → `AS`, `Korea` → `KR`, `Australia` → `AU`, `World` → `WW`, `UK` → `GB`, and any other country its ISO 3166-1 alpha-2 code (`Germany` → `DE`, `France` → `FR`; the table is in `build.py`). The codes are joined with `-` in Redump's order: `USA, Europe` → `US-EU`. A region with no code stops the build, and is fixed in `[region]`.
+2. If two releases of the same title ID now share a variant, each one whose Redump name has tags after its regions and languages gets them appended, as upper-case letters and digits, joined with `-`: `Game (USA) (Rev 1)` → `US-REV1`, while `Game (USA)` stays `US`.
+3. If some still collide, they get `-2`, `-3`, … in order of Redump disc number, and the first keeps its name: `Game (Europe) (En,Fr)` → `EU`, `Game (Europe) (En,Es)` → `EU-2`.
 4. A name longer than 16 characters is cut to 16 before any `-N` suffix of step 3 is added, then the suffix replaces its last characters.
 
-A variant that `overrides.toml` sets wins over all of this. Changing a published variant breaks users' map keys, so the build report lists every variant that differs from the previous `catalog.bin`.
+`[variant]` wins over all of this. Changing a published variant breaks users' map keys, so `--previous` lists in the report every variant that differs from an older `catalog.bin`.
