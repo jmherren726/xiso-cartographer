@@ -76,6 +76,8 @@ A reader must accept any valid placement, not just this one. Real images differ.
 
 ## Fuzz seeds
 
+[catalog_seeds.py](catalog_seeds.py) writes the committed `core/tests/fuzz-seeds/catalog/` seeds with the catalog pipeline's writer ([`tools/catalog/catalog_bin.py`](../catalog/catalog_bin.py)): placeholder games, a newer minor version, and a few broken files. `xcat-cli catalog` tests run on them too. Rerun it after changing the writer: `python3 -I tools/fixtures/catalog_seeds.py core/tests/fuzz-seeds/catalog`.
+
 `fuzz_seeds.py` turns xiso fixtures into seeds for `core/tests/fuzz_xdvdfs.c`. A seed is a small header followed by the image's directory tables, without file data. CMake runs it at build time into `build/<preset>/fuzz-seeds/`.
 
 ## Verification

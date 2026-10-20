@@ -2,7 +2,7 @@
 
 Builds `catalog.bin` ([catalog.md](../../docs/formats/catalog.md)) and `CREDITS.txt` from Wikidata and Redump ([ADR 0014](../../docs/adr/0014-catalog-sources-and-format.md), [SOURCES.md](SOURCES.md)).
 
-**Status (M7):** design. The format and the rules below come first; the pipeline itself lands in the following PRs.
+**Status (M7):** the writer, [`catalog_bin.py`](catalog_bin.py), exists: it sorts, interns strings and lays out `catalog.bin` the same way on every machine, and refuses what the console's reader (`xcat/catalog.h`) would refuse. Fetching, joining and `overrides.toml` land in the next PR. `xcat-cli catalog <file>` checks a catalog and lists or looks up its games.
 
 ## Steps
 

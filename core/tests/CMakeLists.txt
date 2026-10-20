@@ -109,6 +109,7 @@ xcat_add_test(test_map)
 xcat_add_test(test_json)
 xcat_add_test(test_archiveorg)
 xcat_add_test(test_xbe)
+xcat_add_test(test_catalog)
 xcat_add_test(test_journal)
 xcat_add_test(test_install ARGS ${XCAT_FIXTURES_DIR})
 add_dependencies(test_install xcat_fixtures xcat_zip_fixtures)
@@ -261,6 +262,34 @@ xcat_add_fuzzer(fuzz_archiveorg SEEDS ${_archiveorg_seeds})
 # XBE seeds are committed: synthetic headers with placeholder titles.
 file(GLOB _xbe_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/xbe/*.seed)
 xcat_add_fuzzer(fuzz_xbe SEEDS ${_xbe_seeds})
+
+# Catalog seeds are committed, written by tools/fixtures/catalog_seeds.py with the pipeline's
+# writer (tools/catalog/catalog_bin.py), so the reader is checked against it on every build.
+set(_catalog_seed_dir ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/catalog)
+file(GLOB _catalog_seeds ${_catalog_seed_dir}/*.seed)
+xcat_add_fuzzer(fuzz_catalog SEEDS ${_catalog_seeds})
+
+# `xcat-cli catalog` on the seeds: list, search, look up by title key and by name, reject.
+# catalog_cli(<name> <seed> <expected output regex, or FAIL> [args...])
+function(catalog_cli name seed expect)
+  add_test(NAME catalog_cli_${name}
+    COMMAND xcat-cli catalog ${_catalog_seed_dir}/${seed}.seed ${ARGN})
+  if(expect STREQUAL "FAIL")
+    set_tests_properties(catalog_cli_${name} PROPERTIES WILL_FAIL TRUE)
+  else()
+    set_tests_properties(catalog_cli_${name} PROPERTIES PASS_REGULAR_EXPRESSION "${expect}")
+  endif()
+  xcat_test_env(catalog_cli_${name})
+endfunction()
+catalog_cli(list good "4 releases.*Charlie Quest.*3 games")
+catalog_cli(query good "Charlie Quest.*1 game\n" "studio three")
+catalog_cli(title good "41410001@EU .*41410001@US " --title 41410001)
+catalog_cli(variant good "Alpha Racer \\(Europe\\)" --title 41410001@eu)
+catalog_cli(name good "43430010@US-EU.*region: USA, Europe" --name "charlie quest (usa, europe)")
+catalog_cli(newer newer-minor "version 1.1, 3 games")
+catalog_cli(not_found good FAIL --name "Alpha Racer")
+catalog_cli(rejected names-unsorted FAIL)
+catalog_cli(major major-2 FAIL)
 
 # Journal seeds are committed, without their line CRCs (fuzz_journal.c adds them).
 file(GLOB _journal_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/journal/*.seed)
