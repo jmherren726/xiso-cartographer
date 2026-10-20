@@ -291,6 +291,13 @@ catalog_cli(not_found good FAIL --name "Alpha Racer")
 catalog_cli(rejected names-unsorted FAIL)
 catalog_cli(major major-2 FAIL)
 
+# The catalog pipeline (tools/catalog/) on a synthetic cache: joins, variants, overrides,
+# the lock, a deterministic rebuild, and its output opened by xcat-cli. Needs Python 3.11.
+add_test(NAME catalog_pipeline
+  COMMAND ${Python3_EXECUTABLE} -I ${PROJECT_SOURCE_DIR}/tools/catalog/test_pipeline.py
+          --cli $<TARGET_FILE:xcat-cli> --work ${CMAKE_BINARY_DIR}/catalog-tests)
+xcat_test_env(catalog_pipeline)
+
 # Journal seeds are committed, without their line CRCs (fuzz_journal.c adds them).
 file(GLOB _journal_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/journal/*.seed)
 xcat_add_fuzzer(fuzz_journal SEEDS ${_journal_seeds})

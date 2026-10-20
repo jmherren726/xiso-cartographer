@@ -19,6 +19,7 @@ HEADER_SIZE, GAME_SIZE, RELEASE_SIZE = 64, 32, 72
 MAX_SIZE = 8 * 1024 * 1024
 MAX_COUNT = 65535
 MAX_STRING = 255
+MAX_VARIANT = 16
 VARIANT_RE = re.compile(r"[A-Z0-9_-]{1,16}")
 
 
@@ -136,3 +137,29 @@ def build(games: list[Game], releases: list[Release], snapshot: str) -> bytes:
     crc = zlib.crc32(bytes(body[64:]), zlib.crc32(bytes(body[:60])))
     body[60:64] = struct.pack("<I", crc)
     return bytes(body)
+
+
+def read(data: bytes) -> tuple[list[Game], list[Release]]:
+    """Reads a catalog this module wrote (for reports and tests; the console's checked
+    reader is xcat/catalog.h). Checks the magic, version and CRC only."""
+    magic, major, _minor, size = struct.unpack_from("<8sHHI", data, 0)
+    crc = zlib.crc32(data[64:], zlib.crc32(data[:60]))
+    if magic != b"XCATCAT\0" or major != MAJOR or size != len(data) or crc != struct.unpack_from("<I", data, 60)[0]:
+        raise ValueError("not a catalog.bin this reader knows")
+    ng, nr, gsize, rsize, goff, roff, _noff, soff = struct.unpack_from("<IIHHIIII", data, 16)
+
+    def s(off: int) -> str:
+        start = soff + off
+        return data[start:data.index(b"\0", start)].decode("utf-8")
+
+    games = []
+    for i in range(ng):
+        t, d, p, g, q, y = struct.unpack_from("<IIIIIH", data, goff + i * gsize)
+        games.append(Game(s(t), s(d), s(p), s(g), q, y))
+    releases = []
+    for i in range(nr):
+        o = roff + i * rsize
+        game, tid, v, n, reg, rid, size, crc32 = struct.unpack_from("<IIIIIIQI", data, o)
+        releases.append(Release(game, tid, s(v), s(n), s(reg), rid, size, crc32,
+                                data[o + 36:o + 52], data[o + 52:o + 72]))
+    return games, releases
