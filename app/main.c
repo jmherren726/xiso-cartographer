@@ -843,8 +843,21 @@ int main(void)
 
     int installed = 0;
     int total = 0;
-    for (size_t i = 0; have_map && i < map.entry_count && !exit_combo(); i++, total++) {
+    unsigned listed = 0;
+    for (size_t i = 0; have_map && i < map.entry_count && !exit_combo(); i++) {
+        /* An @archiveorg item can list a whole collection: those are only shown until
+         * choosing what to install comes (M6). */
+        if (map.entries[i].name != NULL) {
+            out("  listed: %s (%u MiB)\n", map.entries[i].name,
+                (unsigned)(map.entries[i].size >> 20U));
+            listed++;
+            continue;
+        }
         installed += install_url(map.entries[i].url) ? 1 : 0;
+        total++;
+    }
+    if (listed > 0) {
+        out("%u game(s) listed from archive.org items, not installed\n", listed);
     }
     for (int i = 0; i < nlocal && !exit_combo(); i++, total++) {
         installed += install_file(local[i]) ? 1 : 0;

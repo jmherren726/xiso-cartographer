@@ -1,6 +1,6 @@
 # Map file format (`xcat-map`), version 1
 
-**Status:** Normative. Implemented by `xcat/map.h` (`core/src/map.c`, M4), which links each section it implements; `xcat-cli map` checks a map on a PC. `@archiveorg` is accepted with a "not supported yet" warning until the archive.org source (M6).
+**Status:** Normative. Implemented by `xcat/map.h` (`core/src/map.c`, M4), which links each section it implements; `xcat-cli map` checks a map on a PC. `@archiveorg` generates entries from an archive.org item's listing (M6, [archiveorg.md](archiveorg.md)).
 
 A map tells xiso-cartographer where the user's own disc images are. It is a plain-text file the user writes by hand or generates, and it is the only place sources come from: the app ships with no links (see [ADR 0006](../adr/0006-no-links-no-bypass.md)).
 
@@ -94,7 +94,7 @@ variant    = 1*16( ALPHA / DIGIT / "-" / "_" )   ; case-insensitive, normalised 
 
 ### 4.3 Duplicate keys
 
-Entries are processed in order, with includes and generated entries expanded where they appear (§5). If a key appears more than once, the **last** entry wins, and the reader records a warning naming both locations. To override a generated or included entry, put your own entry after the directive.
+Entries are processed in order, with includes and generated entries expanded where they appear (§5). If a key appears more than once, the **last** entry wins, and the reader records a warning naming both locations. The same applies to the names of generated entries (§5.2). To override a generated or included entry, put your own entry after the directive.
 
 ## 5. Directives
 
@@ -118,7 +118,8 @@ Loads another map and processes its entries at this position.
 Generates entries from the files of one archive.org item, using the public metadata API (`https://archive.org/metadata/<identifier>`).
 
 - `identifier` is 1–100 characters from `A–Z a–z 0–9 . _ -`.
-- Which files become entries, their names, URLs, sizes and hashes are specified in [archiveorg.md](archiveorg.md) ([ADR 0013](../adr/0013-archiveorg-source.md)). Generated entries are keyed by file name, not title ID. Until the map loader implements it (later in M6), readers **must** accept the directive and report it as "not supported yet" (a warning).
+- The reader fetches `https://archive.org/metadata/<identifier>` (through the same callback as `@include`) and turns the item's image files into entries. Which files, their names, URLs, sizes and hashes, and the errors for missing or taken-down items, are specified in [archiveorg.md](archiveorg.md) ([ADR 0013](../adr/0013-archiveorg-source.md)).
+- Generated entries are keyed by **name** (the file name without its extension), not by title ID, and carry the listing's size and hashes. Names are compared ASCII case-insensitively. A listing isn't a map file, so it doesn't count toward the 32 files of §6. At most 32 `@archiveorg` directives are fetched per load; further ones are line errors.
 - Generated entries are inserted at the directive's position, so §4.3 applies to them like any other entry.
 
 ### 5.3 Unknown directives
@@ -135,6 +136,8 @@ These protect the 64 MB console from hostile or broken input. A reader **must** 
 | Line length | 2048 bytes | Line invalid |
 | Total entries after expansion | 10,000 | Loading stops; entries read so far are kept, plus an error |
 | Include depth | 4 | `@include` line invalid |
+| `@archiveorg` directives per load | 32 | `@archiveorg` line invalid |
+| archive.org listing | 4 MiB ([archiveorg.md §1](archiveorg.md#1-identifier-and-request)) | `@archiveorg` line invalid |
 | Total files loaded (top-level + includes) | 32 | `@include` line invalid |
 | Problems kept for display (§7) | 256 | Further problems are counted, not stored |
 
@@ -143,8 +146,8 @@ These protect the 64 MB console from hostile or broken input. A reader **must** 
 Every problem is reported with its source (file path or URL) and 1-based line number.
 
 - **File errors** reject that whole file: unreadable, too large, missing or malformed header, unsupported major version.
-- **Line errors** skip that line and keep loading: malformed key, missing `=`, invalid URL, invalid directive argument, invalid UTF-8, line too long, failed `@include`.
-- **Warnings** don't skip anything: duplicate key, unknown directive, title or variant not in the catalog, `@archiveorg` not supported yet.
+- **Line errors** skip that line and keep loading: malformed key, missing `=`, invalid URL, invalid directive argument, invalid UTF-8, line too long, failed `@include`, an `@archiveorg` item that can't be fetched, doesn't exist, was taken down or didn't send its metadata.
+- **Warnings** don't skip anything: duplicate key or name, unknown directive, title or variant not in the catalog, an archive.org item with no image files, files of an item skipped for a bad name, size or URL, malformed hashes ignored.
 
 One typo should never make the whole library disappear. So the app loads every valid line, and it shows errors and warnings on a "Map problems" screen.
 
@@ -178,3 +181,4 @@ eol         = LF / CRLF / end-of-file
 | 1.0 | 2026-10-13 | First version. |
 | 1.0 | 2026-10-15 | Implemented. §6 states the cap of 256 stored problems; nothing else changed. |
 | 1.0 | 2026-10-20 | §4.2: zip URLs, and URLs inside a zip are invalid ([ADR 0009](../adr/0009-install-from-zip-archives.md) §8). Before any release, so the version stays 1.0. |
+| 1.0 | 2026-10-20 | §5.2: `@archiveorg` is implemented, with entries keyed by name ([ADR 0013](../adr/0013-archiveorg-source.md)); §6, §7 updated. Readers before this one warn and skip it, which §5.2 allowed, so the version stays 1.0. |
