@@ -3,6 +3,7 @@ include(${PROJECT_SOURCE_DIR}/cmake/BearSSL.cmake)
 include(${PROJECT_SOURCE_DIR}/cmake/miniz.cmake)
 
 add_library(xcat
+  src/archiveorg.c
   src/crc32.c
   src/credentials.c
   src/error.c
@@ -13,6 +14,7 @@ add_library(xcat
   src/http_client.c
   src/install.c
   src/journal.c
+  src/json.c
   src/map.c
   src/seq.c
   src/source.c

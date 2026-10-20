@@ -19,7 +19,7 @@ What ADR 0007 protects against is unchanged: the console's drive is readable ove
 3. **The app may write the credentials file, only for a login.** A successful on-box login writes or replaces that service's one section (e.g. `[archive]`) with the token it received, through a temporary file and a rename so a power cut can't leave a half-written file. Every other section is kept byte for byte. Logging out on the console removes the section. This replaces credentials.md §8's "the app never writes this file".
 4. **Expired sessions ask; they don't refresh silently.** A `401`/`403` from a host that had a token attached still stops the request and is reported, as in ADR 0006 and 0007 decision 6. The message offers "log in again" and, after a new login, the user can resume the install. Nothing is retried in the background, and no stored secret makes a silent refresh possible.
 5. **Same providers, same rules.** On-box login uses only the documented login API that ADR 0007 decision 5 allows for `xcat-login` (for archive.org, the one the official `internetarchive` tooling uses, confirmed when it's built). No form scraping, ever.
-6. **`tools/xcat-login` stays optional.** It may still ship in M6 as a convenience and to test the archive.org source before the UI exists, but nothing in the beta depends on it.
+6. **`tools/xcat-login` stays optional.** It may still ship in M6 as a convenience and to test the archive.org source before the UI exists, but nothing in the beta depends on it. *(2026-10-20: not built in M6, owner decision; see [ADR 0013](0013-archiveorg-source.md) decision 6.)*
 
 ## Consequences
 

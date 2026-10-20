@@ -228,6 +228,12 @@ jobs:
           ./build/fuzz/core/tests/fuzz_zip_inflate -max_total_time=60 -max_len=65536 \
             -print_final_stats=1 -artifact_prefix=build/fuzz/artifacts/ \
             build/fuzz/corpus-zip-inflate core/tests/fuzz-seeds/zip-inflate
+      - name: Fuzz archive.org item listings (60 s)
+        run: |
+          mkdir -p build/fuzz/corpus-archiveorg build/fuzz/artifacts
+          ./build/fuzz/core/tests/fuzz_archiveorg -max_total_time=60 -max_len=65536 \
+            -print_final_stats=1 -artifact_prefix=build/fuzz/artifacts/ \
+            build/fuzz/corpus-archiveorg core/tests/fuzz-seeds/archiveorg
       - name: Fuzz sequential extraction (60 s)
         run: |
           mkdir -p build/fuzz/corpus-seq build/fuzz/artifacts

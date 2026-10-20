@@ -78,6 +78,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - The console says when it found no credentials file (`E:\Apps\xcat\credentials`), points out a `credentials.txt` that should be renamed, and adds "no login was sent" to an access-denied error when none were loaded. Before, a missing file was silent, so a misnamed one looked like an expired login.
 - M5b exit test on hardware, first run (docs/testing.md): a full-disc Zip64 Deflate zip from archive.org installed over HTTPS in one pass with a 1,590 MiB spool, 3.3 MB/s of image, verified, and the game launches. Second run, **M5b exit test met**: another full-disc Deflate zip, switched off at 1,155 MiB, resumed at 1,152 MiB from the saved state and spool, finished in one pass (3,350 MiB spool, 2.9 MB/s), verified, and the game launches.
 
+- archive.org item listings (`xcat/archiveorg.h`, docs/formats/archiveorg.md, ADR 0013, M6): reads the answer of `https://archive.org/metadata/<item>` with a new strict, bounded JSON pull parser (4 MiB, nesting 32 deep) and chooses the item's original `.iso`, `.xiso` and `.zip` files, each with a name (the file name without its extension; generated entries are keyed by name, not title ID), a percent-encoded download URL, the size and whichever MD5, SHA-1 and CRC-32 are given. Missing (`{}`) and taken-down (`is_dark`) items are told apart; files with a bad name or size are skipped and counted. Unit tests and a fuzz target (`fuzz_archiveorg`, also in CI). M6 builds no PC login helper (owner decision): tokens go in the credentials file until M8's on-box login.
+
 ### Changed
 
 - Roadmap: zip support moves from optional M9b to M5b, right after HTTPS (ADR 0009 accepted).
