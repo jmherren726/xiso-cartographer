@@ -14,6 +14,7 @@
 #include "xcat/journal.h"
 #include "xcat/seq.h"
 #include "xcat/version.h"
+#include "xcat/xbe.h"
 #include "xcat/xdvdfs.h"
 #include "xcat/zip.h"
 
@@ -441,22 +442,54 @@ static xc_err verify(job *j)
 
 /* --- the install ------------------------------------------------------------------- */
 
+/* The title ID and name from the installed default.xbe (docs/formats/xbe.md); a game without
+ * a readable one still installs. */
+static void read_title(job *j)
+{
+    xc_install_result *res = j->res;
+    xc_source src;
+    void *handle = NULL;
+    res->title_note = "the game has no default.xbe";
+    if (!join(j, j->path, res->folder, "default.xbe") ||
+        j->io->open_file(j->io->ctx, j->path, &src, &handle) != XC_OK) {
+        return;
+    }
+    xc_xbe_cert cert;
+    xc_err err = xc_xbe_read_cert(&src, &cert);
+    j->io->close_file(j->io->ctx, handle);
+    if (err != XC_OK) {
+        res->title_note = err == XC_ERR_CORRUPT ? "default.xbe isn't an XBE" : xc_err_str(err);
+        return;
+    }
+    res->has_title_id = true;
+    res->title_id = cert.title_id;
+    memcpy(res->title_name, cert.title, sizeof res->title_name);
+    res->title_note = NULL;
+}
+
+/* journal.md §7.1 */
 static xc_err write_marker(job *j)
 {
-    char text[XC_INSTALL_MAX_PATH + 384];
+    read_title(j);
+    char text[XC_INSTALL_MAX_PATH + 512];
     char md5[2 * XC_MD5_BYTES + 1];
     char sha1[2 * XC_SHA1_BYTES + 1];
+    char title[sizeof j->res->title_name + 32] = "";
     xc_hex_lower(j->res->md5, XC_MD5_BYTES, md5);
     xc_hex_lower(j->res->sha1, XC_SHA1_BYTES, sha1);
     bool hashed = j->res->hash != XC_INSTALL_HASH_NONE;
+    if (j->res->has_title_id) {
+        (void)snprintf(title, sizeof title, "title_id=%08lX\ntitle=%s\n",
+                       (unsigned long)j->res->title_id, j->res->title_name);
+    }
     int n =
         snprintf(text, sizeof text,
-                 "xiso-cartographer %s\nimage=%s\nfiles=%zu\nbytes=%llu\nverified=%s\n%s%s%s%s%s",
+                 "xiso-cartographer %s\nimage=%s\nfiles=%zu\nbytes=%llu\nverified=%s\n%s%s%s%s%s%s",
                  xc_version_string(), j->req->source_name != NULL ? j->req->source_name : "",
                  j->listing.file_count, (unsigned long long)j->listing.total_file_bytes,
                  j->res->hash == XC_INSTALL_HASH_MATCHED ? "crc32,image-hash" : "crc32",
                  hashed ? "md5=" : "", hashed ? md5 : "", hashed ? "\nsha1=" : "",
-                 hashed ? sha1 : "", hashed ? "\n" : "");
+                 hashed ? sha1 : "", hashed ? "\n" : "", title);
     if (n < 0 || !join(j, j->path, j->res->folder, XC_INSTALL_MARKER)) {
         return XC_ERR_LIMIT;
     }
@@ -1203,6 +1236,9 @@ xc_err xc_install(const xc_install_req *req, xc_install_result *res)
     if (req == NULL || res == NULL || req->src == NULL || req->io == NULL ||
         req->games_dir == NULL || req->buf == NULL || req->buf_size < MIN_BUF) {
         return XC_ERR_INVALID_ARG;
+    }
+    if (req->expect_size != 0 && req->src->size != req->expect_size) {
+        return XC_ERR_SOURCE_SIZE; /* archiveorg.md §8: before anything is written */
     }
     job *j = calloc(1, sizeof *j);
     if (j == NULL) {

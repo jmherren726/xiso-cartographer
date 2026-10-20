@@ -234,6 +234,12 @@ jobs:
           ./build/fuzz/core/tests/fuzz_archiveorg -max_total_time=60 -max_len=65536 \
             -print_final_stats=1 -artifact_prefix=build/fuzz/artifacts/ \
             build/fuzz/corpus-archiveorg core/tests/fuzz-seeds/archiveorg
+      - name: Fuzz XBE certificates (60 s)
+        run: |
+          mkdir -p build/fuzz/corpus-xbe build/fuzz/artifacts
+          ./build/fuzz/core/tests/fuzz_xbe -max_total_time=60 -max_len=8192 \
+            -print_final_stats=1 -artifact_prefix=build/fuzz/artifacts/ \
+            build/fuzz/corpus-xbe core/tests/fuzz-seeds/xbe
       - name: Fuzz sequential extraction (60 s)
         run: |
           mkdir -p build/fuzz/corpus-seq build/fuzz/artifacts

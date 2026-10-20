@@ -85,6 +85,8 @@ const char *xc_err_str(xc_err err)
         return "The zip must hold exactly one .iso or .xiso image";
     case XC_ERR_ZIP_CRC:
         return "The image in the zip failed its CRC-32 check (damaged download?)";
+    case XC_ERR_SOURCE_SIZE:
+        return "The file isn't the size its listing gives (a different file?)";
     case XC_ERR_COUNT_:
         break;
     }

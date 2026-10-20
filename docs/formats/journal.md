@@ -106,6 +106,24 @@ When every file is done, the installer reads each one back from the disk and com
 
 If files overlap in the image (two entries sharing data), a single front-to-back read can't feed every file. The install still completes, but it reports the image as not hashed.
 
+### 7.1 The marker
+
+After verification the installer writes `.xcat-installed` in the game's folder. It is informational: nothing reads it to decide anything yet. It is UTF-8 text, one `key=value` per line after a first line naming the program:
+
+```
+xiso-cartographer <version>
+image=<URL or path the image came from>
+files=<number of files>
+bytes=<their total size>
+verified=crc32                       (or crc32,image-hash when expected hashes matched)
+md5=<32 hex>                         (only when the image was hashed)
+sha1=<40 hex>
+title_id=<8 hex, upper case>         (only when default.xbe has a readable certificate, xbe.md)
+title=<the certificate's title name>
+```
+
+Readers must ignore keys they don't know. `title_id` and `title` are new in M6. A game whose `default.xbe` is missing or isn't an XBE still installs, and its marker has neither.
+
 ## 8. Changes
 
 | Version | Date | Change |

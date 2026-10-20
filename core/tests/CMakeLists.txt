@@ -108,6 +108,7 @@ xcat_add_test(test_credentials)
 xcat_add_test(test_map)
 xcat_add_test(test_json)
 xcat_add_test(test_archiveorg)
+xcat_add_test(test_xbe)
 xcat_add_test(test_journal)
 xcat_add_test(test_install ARGS ${XCAT_FIXTURES_DIR})
 add_dependencies(test_install xcat_fixtures xcat_zip_fixtures)
@@ -256,6 +257,10 @@ xcat_add_fuzzer(fuzz_map SEEDS ${_map_seeds})
 # archive.org metadata seeds are committed: synthetic listings with placeholder names.
 file(GLOB _archiveorg_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/archiveorg/*.seed)
 xcat_add_fuzzer(fuzz_archiveorg SEEDS ${_archiveorg_seeds})
+
+# XBE seeds are committed: synthetic headers with placeholder titles.
+file(GLOB _xbe_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/xbe/*.seed)
+xcat_add_fuzzer(fuzz_xbe SEEDS ${_xbe_seeds})
 
 # Journal seeds are committed, without their line CRCs (fuzz_journal.c adds them).
 file(GLOB _journal_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/journal/*.seed)

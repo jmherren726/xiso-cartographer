@@ -187,6 +187,28 @@ Steps 2–4 find the game from step 1 already installed, so each would go to a n
 
 Send `E:\xcat\install.log`. Record in the results log (without the item's name, [ADR 0006](adr/0006-no-links-no-bypass.md)): the zip's size and compression, the MB/s of writing and of the read-back, the number of passes, the MiB read again and the spool's largest size, where the resume continued, the free space you started with, and whether the game launches. If a second pass ran, also note how long pass 1 took; that's the cost ADR 0009 amendment 1 asks to show after pass 1.
 
+## M6: exit test (archive.org source)
+
+**Exit test** ([HANDOFF.md §4.1](HANDOFF.md#41-roadmap)): an automatic map from an archive.org item, installed files verified, and a clear error for a removed item. The main app (`app/bin/default.xbe` from the CI artifact) does it: `@archiveorg` ([archiveorg.md](formats/archiveorg.md), [ADR 0013](adr/0013-archiveorg-source.md)), the catalog list ([build-xbox.md](build-xbox.md#what-the-app-does-m6)), and the listing's size and hashes checked at install.
+
+**Before you start:** your login in `E:\Apps\xcat\credentials` (the item's files need it; the listing doesn't). Make sure `E:\xcat\isos\` is empty, so the list only holds the item's games. Write `map.txt` with your item and an identifier that doesn't exist, and FTP it to `E:\xcat\`:
+
+```
+# xcat-map v1
+@archiveorg <your item>
+@archiveorg xcat-no-such-item-test
+```
+
+| Step | Where | How | Pass |
+|---|---|---|---|
+| 1 | PC (optional) | `xcat-cli map map.txt` | One line per game of the item, with its size and `md5, sha1, crc32`; an error on line 3: "archive.org item xcat-no-such-item-test doesn't exist or was removed"; "N entries from 1 file, 1 error". |
+| 2 | Hardware, internet | Launch the app. | The log has the same error for line 3 and "Map: N entries", then "Catalog: N game(s)". **Nothing installs.** Press A: the list shows the item's games, each with its size in MiB, and "1 of N". |
+| 3 | Hardware | Move with the D-pad (up/down, wrap at either end), page with left/right. | The highlight (`>`) and "k of N" follow; pages move by 18. |
+| 4 | Hardware, internet | Highlight a small game and press A. | "Picked: <game>", "archive.org says: <bytes> bytes", the usual install lines, "OK: … verified", "from the zip: …", a "title ID XXXXXXXX, "<name>" (from default.xbe)" line, then "Installed and verified." Press A: the game's line is marked `ok`. |
+| 5 | Hardware | Back to the dashboard (Back), launch the game. | It runs. `E:\Games\<game>\.xcat-installed` has `title_id=` and `title=` lines ([journal.md §7.1](formats/journal.md#71-the-marker)). |
+
+A wrong size or hash, and a taken-down item, can't be produced on demand on archive.org, so they're covered by the unit tests (`test_install`, `test_map`, `test_archiveorg`). Send `E:\xcat\install.log`. Record in the results log (without the item's or game's name, [ADR 0006](adr/0006-no-links-no-bypass.md)): how many games the item listed, how long loading the map took, the game's size, MB/s and passes, the title ID line, and whether it launches.
+
 ## FATX probe (M2)
 
 No authoritative list of FATX naming rules exists, and a game's files can't be renamed on install, because the game opens them by name. So the rules in `core/src/fatx.c` ([fatx-names.md](formats/fatx-names.md)) come from the console's own kernel, measured by `app/fatx-probe`.

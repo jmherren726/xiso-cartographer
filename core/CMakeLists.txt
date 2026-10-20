@@ -23,6 +23,7 @@ add_library(xcat
   src/tls.c
   src/url.c
   src/version.c
+  src/xbe.c
   src/xdvdfs.c
   src/zip.c
   src/zip_read.c

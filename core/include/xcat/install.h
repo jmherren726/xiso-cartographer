@@ -20,6 +20,7 @@
 #include "xcat/hash.h"
 #include "xcat/sink.h"
 #include "xcat/source.h"
+#include "xcat/xbe.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -125,6 +126,9 @@ typedef struct xc_install_req {
     bool no_hash;
     const uint8_t *expect_md5;  /* XC_MD5_BYTES, or NULL */
     const uint8_t *expect_sha1; /* XC_SHA1_BYTES, or NULL */
+    /* The size a listing gives for the source (the zip itself, for a zip; archiveorg.md §8);
+       0 for none. Any other size fails with XC_ERR_SOURCE_SIZE before anything is written. */
+    uint64_t expect_size;
 } xc_install_req;
 
 typedef enum xc_install_hash {
@@ -149,6 +153,12 @@ typedef struct xc_install_result {
     bool hash_restarted;       /* a resume had to hash the image from its first byte again */
     uint8_t md5[XC_MD5_BYTES]; /* when computed (also on XC_ERR_IMAGE_HASH) */
     uint8_t sha1[XC_SHA1_BYTES];
+    /* From the installed default.xbe (docs/formats/xbe.md), recorded in the marker
+       (journal.md §7.1); title_note says why not when has_title_id is false. */
+    bool has_title_id;
+    uint32_t title_id;
+    char title_name[3 * XC_XBE_TITLE_UNITS + 1];
+    const char *title_note; /* a static string */
     /* zips (req->zip) */
     char zip_member[256];  /* the image's name in the zip */
     uint16_t zip_method;   /* 0 stored, 8 Deflate; on XC_ERR_ZIP_UNSUPPORTED, the method seen */

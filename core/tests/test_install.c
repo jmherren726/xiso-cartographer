@@ -417,6 +417,29 @@ static void test_fresh_install(void)
     TEST_ASSERT_TRUE(res.bytes_read >= res.bytes_written);
 }
 
+/* archiveorg.md §8: a listing's size that isn't the source's stops the install at once. */
+static void test_expected_size(void)
+{
+    req.expect_size = image.size + 1U;
+    TEST_ASSERT_EQUAL_INT(XC_ERR_SOURCE_SIZE, xc_install(&req, &res));
+    TEST_ASSERT_EQUAL_size_t(0, fs.count); /* nothing was created */
+    req.expect_size = image.size;
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_install(&req, &res));
+}
+
+/* The fixture's default.xbe is a pattern, not an XBE: the game installs without a title ID
+ * (xbe.md), and the marker has none. */
+static void test_title_from_default_xbe(void)
+{
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_install(&req, &res));
+    TEST_ASSERT_FALSE(res.has_title_id);
+    TEST_ASSERT_EQUAL_STRING("default.xbe isn't an XBE", res.title_note);
+    node *m = find("E:/Games/Small Game/.xcat-installed");
+    TEST_ASSERT_NOT_NULL(m);
+    add_bytes(m, "", 1);
+    TEST_ASSERT_NULL(strstr((char *)m->data, "title_id="));
+}
+
 static void test_no_space(void)
 {
     fs.free_bytes = 100000;
@@ -1003,6 +1026,8 @@ int main(int argc, char **argv)
     }
     UNITY_BEGIN();
     RUN_TEST(test_fresh_install);
+    RUN_TEST(test_expected_size);
+    RUN_TEST(test_title_from_default_xbe);
     RUN_TEST(test_no_space);
     RUN_TEST(test_folder_names_run_out);
     RUN_TEST(test_cancel_then_resume);
