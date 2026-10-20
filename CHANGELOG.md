@@ -86,7 +86,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Installs checked against an archive.org listing (archiveorg.md §8). `xc_install_req.expect_size` refuses a file of another size before anything is written (`XC_ERR_SOURCE_SIZE`). The console passes the listing's size and, for `.iso`/`.xiso` files, its MD5 and SHA-1, which are compared for trimmed xisos; a zip's own hashes aren't the image's, so they aren't passed.
 - Title IDs: `xcat/xbe.h` reads an XBE certificate (docs/formats/xbe.md, fuzzed as `fuzz_xbe`). After verification, the installer reads the installed `default.xbe` and writes `title_id=` and `title=` to the marker (journal.md §7.1, now documented). The console and `xcat-cli install` print them, or why there are none.
 - docs/testing.md has the M6 exit test.
-- **M6 exit test met** on hardware (docs/testing.md): `@archiveorg` listed 137 games from the owner's item, a non-existent item gave "doesn't exist or was removed", and a picked full-disc Deflate zip installed over HTTPS at 2.2 MB/s, matched the listing's size, verified, and recorded its title ID from `default.xbe`.
+- **M6 exit test met** on hardware (docs/testing.md): `@archiveorg` listed 137 games from the owner's item, a non-existent item gave "doesn't exist or was removed", and a picked full-disc Deflate zip installed over HTTPS at 2.2 MB/s, matched the listing's size, verified, and recorded its title ID from `default.xbe`; the game launches.
 
 ### Changed
 
