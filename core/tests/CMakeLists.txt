@@ -106,6 +106,8 @@ xcat_add_test(test_bytes)
 xcat_add_test(test_crc32)
 xcat_add_test(test_credentials)
 xcat_add_test(test_map)
+xcat_add_test(test_json)
+xcat_add_test(test_archiveorg)
 xcat_add_test(test_journal)
 xcat_add_test(test_install ARGS ${XCAT_FIXTURES_DIR})
 add_dependencies(test_install xcat_fixtures xcat_zip_fixtures)
@@ -250,6 +252,10 @@ xcat_add_fuzzer(fuzz_credentials SEEDS ${_cred_seeds})
 # Map seeds are committed: NUL-separated parts, see fuzz_map.c.
 file(GLOB _map_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/map/*.seed)
 xcat_add_fuzzer(fuzz_map SEEDS ${_map_seeds})
+
+# archive.org metadata seeds are committed: synthetic listings with placeholder names.
+file(GLOB _archiveorg_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/archiveorg/*.seed)
+xcat_add_fuzzer(fuzz_archiveorg SEEDS ${_archiveorg_seeds})
 
 # Journal seeds are committed, without their line CRCs (fuzz_journal.c adds them).
 file(GLOB _journal_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/journal/*.seed)

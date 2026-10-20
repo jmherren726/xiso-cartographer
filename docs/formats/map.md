@@ -118,7 +118,7 @@ Loads another map and processes its entries at this position.
 Generates entries from the files of one archive.org item, using the public metadata API (`https://archive.org/metadata/<identifier>`).
 
 - `identifier` is 1–100 characters from `A–Z a–z 0–9 . _ -`.
-- How files are matched to title IDs and variants, and which hashes are recorded, is specified with the archive.org source in M6. Until then, readers **must** accept the directive and report it as "not supported yet" (a warning).
+- Which files become entries, their names, URLs, sizes and hashes are specified in [archiveorg.md](archiveorg.md) ([ADR 0013](../adr/0013-archiveorg-source.md)). Generated entries are keyed by file name, not title ID. Until the map loader implements it (later in M6), readers **must** accept the directive and report it as "not supported yet" (a warning).
 - Generated entries are inserted at the directive's position, so §4.3 applies to them like any other entry.
 
 ### 5.3 Unknown directives
