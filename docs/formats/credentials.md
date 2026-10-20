@@ -27,7 +27,7 @@ Placeholders in `<…>` stand for real values. Never commit or share a real cred
 
 ## 2. Location and loading
 
-- On the console: `E:\Apps\xcat\credentials`. On a PC, `xcat-cli` takes the path as an option.
+- On the console: `E:\Apps\xcat\credentials`, with no extension (not `credentials.txt`; the app says so when it finds only that). On a PC, `xcat-cli` takes the path as an option.
 - The file is **only** read from local storage. It **must not** be loaded from a URL, through a map's `@include`, or from any path a map names.
 - The file is read once, when an install job starts. Edits apply to the next job.
 - If the file is missing, no credentials are used. That isn't an error.
