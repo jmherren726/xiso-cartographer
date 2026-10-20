@@ -1,6 +1,7 @@
 /*
  * Sequential extraction: docs/formats/stream-install.md. One front-to-back pass over the
- * image (more if the spool had to drop bytes that turned out to be needed).
+ * image (more if the spool had to drop bytes that turned out to be needed); its state can
+ * be saved at a checkpoint and resumed (§7).
  */
 #include "xcat/seq.h"
 
@@ -140,6 +141,7 @@ typedef struct seq {
     uint64_t wdone;  /* bytes of it written (incl. buffered) */
     size_t buffered; /* in req->buf */
     uint32_t crc;
+    bool part_saved; /* a saved state continues the open file (§7.1): suspend it on errors */
 
     /* spool */
     spool_span *spans; /* sorted by img */
@@ -155,6 +157,7 @@ typedef struct seq {
 
     unsigned pass;
     uint64_t next_progress;
+    bool restored; /* §7.3: the first pass continues a saved state (already classified) */
 } seq;
 
 static uint64_t chunk_bytes(const seq *s)
@@ -251,7 +254,7 @@ static xc_err want_table(seq *s, uint64_t off, uint64_t size, bool *added)
     table t;
     t.off = off;
     t.len = (size_t)(size < MAX_TABLE_READ ? size : MAX_TABLE_READ);
-    t.data = malloc(t.len);
+    t.data = calloc(t.len, 1); /* zero where not captured (§7.2) */
     t.got = calloc(t.len, 1);
     t.have = 0;
     if (t.data == NULL || t.got == NULL) {
@@ -567,7 +570,24 @@ static xc_err begin(seq *s, size_t i)
     s->wdone = 0;
     s->buffered = 0;
     s->crc = 0;
+    s->part_saved = false;
     return XC_OK;
+}
+
+/* After an error: the open file is closed, and kept if a saved state continues it (§7.1). */
+static void abandon(seq *s)
+{
+    if (s->writing == NONE) {
+        return;
+    }
+    s->writing = NONE;
+    const xc_sink *sink = s->req->sink;
+    if (s->part_saved && sink->suspend_file != NULL) {
+        (void)flush(s);
+        (void)sink->suspend_file(sink->ctx);
+    } else {
+        (void)sink->end_file(sink->ctx, false);
+    }
 }
 
 /* Appends to the open file through the buffer. */
@@ -1019,9 +1039,8 @@ static xc_err resolve(seq *s)
         }
         if (err == XC_OK) {
             err = finish(s, true);
-        } else if (s->writing != NONE) {
-            s->writing = NONE;
-            (void)s->req->sink->end_file(s->req->sink->ctx, false);
+        } else {
+            abandon(s);
         }
         if (err != XC_OK) {
             return err;
@@ -1075,12 +1094,13 @@ static xc_err run_pass(seq *s, uint64_t from)
     s->pos = from;
     s->stop = false;
     s->next_progress = from;
-    if (s->vol_known) {
+    if (s->vol_known && !s->restored) {
         xc_err err = classify(s, from);
         if (err != XC_OK) {
             return err;
         }
     }
+    s->restored = false;
     xc_err err = s->req->stream(s->req->stream_ctx, from, on_stream, s);
     if (s->err != XC_OK) {
         err = s->err;
@@ -1088,10 +1108,7 @@ static xc_err run_pass(seq *s, uint64_t from)
         err = XC_OK;
     }
     if (err != XC_OK) {
-        if (s->writing != NONE) {
-            s->writing = NONE;
-            (void)s->req->sink->end_file(s->req->sink->ctx, false);
-        }
+        abandon(s);
         return err;
     }
     if (!s->vol_known) {
@@ -1101,6 +1118,465 @@ static xc_err run_pass(seq *s, uint64_t from)
         return XC_ERR_CORRUPT; /* the stream ended inside a file */
     }
     return resolve(s);
+}
+
+/* --- saving and resuming (§7) ------------------------------------------------------- */
+
+#define STATE_MAGIC 0x31534358U /* "XCS1" */
+#define STATE_HEAD 40U
+#define STATE_VOL 1U /* flags: the volume is known */
+
+static void put32(uint8_t *p, uint32_t v)
+{
+    for (unsigned i = 0; i < 4; i++) {
+        p[i] = (uint8_t)(v >> (8U * i));
+    }
+}
+
+static void put64(uint8_t *p, uint64_t v)
+{
+    for (unsigned i = 0; i < 8; i++) {
+        p[i] = (uint8_t)(v >> (8U * i));
+    }
+}
+
+static uint32_t get32(const uint8_t *p)
+{
+    uint32_t v = 0;
+    for (unsigned i = 0; i < 4; i++) {
+        v |= (uint32_t)p[i] << (8U * i);
+    }
+    return v;
+}
+
+static uint64_t get64(const uint8_t *p)
+{
+    uint64_t v = 0;
+    for (unsigned i = 0; i < 8; i++) {
+        v |= (uint64_t)p[i] << (8U * i);
+    }
+    return v;
+}
+
+/* The candidate the detection is at (§2.1): s->cand, past those that don't fit the image. */
+static size_t current_candidate(const seq *s)
+{
+    size_t c = s->cand;
+    while (c < NCANDIDATES && candidates[c] + VD_OFFSET + SECTOR > s->req->image_size) {
+        c++;
+    }
+    return c;
+}
+
+static size_t state_size(const seq *s, size_t path_len)
+{
+    size_t n = STATE_HEAD + (s->vol_known ? SECTOR : 0) + 4;
+    for (size_t i = 0; i < s->ntables; i++) {
+        const table *t = &s->tables[i];
+        n += 16 + t->len + (t->got != NULL ? (t->len + 7) / 8 : 0);
+    }
+    return n + 4 + s->nspans * 24 + 4 + path_len + 4 + 4;
+}
+
+xc_err xc_seq_save(void *stream_ctx, uint64_t at, uint8_t **out, size_t *len)
+{
+    seq *s = stream_ctx;
+    if (s == NULL || out == NULL || len == NULL) {
+        return XC_ERR_INVALID_ARG;
+    }
+    *out = NULL;
+    *len = 0;
+    /* §7.1: only between two deliveries, with everything before `at` consumed */
+    if (s->err != XC_OK || s->stop || at != s->pos || s->req->spool->sync == NULL) {
+        return XC_OK;
+    }
+    const xc_sink *sink = s->req->sink;
+    if (s->writing != NONE && s->wdone > 0 && sink->sync == NULL) {
+        return XC_OK;
+    }
+    size_t cand = current_candidate(s);
+    if (!s->vol_known && cand < NCANDIDATES && candidates[cand] < at) {
+        return XC_OK; /* inside the bytes kept for a candidate's decision (§2.3) */
+    }
+    const char *path = s->writing != NONE && s->wdone > 0 ? s->listing.files[s->writing].path : "";
+    size_t path_len = strlen(path);
+    size_t n = state_size(s, path_len);
+    if (n > XC_SEQ_MAX_STATE || path_len >= sizeof s->res->current_file) {
+        return XC_OK; /* §7.2's limits */
+    }
+
+    /* the file being written, then the spool, are durable before the state describes them */
+    xc_err err = XC_OK;
+    if (path_len > 0) {
+        err = flush(s);
+        if (err == XC_OK) {
+            err = sink->sync(sink->ctx);
+        }
+    }
+    if (err == XC_OK) {
+        err = s->req->spool->sync(s->req->spool->ctx);
+    }
+    if (err != XC_OK) {
+        return err;
+    }
+
+    uint8_t *b = malloc(n);
+    if (b == NULL) {
+        return XC_ERR_NOMEM;
+    }
+    uint8_t *p = b;
+    memset(p, 0, STATE_HEAD);
+    put32(p, STATE_MAGIC);
+    put32(p + 4, s->pass);
+    put64(p + 8, s->req->image_size);
+    put64(p + 16, chunk_bytes(s));
+    put64(p + 24, at);
+    put32(p + 32, s->vol_known ? STATE_VOL : 0U);
+    put32(p + 36, (uint32_t)(s->vol_known ? s->cand : cand));
+    p += STATE_HEAD;
+    if (s->vol_known) {
+        memcpy(p, s->vd, SECTOR);
+        p += SECTOR;
+    }
+    put32(p, (uint32_t)s->ntables);
+    p += 4;
+    for (size_t i = 0; i < s->ntables; i++) {
+        const table *t = &s->tables[i];
+        put64(p, t->off);
+        put32(p + 8, (uint32_t)t->len);
+        put32(p + 12, (uint32_t)(t->got != NULL ? t->have : t->len));
+        p += 16;
+        if (t->got != NULL) {
+            memset(p, 0, (t->len + 7) / 8);
+            for (size_t k = 0; k < t->len; k++) {
+                if (t->got[k]) {
+                    p[k / 8] = (uint8_t)(p[k / 8] | (1U << (k % 8)));
+                }
+            }
+            p += (t->len + 7) / 8;
+        }
+        memcpy(p, t->data, t->len);
+        p += t->len;
+    }
+    put32(p, (uint32_t)s->nspans);
+    p += 4;
+    for (size_t i = 0; i < s->nspans; i++) {
+        put64(p, s->spans[i].img);
+        put64(p + 8, s->spans[i].len);
+        put64(p + 16, s->spans[i].pos);
+        p += 24;
+    }
+    put32(p, (uint32_t)path_len);
+    for (size_t i = 0; i < path_len; i++) {
+        p[4 + i] = (uint8_t)path[i]; /* no terminator (§7.2) */
+    }
+    p += 4 + path_len;
+    put32(p, path_len > 0 ? s->crc : 0U);
+    p += 4;
+    put32(p, xc_crc32(0, b, n - 4));
+    s->part_saved = path_len > 0;
+    *out = b;
+    *len = n;
+    return XC_OK;
+}
+
+xc_err xc_seq_state_offset(const uint8_t *state, size_t len, uint64_t image_size,
+                           uint64_t chunk_bytes, uint64_t *offset)
+{
+    if (state == NULL || offset == NULL) {
+        return XC_ERR_INVALID_ARG;
+    }
+    uint64_t cb = chunk_bytes > 0 ? chunk_bytes : XC_SEQ_DEFAULT_CHUNK;
+    if (len < STATE_HEAD + 4 || len > XC_SEQ_MAX_STATE || get32(state) != STATE_MAGIC ||
+        get32(state + len - 4) != xc_crc32(0, state, len - 4) || get64(state + 8) != image_size ||
+        get64(state + 16) != cb || get64(state + 24) > image_size) {
+        return XC_ERR_CORRUPT;
+    }
+    *offset = get64(state + 24);
+    return XC_OK;
+}
+
+/* A bounds-checked reader over a saved state. */
+typedef struct rd {
+    const uint8_t *p;
+    size_t left;
+    bool bad;
+} rd;
+
+static const uint8_t *take(rd *r, size_t n)
+{
+    if (r->bad || r->left < n) {
+        r->bad = true;
+        return NULL;
+    }
+    const uint8_t *p = r->p;
+    r->p += n;
+    r->left -= n;
+    return p;
+}
+
+static uint32_t take32(rd *r)
+{
+    const uint8_t *p = take(r, 4);
+    return p != NULL ? get32(p) : 0;
+}
+
+static uint64_t take64(rd *r)
+{
+    const uint8_t *p = take(r, 8);
+    return p != NULL ? get64(p) : 0;
+}
+
+static xc_err restore_tables(seq *s, rd *r)
+{
+    uint32_t n = take32(r);
+    if (r->bad || n > r->left / 16) {
+        return XC_ERR_CORRUPT;
+    }
+    s->tables = calloc(n > 0 ? n : 1, sizeof *s->tables);
+    if (s->tables == NULL) {
+        return XC_ERR_NOMEM;
+    }
+    s->cap_tables = n > 0 ? n : 1;
+    for (uint32_t i = 0; i < n; i++) {
+        uint64_t off = take64(r);
+        uint32_t len = take32(r);
+        uint32_t have = take32(r);
+        if (r->bad || len == 0 || len > MAX_TABLE_READ || have > len || len > s->req->image_size ||
+            off > s->req->image_size - len || (i > 0 && off <= s->tables[i - 1].off)) {
+            return XC_ERR_CORRUPT;
+        }
+        table *t = &s->tables[s->ntables];
+        t->off = off;
+        t->len = len;
+        t->have = have;
+        t->data = malloc(len);
+        t->got = have < len ? calloc(len, 1) : NULL;
+        s->ntables++;
+        if (t->data == NULL || (have < len && t->got == NULL)) {
+            return XC_ERR_NOMEM;
+        }
+        if (t->got != NULL) {
+            const uint8_t *bits = take(r, ((size_t)len + 7) / 8);
+            size_t count = 0;
+            for (size_t k = 0; bits != NULL && k < len; k++) {
+                t->got[k] = (uint8_t)(((unsigned)bits[k / 8] >> (k % 8)) & 1U);
+                count += t->got[k];
+            }
+            if (bits == NULL || count != have) {
+                return XC_ERR_CORRUPT;
+            }
+        }
+        const uint8_t *data = take(r, len);
+        if (data == NULL) {
+            return XC_ERR_CORRUPT;
+        }
+        memcpy(t->data, data, len);
+    }
+    return XC_OK;
+}
+
+static xc_err restore_spans(seq *s, rd *r)
+{
+    uint32_t n = take32(r);
+    if (r->bad || n > r->left / 24) {
+        return XC_ERR_CORRUPT;
+    }
+    s->spans = calloc(n > 0 ? n : 1, sizeof *s->spans);
+    if (s->spans == NULL) {
+        return XC_ERR_NOMEM;
+    }
+    s->cap_spans = n > 0 ? n : 1;
+    uint64_t cb = chunk_bytes(s);
+    uint64_t prev_end = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        spool_span sp;
+        sp.img = take64(r);
+        sp.len = take64(r);
+        sp.pos = take64(r);
+        /* §7.2: inside the image, in order, each within its chunk's interval */
+        if (r->bad || sp.len == 0 || sp.img < prev_end || sp.img > s->req->image_size ||
+            sp.len > s->req->image_size - sp.img || sp.img / cb != (sp.img + sp.len - 1) / cb ||
+            sp.pos > UINT64_MAX - sp.len) {
+            return XC_ERR_CORRUPT;
+        }
+        sp.chunk = (uint32_t)(sp.img / cb);
+        prev_end = sp.img + sp.len;
+        s->spans[i] = sp;
+    }
+    s->nspans = n;
+    return XC_OK;
+}
+
+/*
+ * §7.3: matches the spool's index with the chunk files on disk. A span past its file's end
+ * (the file was lost or cut) is forgotten; a file no span needs is deleted. A kept chunk's
+ * usage is its file's size, so bytes appended after the state was saved still count.
+ */
+static xc_err reconcile_spool(seq *s)
+{
+    const xc_seq_spool *sp = s->req->spool;
+    for (size_t c = 0; c < s->nchunks; c++) {
+        uint64_t size = 0;
+        xc_err err = sp->size(sp->ctx, (uint32_t)c, &size);
+        if (err != XC_OK) {
+            return err;
+        }
+        size_t k = 0;
+        bool kept = false;
+        for (size_t i = 0; i < s->nspans; i++) {
+            const spool_span *x = &s->spans[i];
+            if (x->chunk != c || x->pos + x->len <= size) {
+                kept |= x->chunk == c;
+                s->spans[k++] = *x;
+            }
+        }
+        s->nspans = k;
+        if (kept) {
+            s->chunk_used[c] = size;
+            s->spool_bytes += size;
+        } else if (size > 0) {
+            err = sp->drop(sp->ctx, (uint32_t)c);
+            if (err != XC_OK) {
+                return err;
+            }
+            s->res->stale_chunks++;
+        }
+    }
+    s->res->spool_peak = s->spool_bytes;
+    return XC_OK;
+}
+
+/* §7.3: continues the file that was open at the saved offset, if the sink still has it. */
+static xc_err restore_part(seq *s, const char *path, uint32_t crc)
+{
+    size_t i = 0;
+    while (i < s->listing.file_count && strcmp(s->listing.files[i].path, path) != 0) {
+        i++;
+    }
+    if (i == s->listing.file_count) {
+        return XC_ERR_CORRUPT;
+    }
+    const xc_xdvdfs_entry *f = &s->listing.files[i];
+    if (f->offset >= s->pos || f->offset + f->size <= s->pos) {
+        return XC_ERR_CORRUPT;
+    }
+    const xc_sink *sink = s->req->sink;
+    if (s->state[i] == F_DONE || sink->resume_file == NULL) {
+        return XC_OK; /* finished after the state was saved, or written again later */
+    }
+    uint32_t keep = (uint32_t)(s->pos - f->offset);
+    uint64_t need = rounded(s, f->size) - rounded(s, keep);
+    if (!make_room(s, need)) {
+        return s->err; /* XC_OK: no room to continue it, so it's late */
+    }
+    if (sink->resume_file(sink->ctx, f->path, f->size, keep) != XC_OK) {
+        return XC_OK; /* the file isn't there as it was: late */
+    }
+    note_file(s, f->path);
+    s->free_est -= need;
+    s->state[i] = F_DIRECT;
+    s->dcur = i;
+    s->writing = i;
+    s->wdone = keep;
+    s->buffered = 0;
+    s->crc = crc;
+    s->part_saved = true;
+    s->res->file_continued = true;
+    s->res->bytes_continued = keep;
+    return XC_OK;
+}
+
+/* §7.3: the engine as it was when `b` was saved; then the pass goes on from its offset. */
+static xc_err restore(seq *s, const uint8_t *b, size_t n)
+{
+    uint64_t at = 0;
+    xc_err err = xc_seq_state_offset(b, n, s->req->image_size, s->req->chunk_bytes, &at);
+    if (err != XC_OK) {
+        return err;
+    }
+    if (s->req->spool->size == NULL) {
+        return XC_ERR_INVALID_ARG; /* its chunk files couldn't be checked */
+    }
+    unsigned max = s->req->max_passes > 0 ? s->req->max_passes : XC_SEQ_DEFAULT_MAX_PASSES;
+    uint32_t pass = get32(b + 4);
+    uint32_t flags = get32(b + 32);
+    uint32_t cand = get32(b + 36);
+    if (pass == 0 || pass > max || (flags & ~STATE_VOL) != 0 || cand > NCANDIDATES) {
+        return XC_ERR_CORRUPT;
+    }
+    rd r = {b + STATE_HEAD, n - STATE_HEAD - 4, false};
+    s->pass = pass;
+    s->pos = at;
+    s->cand = cand;
+    if ((flags & STATE_VOL) != 0) {
+        const uint8_t *vd = take(&r, SECTOR);
+        if (vd == NULL || cand >= NCANDIDATES || candidates[cand] + VD_OFFSET + SECTOR > at) {
+            return XC_ERR_CORRUPT;
+        }
+        memcpy(s->vd, vd, SECTOR);
+        xc_source src;
+        memset(&src, 0, sizeof src);
+        src.read_at = vd_read;
+        src.ctx = s;
+        src.size = s->req->image_size;
+        if (xc_xdvdfs_open(&src, &s->res->vol) != XC_OK ||
+            s->res->vol.partition_offset != candidates[cand]) {
+            return XC_ERR_CORRUPT;
+        }
+        s->vol_known = true;
+        free(s->pre);
+        s->pre = NULL;
+    } else if (cand < NCANDIDATES && candidates[cand] < at) {
+        return XC_ERR_CORRUPT; /* never saved inside a candidate's window (§7.1) */
+    }
+    err = restore_tables(s, &r);
+    if (err == XC_OK) {
+        err = restore_spans(s, &r);
+    }
+    if (err != XC_OK) {
+        return err;
+    }
+    uint32_t path_len = take32(&r);
+    const uint8_t *path = take(&r, path_len);
+    uint32_t crc = take32(&r);
+    if (r.bad || r.left != 0 || path_len >= sizeof s->res->current_file ||
+        (!s->vol_known && (s->ntables > 0 || s->nspans > 0 || path_len > 0)) ||
+        (path != NULL && memchr(path, 0, path_len) != NULL)) {
+        return XC_ERR_CORRUPT;
+    }
+    char part[sizeof s->res->current_file];
+    memcpy(part, path != NULL ? (const char *)path : "", path_len);
+    part[path_len] = '\0';
+
+    err = reconcile_spool(s);
+    if (err == XC_OK && s->vol_known) {
+        err = relist(s); /* the listing, its checks and directories, as they were */
+    }
+    if (err == XC_OK && path_len > 0) {
+        err = restore_part(s, part, crc);
+    }
+    s->restored = true;
+    s->res->resumed_at = at;
+    return err;
+}
+
+/* §7.3: without a state, any chunk file found is from an earlier attempt, so it goes. */
+static xc_err drop_stale(seq *s)
+{
+    const xc_seq_spool *sp = s->req->spool;
+    for (size_t c = 0; sp->size != NULL && c < s->nchunks; c++) {
+        uint64_t size = 0;
+        xc_err err = sp->size(sp->ctx, (uint32_t)c, &size);
+        if (err == XC_OK && size > 0) {
+            err = sp->drop(sp->ctx, (uint32_t)c);
+            s->res->stale_chunks++;
+        }
+        if (err != XC_OK) {
+            return err;
+        }
+    }
+    return XC_OK;
 }
 
 static xc_err init(seq *s, const xc_seq_req *req, xc_seq_result *res)
@@ -1155,6 +1631,24 @@ xc_err xc_seq_extract(const xc_seq_req *req, xc_seq_result *res)
     xc_err err = init(&s, req, res);
     unsigned max = req->max_passes > 0 ? req->max_passes : XC_SEQ_DEFAULT_MAX_PASSES;
     uint64_t from = 0;
+    if (err == XC_OK && req->resume != NULL) {
+        err = restore(&s, req->resume, req->resume_len);
+        from = s.pos;
+        s.pass--; /* the loop counts it again */
+        if (err == XC_ERR_CORRUPT) {
+            /* §7.3: a state that can't be used; start again from the image's first byte */
+            cleanup(&s);
+            memset(res, 0, sizeof *res);
+            res->state_rejected = true;
+            from = 0;
+            err = init(&s, req, res);
+            if (err == XC_OK) {
+                err = drop_stale(&s);
+            }
+        }
+    } else if (err == XC_OK) {
+        err = drop_stale(&s);
+    }
     while (err == XC_OK) {
         s.pass++;
         res->passes = s.pass;

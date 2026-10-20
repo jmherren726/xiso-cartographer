@@ -23,6 +23,18 @@ static uint64_t checkpoint_step; /* the stream restarts at multiples of this */
 static unsigned streams;         /* stream calls (one per pass) */
 static uint64_t first_from[64];  /* `from` of each call */
 
+/* §7: saving states at each checkpoint, and power cuts */
+static bool save_states;
+static uint8_t *saved; /* the last state saved */
+static size_t saved_len;
+static uint64_t saved_at;
+static unsigned states_saved;
+static uint64_t state_chunk; /* the request's chunk_bytes */
+static unsigned cut_stream;  /* the stream call (1, 2, ...) that's cut, 0 = none */
+static uint64_t cut_at;      /* ... once it has delivered the bytes before this */
+
+static void take_state(void *fn_ctx, uint64_t at);
+
 static void open_image(const char *name)
 {
     char path[1024];
@@ -51,12 +63,28 @@ static xc_err stream(void *ctx, uint64_t from, xc_source_data_fn fn, void *fn_ct
     uint64_t off = from - from % checkpoint_step;
     while (off < image_size) {
         size_t n = (size_t)(image_size - off < sizeof buf ? image_size - off : sizeof buf);
-        read_image(off, buf, n);
-        xc_err err = fn(fn_ctx, off, buf, n);
-        if (err != XC_OK) {
-            return err;
+        uint64_t next_ck = off - off % checkpoint_step + checkpoint_step;
+        if (save_states && next_ck - off < n) {
+            n = (size_t)(next_ck - off); /* like the zip reader: a checkpoint between pieces */
+        }
+        bool cut = cut_stream == streams && off + n >= cut_at;
+        if (cut) {
+            n = (size_t)(cut_at > off ? cut_at - off : 0);
+        }
+        if (n > 0) {
+            read_image(off, buf, n);
+            xc_err err = fn(fn_ctx, off, buf, n);
+            if (err != XC_OK) {
+                return err;
+            }
+        }
+        if (cut) {
+            return XC_ERR_IO; /* the power goes */
         }
         off += n;
+        if (save_states && off % checkpoint_step == 0 && off < image_size) {
+            take_state(fn_ctx, off);
+        }
     }
     return XC_OK;
 }
@@ -69,6 +97,7 @@ typedef struct mfile {
     uint32_t size;
     uint32_t len;
     bool complete;
+    bool counted; /* in disk_used: not removed or replaced */
 } mfile;
 
 #define MAX_FILES 512
@@ -103,7 +132,9 @@ static xc_err m_make_dir(void *ctx, const char *path)
 {
     (void)ctx;
     TEST_ASSERT_TRUE_MESSAGE(dir_exists(path, parent_len(path)), path);
-    TEST_ASSERT_FALSE_MESSAGE(dir_exists(path, strlen(path)), path);
+    if (dir_exists(path, strlen(path))) {
+        return XC_OK; /* made by an earlier attempt */
+    }
     TEST_ASSERT_TRUE(ndirs < MAX_FILES);
     (void)snprintf(dirs[ndirs++], sizeof dirs[0], "%s", path);
     return XC_OK;
@@ -115,7 +146,12 @@ static xc_err m_begin(void *ctx, const char *path, uint32_t size)
     TEST_ASSERT_NULL(open_file);
     TEST_ASSERT_TRUE_MESSAGE(dir_exists(path, parent_len(path)), path);
     for (size_t i = 0; i < nfiles; i++) {
-        TEST_ASSERT_TRUE_MESSAGE(strcmp(files[i].path, path) != 0 || !files[i].complete, path);
+        bool same = strcmp(files[i].path, path) == 0;
+        TEST_ASSERT_TRUE_MESSAGE(!same || !files[i].complete, path);
+        if (same && files[i].counted) {
+            disk_used -= files[i].size; /* a kept partial file is replaced */
+            files[i].counted = false;
+        }
     }
     TEST_ASSERT_TRUE(nfiles < MAX_FILES);
     open_file = &files[nfiles++];
@@ -125,6 +161,7 @@ static xc_err m_begin(void *ctx, const char *path, uint32_t size)
     open_file->size = size;
     open_file->len = 0;
     open_file->complete = false;
+    open_file->counted = true;
     disk_used += size;
     return XC_OK;
 }
@@ -147,11 +184,55 @@ static xc_err m_end(void *ctx, bool complete)
         TEST_ASSERT_EQUAL_UINT32(open_file->size, open_file->len);
     }
     open_file->complete = complete;
+    if (!complete && open_file->counted) {
+        disk_used -= open_file->size; /* removed */
+        open_file->counted = false;
+    }
     open_file = NULL;
     return XC_OK;
 }
 
-static const xc_sink sink = {m_make_dir, m_begin, m_write, m_end, NULL, NULL, NULL, NULL};
+static unsigned syncs;
+
+static xc_err m_sync(void *ctx)
+{
+    (void)ctx;
+    TEST_ASSERT_NOT_NULL(open_file);
+    syncs++;
+    return XC_OK;
+}
+
+/* The last kept copy of `path`, cut back to `keep` bytes. */
+static xc_err m_resume(void *ctx, const char *path, uint32_t size, uint32_t keep)
+{
+    (void)ctx;
+    TEST_ASSERT_NULL(open_file);
+    for (size_t i = nfiles; i-- > 0;) {
+        mfile *f = &files[i];
+        if (strcmp(f->path, path) == 0 && f->counted) {
+            TEST_ASSERT_FALSE(f->complete);
+            TEST_ASSERT_EQUAL_UINT32(size, f->size);
+            if (f->len < keep) {
+                return XC_ERR_IO;
+            }
+            f->len = keep;
+            open_file = f;
+            return XC_OK;
+        }
+    }
+    return XC_ERR_IO;
+}
+
+static xc_err m_suspend(void *ctx)
+{
+    (void)ctx;
+    TEST_ASSERT_NOT_NULL(open_file);
+    open_file = NULL; /* kept, and still counted */
+    return XC_OK;
+}
+
+static const xc_sink sink = {m_make_dir, m_begin, m_write,  m_end,
+                             NULL,       m_sync,  m_resume, m_suspend};
 
 /* --- a memory spool ----------------------------------------------------------------- */
 
@@ -159,6 +240,7 @@ static const xc_sink sink = {m_make_dir, m_begin, m_write, m_end, NULL, NULL, NU
 static uint8_t *chunk_data[MAX_CHUNKS];
 static uint64_t chunk_len[MAX_CHUNKS];
 static uint64_t chunk_cap[MAX_CHUNKS];
+static bool dropped_since[MAX_CHUNKS]; /* since the last state: what install.c's `drop` lines say */
 
 static xc_err s_append(void *ctx, uint32_t c, const uint8_t *data, size_t len)
 {
@@ -190,6 +272,7 @@ static xc_err s_drop(void *ctx, uint32_t c)
 {
     (void)ctx;
     TEST_ASSERT_TRUE(c < MAX_CHUNKS);
+    dropped_since[c] = saved != NULL;
     disk_used -= chunk_len[c];
     free(chunk_data[c]);
     chunk_data[c] = NULL;
@@ -205,7 +288,39 @@ static xc_err s_free(void *ctx, uint64_t *bytes)
     return XC_OK;
 }
 
-static const xc_seq_spool spool = {s_append, s_read, s_drop, s_free, NULL};
+static xc_err s_size(void *ctx, uint32_t c, uint64_t *bytes)
+{
+    (void)ctx;
+    *bytes = c < MAX_CHUNKS ? chunk_len[c] : 0; /* the big fixtures' far chunks are never used */
+    return XC_OK;
+}
+
+static xc_err s_sync(void *ctx)
+{
+    (void)ctx;
+    return XC_OK;
+}
+
+static const xc_seq_spool spool = {s_append, s_read, s_drop, s_free, NULL, s_size, s_sync};
+
+static void take_state(void *fn_ctx, uint64_t at)
+{
+    uint8_t *b = NULL;
+    size_t len = 0;
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_seq_save(fn_ctx, at, &b, &len));
+    if (b == NULL) {
+        return; /* none at this offset (§7.1) */
+    }
+    uint64_t back = 0;
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_seq_state_offset(b, len, image_size, state_chunk, &back));
+    TEST_ASSERT_EQUAL_UINT64(at, back);
+    free(saved);
+    saved = b;
+    saved_len = len;
+    saved_at = at;
+    states_saved++;
+    memset(dropped_since, 0, sizeof dropped_since);
+}
 
 /* --- callbacks ---------------------------------------------------------------------- */
 
@@ -266,6 +381,16 @@ static void reset(void)
         chunk_len[c] = chunk_cap[c] = 0;
     }
     disk_used = 0;
+    free(saved);
+    saved = NULL;
+    saved_len = 0;
+    saved_at = 0;
+    states_saved = 0;
+    save_states = false;
+    cut_stream = 0;
+    cut_at = 0;
+    syncs = 0;
+    memset(dropped_since, 0, sizeof dropped_since);
     complete_listings = 0;
     file_done_count = 0;
     crc_ok = true;
@@ -462,6 +587,205 @@ static void test_cancel(void)
     TEST_ASSERT_EQUAL_INT(XC_ERR_CANCELLED, xc_seq_extract(&q, NULL));
 }
 
+/* --- saving and resuming (§7) -------------------------------------------------------- */
+
+/* journal.md §6.8's rule: done if a complete copy with the listing's size is there. */
+static bool is_done(void *ctx, const xc_xdvdfs_entry *f)
+{
+    (void)ctx;
+    for (size_t i = 0; i < nfiles; i++) {
+        if (files[i].complete && files[i].len == f->size && strcmp(files[i].path, f->path) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Everything an attempt left that a power cut keeps, as install.c leaves it for the next. */
+static void power_cut(void)
+{
+    open_file = NULL;
+    for (size_t c = 0; c < MAX_CHUNKS; c++) {
+        if (dropped_since[c] && chunk_len[c] > 0) {
+            dropped_since[c] = false;
+            TEST_ASSERT_EQUAL_INT(XC_OK, s_drop(NULL, (uint32_t)c)); /* a `drop` line */
+        }
+    }
+    streams = 0;
+    complete_listings = 0; /* the next attempt lists the image again */
+}
+
+/*
+ * Installs `name` with a state saved at every checkpoint, cuts the power in stream call
+ * `cut_in` once it has delivered the bytes before `cut`, then resumes from the last state.
+ */
+static xc_seq_result cut_and_resume(const char *name, uint64_t disk, uint64_t chunk,
+                                    unsigned cut_in, uint64_t cut)
+{
+    reset();
+    open_image(name);
+    if (chunk > checkpoint_step) {
+        checkpoint_step = chunk;
+    }
+    disk_size = disk;
+    save_states = true;
+    state_chunk = chunk;
+    cut_stream = cut_in;
+    cut_at = cut;
+    xc_seq_req q = request(chunk, 0);
+    q.is_done = is_done;
+    q.max_passes = 64;
+    xc_seq_result r;
+    xc_err err = xc_seq_extract(&q, &r);
+    if (err == XC_OK) {
+        check_installed(name); /* the cut was past where it stopped reading */
+        return r;
+    }
+    TEST_ASSERT_EQUAL_INT(XC_ERR_IO, err);
+    power_cut();
+    cut_stream = 0;
+    /* the second attempt saves states too, so it resumes from a copy */
+    uint8_t *state = saved;
+    size_t state_len = saved_len;
+    uint64_t state_at = saved_at;
+    saved = NULL;
+    q.resume = state;
+    q.resume_len = state_len;
+    err = xc_seq_extract(&q, &r);
+    char msg[512];
+    (void)snprintf(msg, sizeof msg, "%s cut at %llu in pass %u, resumed at %llu: file %s", name,
+                   (unsigned long long)cut, cut_in, (unsigned long long)state_at, r.current_file);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(XC_OK, err, msg);
+    TEST_ASSERT_FALSE_MESSAGE(r.state_rejected, msg);
+    TEST_ASSERT_EQUAL_UINT64_MESSAGE(state != NULL ? state_at : 0, r.resumed_at, msg);
+    free(state);
+    check_installed(name);
+    return r;
+}
+
+static void test_resume_at_every_checkpoint(void)
+{
+    static const char *names[] = {"small", "late", "late-deep", "late-root"};
+    size_t continued = 0;
+    unsigned all_syncs = 0;
+    for (size_t i = 0; i < sizeof names / sizeof names[0]; i++) {
+        open_image(names[i]);
+        uint64_t size = image_size;
+        size_t resumed = 0;
+        /* cuts on and between checkpoints */
+        for (uint64_t cut = 1; cut < size; cut += 32768 + 4099) {
+            xc_seq_result r = cut_and_resume(names[i], BIG, 65536, 1, cut);
+            resumed += r.resumed_at > 0;
+            continued += r.file_continued;
+            all_syncs += syncs;
+        }
+        TEST_ASSERT_TRUE_MESSAGE(resumed > 0, names[i]);
+    }
+    TEST_ASSERT_TRUE(continued > 0); /* some cut fell inside a file */
+    TEST_ASSERT_TRUE(all_syncs > 0); /* which was flushed before its state was saved */
+}
+
+static void test_resume_in_a_later_pass(void)
+{
+    /* a tight disk: the spool drops chunks, so there are later passes to cut */
+    size_t later = 0;
+    for (unsigned pass = 1; pass <= 3; pass++) {
+        for (uint64_t cut = 65536; cut < 1048576; cut += 98304) {
+            xc_seq_result r = cut_and_resume("late", LATE_FILES + 262144 + 65536, 65536, pass, cut);
+            later += pass > 1 && r.resumed_at > 0;
+        }
+    }
+    TEST_ASSERT_TRUE(later > 0);
+}
+
+static void test_resume_with_a_disk_just_big_enough(void)
+{
+    for (uint64_t cut = 65536; cut < 1703936; cut += 196608 + 4099) {
+        (void)cut_and_resume("late-deep", LATE_DEEP_FILES + 4096, 65536, 1, cut);
+        (void)cut_and_resume("late-deep", LATE_DEEP_FILES + 4096, 65536, 2, cut);
+    }
+}
+
+static void test_resume_before_the_volume(void)
+{
+    /* XGD3: the partition starts at 32.5 MiB, so states before it hold no volume yet */
+    xc_seq_result r =
+        cut_and_resume("late-xgd3", BIG, (uint64_t)4 * 1024 * 1024, 1, (uint64_t)20 * 1024 * 1024);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)16 * 1024 * 1024, r.resumed_at);
+    TEST_ASSERT_TRUE(states_saved > 0);
+}
+
+static void test_stale_spool_without_a_state(void)
+{
+    /* spool files of an attempt that saved no state are deleted, not appended to */
+    reset();
+    open_image("late");
+    disk_size = BIG;
+    cut_stream = 1;
+    cut_at = 700000;
+    xc_seq_req q = request(65536, 0);
+    q.is_done = is_done;
+    TEST_ASSERT_EQUAL_INT(XC_ERR_IO, xc_seq_extract(&q, NULL));
+    power_cut();
+    cut_stream = 0;
+    xc_seq_result r;
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_seq_extract(&q, &r));
+    TEST_ASSERT_TRUE(r.stale_chunks > 0);
+    TEST_ASSERT_EQUAL_UINT64(0, r.resumed_at);
+    check_installed("late");
+}
+
+static void test_damaged_state_starts_again(void)
+{
+    reset();
+    open_image("late");
+    disk_size = BIG;
+    save_states = true;
+    state_chunk = 65536;
+    cut_stream = 1;
+    cut_at = 600000;
+    xc_seq_req q = request(65536, 0);
+    q.is_done = is_done;
+    TEST_ASSERT_EQUAL_INT(XC_ERR_IO, xc_seq_extract(&q, NULL));
+    TEST_ASSERT_NOT_NULL(saved);
+    power_cut();
+    cut_stream = 0;
+    save_states = false;
+    saved[saved_len / 2] ^= 0x40U;
+    q.resume = saved;
+    q.resume_len = saved_len;
+    xc_seq_result r;
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_seq_extract(&q, &r));
+    TEST_ASSERT_TRUE(r.state_rejected);
+    TEST_ASSERT_EQUAL_UINT64(0, r.resumed_at);
+    TEST_ASSERT_TRUE(r.stale_chunks > 0);
+    check_installed("late");
+
+    /* another image's state, or another chunk size */
+    uint64_t at = 0;
+    TEST_ASSERT_EQUAL_INT(XC_ERR_CORRUPT,
+                          xc_seq_state_offset(saved, saved_len, image_size + 1, 65536, &at));
+    saved[saved_len / 2] ^= 0x40U;
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_seq_state_offset(saved, saved_len, image_size, 65536, &at));
+    TEST_ASSERT_EQUAL_INT(XC_ERR_CORRUPT,
+                          xc_seq_state_offset(saved, saved_len, image_size, 131072, &at));
+}
+
+static void test_no_state_without_sync(void)
+{
+    reset();
+    open_image("late");
+    disk_size = BIG;
+    xc_seq_spool no_sync = spool;
+    no_sync.sync = NULL;
+    xc_seq_req q = request(65536, 0);
+    q.spool = &no_sync;
+    save_states = true;
+    state_chunk = 65536;
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_seq_extract(&q, NULL));
+    TEST_ASSERT_EQUAL_UINT(0, states_saved);
+}
+
 /* A memory image that holds no volume. */
 static uint8_t blank[3U * 1024 * 1024];
 
@@ -505,6 +829,13 @@ int main(int argc, char **argv)
     RUN_TEST(test_pass_limit);
     RUN_TEST(test_no_space);
     RUN_TEST(test_cancel);
+    RUN_TEST(test_resume_at_every_checkpoint);
+    RUN_TEST(test_resume_in_a_later_pass);
+    RUN_TEST(test_resume_with_a_disk_just_big_enough);
+    RUN_TEST(test_resume_before_the_volume);
+    RUN_TEST(test_stale_spool_without_a_state);
+    RUN_TEST(test_damaged_state_starts_again);
+    RUN_TEST(test_no_state_without_sync);
     RUN_TEST(test_not_xdvdfs);
     RUN_TEST(test_invalid_arguments);
     reset();
