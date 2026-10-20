@@ -61,11 +61,11 @@ Every CI run also uploads all of these files as the `xiso-cartographer-xbe-<sha>
 1. Set up xemu with your own BIOS, MCPX boot ROM and HDD image. These are never part of this repo; see the [xemu docs](https://xemu.app/docs/required-files/).
 2. **Machine → Load Disc…** and choose `app/xiso-cartographer.iso`. Then reset the machine (**Machine → Reset**) if it doesn't boot on its own.
 
-## What the app does (M5b)
+## What the app does (M6)
 
-Until the real UI arrives (M8), the app installs everything it's given, one after another:
+The map is a **catalog to pick from**: nothing installs until you choose it. At start the app loads the map, then shows a text list of everything it can install. **D-pad up/down** moves, **left/right** pages, **A** installs the highlighted game and comes back to the list afterwards, and **Back** returns to the dashboard (so does holding LT + RT + Back + Black, at any time). Each line is marked `ok` once installed and `!!` if it failed in this run. The real UI replaces this list in M8. The list holds:
 
-1. **Every entry of the map `E:\xcat\map.txt`** ([map.md](formats/map.md)), downloaded over HTTP and installed while it streams in. Nothing is stored except the game's files ([ADR 0004](adr/0004-streaming-install.md)), so images of 4 GiB and more, such as full-disc dumps, install too. Entries that need a login use `E:\Apps\xcat\credentials` ([credentials.md](formats/credentials.md)). Entries can be `http://` or `https://` (see [HTTPS](#https) below). An entry whose URL ends in `.zip` installs the zip's one image (see [Zips](#zips) below).
+1. **Every entry of the map `E:\xcat\map.txt`** ([map.md](formats/map.md)), including the games an `@archiveorg <item>` line lists (by name and size, [archiveorg.md](formats/archiveorg.md)). They download over HTTP and install while they stream in. Nothing is stored except the game's files ([ADR 0004](adr/0004-streaming-install.md)), so images of 4 GiB and more, such as full-disc dumps, install too. Entries that need a login use `E:\Apps\xcat\credentials` ([credentials.md](formats/credentials.md)). Entries can be `http://` or `https://` (see [HTTPS](#https) below). An entry whose URL ends in `.zip` installs the zip's one image (see [Zips](#zips) below).
 2. **Every image or zip in `E:\xcat\isos\`** (`*.iso`, `*.zip`), as in M2. These must be under 4 GiB, since FATX can't store a larger file.
 3. If there's neither, the bundled test image from `D:\samples\` (`D:` is the folder or disc the XBE was started from), copied to `E:\xcat\isos\` first.
 
@@ -75,7 +75,7 @@ Each install, network or local, follows the same steps ([ARCHITECTURE.md §5](AR
 - For a trimmed xiso it reads the image front to back in full and computes its **MD5 and SHA-1**, which it logs (from M6 they're compared with archive.org's; [journal.md §7](formats/journal.md#7-verification)). Full-disc layouts are checked by size and CRC-32 only.
 - It **reads every installed file back and compares its CRC-32** with what was received, then writes `E:\Games\<title>\.xcat-installed`, with the hashes when there are some.
 
-A title that's already installed gets a numbered folder (`small (2)`). An unfinished install of the same image is resumed in its own folder; one of a different image is left alone. The run ends with "Done: N of M image(s) installed and verified." Everything on screen is also appended to `E:\xcat\install.log`.
+A title that's already installed gets a numbered folder (`small (2)`). An unfinished install of the same image is resumed in its own folder (pick the same game again after a power cut); one of a different image is left alone. Each install ends with "Installed and verified." or "Not installed.", and A goes back to the list. Everything on screen except the list itself is also appended to `E:\xcat\install.log`, starting with "Picked: <game>".
 
 ### Zips
 

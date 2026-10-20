@@ -1,10 +1,11 @@
 /*
- * xiso-cartographer XBE, milestone M5b: install games over the network (HTTP or HTTPS),
+ * xiso-cartographer XBE, milestone M6: install games over the network (HTTP or HTTPS),
  * resumably, from images or from zips holding one (ADR 0009).
  *
- * What it installs, in this order:
- *   1. every entry of the map E:\xcat\map.txt (docs/formats/map.md), downloaded over HTTP
- *      with Range and installed while it streams in (ADR 0004); an entry ending in .zip
+ * The map is a catalog: the app lists, and installs only the game picked with A,
+ *   1. every entry of the map E:\xcat\map.txt (docs/formats/map.md), including those an
+ *      @archiveorg item generates (docs/formats/archiveorg.md), downloaded over HTTP with
+ *      Range and installed while it streams in (ADR 0004); an entry ending in .zip
  *      installs the zip's image (docs/formats/zip.md, stream-install.md);
  *   2. every image or zip in E:\xcat\isos\ (the M2 local install);
  *   3. if there is neither, the bundled synthetic test image (D:\samples\*.iso).
@@ -98,18 +99,35 @@ static void open_log(void)
 #define PAD_POLL_MS 100U
 #define TRIGGER_DOWN 16384 /* of 32767 */
 
+#define PAD_QUEUE 16
+
 static bool pads_ok;
 static SDL_GameController *pads[MAX_PADS];
 static DWORD next_pad_poll;
 static bool exit_requested;
+static uint8_t pressed[PAD_QUEUE]; /* buttons pressed since the picker last looked */
+static int pressed_count;
 
 static void pads_init(void)
 {
     pads_ok = SDL_Init(SDL_INIT_GAMECONTROLLER) == 0;
 }
 
+/* The oldest button press not yet taken (SDL_CONTROLLER_BUTTON_*), or -1. */
+static int next_press(void)
+{
+    if (pressed_count == 0) {
+        return -1;
+    }
+    int b = pressed[0];
+    pressed_count--;
+    memmove(pressed, pressed + 1, (size_t)pressed_count);
+    return b;
+}
+
 /* True once LT + RT + Back + Black (the rocky5 shortcut) is held on any controller. Cheap to
-   call often: it looks at the controllers at most every 100 ms. */
+   call often: it looks at the controllers at most every 100 ms, and queues the buttons
+   pressed meanwhile for next_press. */
 static bool exit_combo(void)
 {
     if (!pads_ok || exit_requested || GetTickCount() - next_pad_poll > 0x80000000U) {
@@ -118,7 +136,9 @@ static bool exit_combo(void)
     next_pad_poll = GetTickCount() + PAD_POLL_MS;
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
-        if (e.type == SDL_CONTROLLERDEVICEADDED) {
+        if (e.type == SDL_CONTROLLERBUTTONDOWN && pressed_count < PAD_QUEUE) {
+            pressed[pressed_count++] = e.cbutton.button;
+        } else if (e.type == SDL_CONTROLLERDEVICEADDED) {
             for (int i = 0; i < MAX_PADS; i++) {
                 if (pads[i] == NULL) {
                     pads[i] = SDL_GameControllerOpen(e.cdevice.which);
@@ -810,10 +830,123 @@ static int list_local(char names[MAX_LOCAL][XC_NX_PATH_MAX])
     return count;
 }
 
+/* --- picking what to install: the map is a catalog, nothing installs unasked ---------- */
+
+#define LIST_ROWS 18 /* of the debug console's 25 */
+#define LABEL_MAX 80
+
+typedef struct game {
+    char label[LABEL_MAX];
+    const char *url;  /* a map entry, or */
+    const char *path; /* a file in E:\xcat\isos */
+    int result;       /* 0 not tried this run, 1 installed, -1 failed */
+} game;
+
+/* One line per map entry and local file, in that order. */
+static game *catalog(const xc_map *map, char local[][XC_NX_PATH_MAX], int nlocal, int *count)
+{
+    size_t n = map->entry_count + (size_t)nlocal;
+    game *games = calloc(n > 0 ? n : 1, sizeof *games);
+    if (games == NULL) {
+        return NULL;
+    }
+    for (size_t i = 0; i < map->entry_count; i++) {
+        const xc_map_entry *e = &map->entries[i];
+        game *g = &games[i];
+        g->url = e->url;
+        if (e->name != NULL) {
+            /* From an archive.org listing: its name and size. */
+            snprintf(g->label, sizeof g->label, "%.60s  %u MiB", e->name,
+                     (unsigned)(e->size >> 20U));
+        } else {
+            char title[LABEL_MAX];
+            title_from(e->url, title, sizeof title);
+            snprintf(g->label, sizeof g->label, "%.56s  [%08lX%s%s]", title,
+                     (unsigned long)e->title_id, e->variant[0] != '\0' ? "@" : "", e->variant);
+        }
+    }
+    for (int i = 0; i < nlocal; i++) {
+        game *g = &games[map->entry_count + (size_t)i];
+        char title[LABEL_MAX];
+        title_from(local[i], title, sizeof title);
+        g->path = local[i];
+        snprintf(g->label, sizeof g->label, "%.60s  (on the HDD)", title);
+    }
+    *count = (int)n;
+    return games;
+}
+
+static void draw_list(const game *games, int count, int cur, int top)
+{
+    debugClearScreen();
+    debugPrint("xiso-cartographer %s - pick a game to install\n", xc_version_string());
+    debugPrint("D-pad: move, left/right: page   A: install   Back: dashboard\n\n");
+    for (int row = 0; row < LIST_ROWS && top + row < count; row++) {
+        const game *g = &games[top + row];
+        const char *mark = g->result > 0 ? "ok" : g->result < 0 ? "!!" : "  ";
+        debugPrint("%s %s %.66s\n", top + row == cur ? ">" : " ", mark, g->label);
+    }
+    debugPrint("\n%d of %d   (ok: installed, !!: failed; see E:\\xcat\\install.log)\n", cur + 1,
+               count);
+}
+
+/* Waits for a button press (the exit shortcut still works). */
+static int wait_press(void)
+{
+    for (;;) {
+        if (exit_combo()) {
+            to_dashboard();
+        }
+        int b = next_press();
+        if (b >= 0) {
+            return b;
+        }
+        Sleep(20);
+    }
+}
+
+/* Shows the catalog until the user picks a game with A, installs it, and comes back. */
+static void pick_and_install(game *games, int count)
+{
+    int cur = 0;
+    int top = 0;
+    for (;;) {
+        if (cur < top) {
+            top = cur;
+        } else if (cur >= top + LIST_ROWS) {
+            top = cur - LIST_ROWS + 1;
+        }
+        draw_list(games, count, cur, top);
+        int b = wait_press();
+        if (b == SDL_CONTROLLER_BUTTON_DPAD_UP) {
+            cur = cur > 0 ? cur - 1 : count - 1;
+        } else if (b == SDL_CONTROLLER_BUTTON_DPAD_DOWN) {
+            cur = cur + 1 < count ? cur + 1 : 0;
+        } else if (b == SDL_CONTROLLER_BUTTON_DPAD_LEFT) {
+            cur = cur >= LIST_ROWS ? cur - LIST_ROWS : 0;
+        } else if (b == SDL_CONTROLLER_BUTTON_DPAD_RIGHT) {
+            cur = cur + LIST_ROWS < count ? cur + LIST_ROWS : count - 1;
+        } else if (b == SDL_CONTROLLER_BUTTON_BACK) {
+            to_dashboard();
+        } else if (b == SDL_CONTROLLER_BUTTON_A) {
+            game *g = &games[cur];
+            debugClearScreen();
+            out("\nPicked: %s\n", g->label);
+            bool ok = g->url != NULL ? install_url(g->url) : install_file(g->path);
+            g->result = ok ? 1 : -1;
+            out("%s\n", ok ? "Installed and verified." : "Not installed.");
+            debugPrint("\nPress A to go back to the list.\n");
+            pressed_count = 0; /* presses made during the install don't count */
+            while (wait_press() != SDL_CONTROLLER_BUTTON_A) {
+            }
+        }
+    }
+}
+
 int main(void)
 {
     XVideoSetMode(640, 480, 32, REFRESH_DEFAULT);
-    debugPrint("xiso-cartographer %s - install (M5b)\n", xc_version_string());
+    debugPrint("xiso-cartographer %s - install (M6)\n", xc_version_string());
     xc_nx_clock(&clk);
     run_start_ms = now_ms();
     pads_init();
@@ -841,32 +974,19 @@ int main(void)
         nlocal = list_local(local);
     }
 
-    int installed = 0;
-    int total = 0;
-    unsigned listed = 0;
-    for (size_t i = 0; have_map && i < map.entry_count && !exit_combo(); i++) {
-        /* An @archiveorg item can list a whole collection: those are only shown until
-         * choosing what to install comes (M6). */
-        if (map.entries[i].name != NULL) {
-            out("  listed: %s (%u MiB)\n", map.entries[i].name,
-                (unsigned)(map.entries[i].size >> 20U));
-            listed++;
-            continue;
-        }
-        installed += install_url(map.entries[i].url) ? 1 : 0;
-        total++;
+    int count = 0;
+    game *games = catalog(&map, local, nlocal, &count);
+    if (games == NULL || count == 0) {
+        out("Nothing to install: no map entries and nothing in " ISO_DIR "\n");
+        halt();
     }
-    if (listed > 0) {
-        out("%u game(s) listed from archive.org items, not installed\n", listed);
+    if (!pads_ok) {
+        out("No controller support (SDL), so nothing can be picked\n");
+        halt();
     }
-    for (int i = 0; i < nlocal && !exit_combo(); i++, total++) {
-        installed += install_file(local[i]) ? 1 : 0;
+    out("Catalog: %d game(s). Pick one on the screen; nothing installs until you do.\n", count);
+    debugPrint("\nPress A to see the list.\n");
+    while (wait_press() != SDL_CONTROLLER_BUTTON_A) {
     }
-    if (exit_combo()) {
-        xc_map_free(&map);
-        to_dashboard();
-    }
-    xc_map_free(&map);
-    out("\nDone: %d of %d image(s) installed and verified.\n", installed, total);
-    halt();
+    pick_and_install(games, count); /* returns to the dashboard from there */
 }
