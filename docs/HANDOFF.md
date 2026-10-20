@@ -150,7 +150,7 @@ xiso-cartographer/
 ├── docs/
 │   ├── ARCHITECTURE.md
 │   ├── HANDOFF.md        # this file
-│   ├── formats/          # map.md, catalog.md, journal.md
+│   ├── formats/          # map.md, catalog.md, journal.md, …
 │   ├── adr/              # architecture decision records
 │   └── testing.md        # xemu + hardware test procedures
 ├── docker/               # build images (nxdk toolchain)
@@ -189,7 +189,7 @@ xiso-cartographer/
 | **M5** | **On-box HTTPS (BearSSL, CA bundle, NTP)** | **Install the archive.org Halo test item on hardware; record MB/s (target ≥1); bad certificate and wrong clock both rejected** |
 | M5b | `.zip` support ([ADR 0009](adr/0009-install-from-zip-archives.md); was optional M9b): read the zip with `Range`, Zip64, stored + Deflate members streamed through miniz, checkpoints for resume, and an adaptive spool plus a second pass for files that precede their directory tables | A full-disc Deflate zip installs over HTTPS on hardware, every byte verified by the member's CRC-32; an interrupted install resumes from a checkpoint |
 | M6 | archive.org source (metadata, mapping, hashes; [ADR 0013](adr/0013-archiveorg-source.md)). No PC login helper: tokens go in the credentials file until M8's on-box login | Automatic map from an item; installed files verified; clear error for removed items |
-| M7 | Catalog pipeline | Deterministic rebuild; schema tests; licences reviewed and credited |
+| M7 | Catalog pipeline (Wikidata + Redump, no art; [ADR 0014](adr/0014-catalog-sources-and-format.md), [catalog.md](formats/catalog.md)) | Deterministic rebuild; schema tests; licences reviewed and credited |
 | M8 | UI: browse, search, detail, install, progress, settings; **on-box login** with an on-screen keyboard ([ADR 0010](adr/0010-on-box-login-required-for-beta.md)) | Scripted xemu walkthrough; every error path has a user-visible message; **log in to archive.org on the Xbox with username and password, no PC involved: the token is saved, the password isn't (checked in the credentials file and logs), a login-required item installs, and an expired or revoked session offers "log in again" and then resumes the install** |
 | M9 | Beta | Hardware matrix: revisions, stock and upgraded HDD, 64/128 MB, dashboards; **on a console that has never had a credentials file, log in to archive.org on the Xbox (no PC helper) and install a login-required item** |
 | M10 | (optional) PC helper: `.7z`, aria2/torrents, watched folder | Helper ↔ app end to end |
@@ -336,5 +336,5 @@ xiso images, HTTP responses, JSON metadata and map files all come from outside, 
 2. ~~**Final name and licence**~~: `xiso-cartographer`, MIT ([ADR 0002](./adr/0002-license.md)).
 3. ~~**Test framework choice**~~: Unity ([ADR 0003](./adr/0003-unit-test-framework.md)).
 4. **UI approach:** SDL2 software rendering vs pbkit, and whether to use an immediate-mode UI library (ADR before M8). It must include text entry with an on-screen keyboard for the on-box login ([ADR 0010](./adr/0010-on-box-login-required-for-beta.md)).
-5. **Catalog sources and licences** (before M7).
+5. ~~**Catalog sources and licences**~~: Wikidata (CC0) and Redump (factual fields), no art, pipeline in `tools/catalog/` with the data as release assets ([ADR 0014](./adr/0014-catalog-sources-and-format.md), [`tools/catalog/SOURCES.md`](../tools/catalog/SOURCES.md)).
 6. **Hardware test bench:** which consoles/revisions, HDD sizes and dashboards are available for M0/M5/M9.

@@ -79,7 +79,7 @@ variant    = 1*16( ALPHA / DIGIT / "-" / "_" )   ; case-insensitive, normalised 
 ```
 
 - `title-id` is the 32-bit title ID from the game's XBE certificate, as 8 hex digits (e.g. `4D530004`).
-- `variant` tells apart releases that share a title ID (regions, revisions). The valid variant names for each title come from the catalog (`docs/formats/catalog.md`, written in M7). A key whose title or variant isn't in the catalog is accepted and kept, but the app shows it as "not in catalog".
+- `variant` tells apart releases that share a title ID (regions, revisions). The valid variant names for each title come from the catalog ([catalog.md §4.1](catalog.md#41-variants)). A key whose title or variant isn't in the catalog is accepted and kept, but the app shows it as "not in catalog".
 - `4D530004` (no variant) is the title's **default** entry. It's used for any variant of that title that has no entry of its own.
 
 ### 4.2 URL

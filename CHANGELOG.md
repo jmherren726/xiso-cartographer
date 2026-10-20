@@ -87,6 +87,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Title IDs: `xcat/xbe.h` reads an XBE certificate (docs/formats/xbe.md, fuzzed as `fuzz_xbe`). After verification, the installer reads the installed `default.xbe` and writes `title_id=` and `title=` to the marker (journal.md §7.1, now documented). The console and `xcat-cli install` print them, or why there are none.
 - docs/testing.md has the M6 exit test.
 - **M6 exit test met** on hardware (docs/testing.md): `@archiveorg` listed 137 games from the owner's item, a non-existent item gave "doesn't exist or was removed", and a picked full-disc Deflate zip installed over HTTPS at 2.2 MB/s, matched the listing's size, verified, and recorded its title ID from `default.xbe`; the game launches.
+- Catalog design (M7): ADR 0014 picks the sources (Wikidata, CC0, for games; Redump's factual fields for releases, with title IDs from serials), leaves out box art, and keeps the pipeline in `tools/catalog/` with `catalog.bin` and `CREDITS.txt` as release assets built deterministically from hashed, uncommitted raw inputs. docs/formats/catalog.md specifies `catalog.bin` v1.0 (CRC-checked header, game and release records, a name index for name-keyed map entries, a string table, and every check a reader makes). tools/catalog/SOURCES.md records each source's terms; tools/catalog/README.md the title-ID and variant rules.
 
 ### Changed
 

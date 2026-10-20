@@ -34,7 +34,7 @@ The user picks a game from the **catalog**, the **map** says where the user's im
 | Core (`libxcat`) | `core/` | All parsing and logic. Portable C11, no platform headers. | C standard library only, plus BearSSL from M5 (pinned submodule `third_party/bearssl`, [ADR 0012](adr/0012-tls-trust-time-and-entropy.md)) |
 | Platform | `platform/` | Thin adapters that implement the core's interfaces (§4). `nxdk/` for the Xbox: file source, FATX directory sink, free space, drive mounting, and our lwIP options (`nxdk/lwip/lwipopts.h`: TCP receive window with scaling, receive buffers, SACK; [build-xbox.md](build-xbox.md)) ([`xcat/nxdk.h`](../platform/nxdk/include/xcat/nxdk.h)). `host/` for POSIX/Windows: file source and directory sink, for tests and the CLI. | Core interfaces; nxdk or the host OS |
 | App | `app/` | The XBE: UI, screens, job orchestration. No parsing. Currently (M4) it installs every entry of `E:\xcat\map.txt` over HTTP and every image in `E:\xcat\isos\`, resumably, and verifies them ([build-xbox.md](build-xbox.md#what-the-app-does-m4)). | Core, platform/nxdk |
-| Tools | `tools/` | `xcat-cli` (runs the core on a PC), the fixture generator ([`tools/fixtures/`](../tools/fixtures/README.md), Python), catalog pipeline. | Core, platform/host (the fixture generator is standalone Python) |
+| Tools | `tools/` | `xcat-cli` (runs the core on a PC), the fixture generator ([`tools/fixtures/`](../tools/fixtures/README.md), Python), the catalog pipeline ([`tools/catalog/`](../tools/catalog/README.md), Python, M7). | Core, platform/host (the fixture generator and the catalog pipeline are standalone Python) |
 
 **Rules** (enforced in review):
 
@@ -70,7 +70,7 @@ Status: ✅ exists · 🔜 next milestone · ⏳ later.
 | `zip` | Read zip archives over `Range` (Zip64); stream stored and Deflate members (miniz) into the extractor; checkpoints for resume; files that precede their directory tables go through an adaptive spool on disk, then a second pass over what it dropped; CRC-32 verification ([ADR 0009](adr/0009-install-from-zip-archives.md), [zip.md](formats/zip.md), `xcat/zip.h`) | M5b | ✅ directory reader, image choice and member checks (`xcat-cli zip`); reading stored and Deflate members with checkpoints (miniz tinfl); `xcat-cli install <zip>` and the console (stored members with Range, Deflate members from a stream, resumed at the last checkpoint); map URLs into a zip are refused. M5b exit test met on hardware, power cut and resume included ([testing.md](testing.md)) |
 | `archiveorg` | Reads an item's listing from the metadata API with a strict, bounded JSON parser (`json.c`, internal) and chooses its image files, each with a name, download URL, size and hashes for a map entry ([archiveorg.md](formats/archiveorg.md), [ADR 0013](adr/0013-archiveorg-source.md), `xcat/archiveorg.h`) | M6 | ✅ listing reader; `@archiveorg` in the map loader, `xcat-cli map`; the console's catalog list; installs checked against the listing's size (and hashes for `.iso`/`.xiso`). M6 exit test met on hardware ([testing.md](testing.md)) |
 | `xbe` | Reads the certificate of an installed `default.xbe`: title ID and name, recorded in the marker ([xbe.md](formats/xbe.md), `xcat/xbe.h`) | M6 | ✅ |
-| `catalog` | Load and search `catalog.bin` (versioned binary format) | M7 | ⏳ |
+| `catalog` | Load, check and search `catalog.bin`: games, releases by title ID and variant, and releases by Redump name for name-keyed map entries ([catalog.md](formats/catalog.md), [ADR 0014](adr/0014-catalog-sources-and-format.md)) | M7 | 🔜 format specified |
 
 Public headers: `core/include/xcat/<module>.h`. Symbols: `xc_` prefix. Errors: functions return `xc_err` and use out-params for results; every error maps to a user-readable message in the app.
 
@@ -120,7 +120,7 @@ On resume, journaled files that are still on disk with their size are skipped, a
 | TLS buffer | ~33 KB per connection | BearSSL bidirectional buffer; at most 2 connections |
 | CA trust anchors | ~100–150 KB | The built-in Mozilla set is in the XBE image; an override file (≤ 1 MiB, ≤ 512 certificates) is decoded once at startup |
 | Directory list | Proportional to file count | Bounded by an entry-count limit in `xdvdfs` |
-| Catalog | < 2 MB text + indices | Thumbnails loaded on demand from the HDD |
+| Catalog | < 1 MB (`catalog.bin`, at most 8 MiB) | Loaded whole and checked once ([catalog.md §7](formats/catalog.md#7-reading)); no art in M7 ([ADR 0014](adr/0014-catalog-sources-and-format.md)) |
 
 Peak memory during an install is logged on the Xbox and recorded in [testing.md](testing.md).
 
