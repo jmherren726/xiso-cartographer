@@ -156,6 +156,19 @@ static bool parse_key(const char *key, uint32_t *title_id, char *variant)
     return true;
 }
 
+/* §4.2: a path segment ending in .zip with more path after it ("…/game.zip/game.iso"). */
+static bool inside_zip(const char *path)
+{
+    size_t len = strcspn(path, "?");
+    for (size_t i = 0; i + 5 <= len; i++) {
+        if (path[i] == '.' && (path[i + 1] | 0x20) == 'z' && (path[i + 2] | 0x20) == 'i' &&
+            (path[i + 3] | 0x20) == 'p' && path[i + 4] == '/' && i + 5 < len) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /* §4.2: why a URL is invalid, without echoing it (it may hold user:pass, §4.2). */
 static const char *url_problem(loader *L, const char *url)
 {
@@ -169,6 +182,10 @@ static const char *url_problem(loader *L, const char *url)
     }
     if (strchr(url, '#') != NULL) {
         return "URL must not contain '#' (write %23)";
+    }
+    if (inside_zip(auth + auth_len)) {
+        return "URL points to a file inside a zip, which can't be resumed; use the URL of the "
+               ".zip itself (ADR 0009)";
     }
     if (xc_url_parse(url, strlen(url), &L->scratch) != XC_OK) {
         return "invalid URL";

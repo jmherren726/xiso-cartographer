@@ -65,6 +65,10 @@ void xc_zip_listing_free(xc_zip_listing *listing);
 /* True if the entry's name ends in .iso or .xiso and it isn't a directory (zip.md §5.1). */
 bool xc_zip_is_image_name(const char *name);
 
+/* True if a path or URL names a zip: it ends in .zip (any case), ignoring a URL's query and
+   fragment. Installers then install the zip's image (zip.md §1). */
+bool xc_zip_is_zip_name(const char *path_or_url);
+
 /* The one image entry (zip.md §5); XC_ERR_ZIP_MEMBER if there are none or several. */
 xc_err xc_zip_pick_image(const xc_zip_listing *listing, size_t *index);
 

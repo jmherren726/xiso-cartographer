@@ -187,7 +187,10 @@ typedef struct xc_nx_entropy_stats {
 } xc_nx_entropy_stats;
 xc_err xc_nx_entropy_gather(xc_entropy_pool *pool, xc_nx_entropy_stats *st);
 
-/* File access for xc_install (xcat/install.h) on FATX, with flushed, durable writes. */
+/* File access for xc_install (xcat/install.h) on FATX, with flushed, durable writes, and the
+   spool files of Deflate zip installs. */
 void xc_nx_install_io(xc_install_io *io);
+/* Closes the spool file the io keeps open (after an install that failed, say). */
+void xc_nx_spool_close(void);
 
 #endif /* XCAT_NXDK_H */

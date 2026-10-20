@@ -163,6 +163,26 @@ Send `E:\xcat\net-test.log`. Record in the results log: the cipher speeds, the r
 
 Steps 2–4 find the game from step 1 already installed, so each would go to a numbered folder; they stop before creating one. Send `E:\xcat\install.log`. Record the MB/s, the hashes and whether they matched, the time source, the suite, and the three rejections in the results log (without the item's name, [ADR 0006](adr/0006-no-links-no-bypass.md)).
 
+## M5b: exit test (install from a zip)
+
+**Exit test** ([HANDOFF.md §4.1](HANDOFF.md#41-roadmap)): a full-disc Deflate zip installs over HTTPS on hardware, every byte verified by the member's CRC-32, and an interrupted install resumes from a checkpoint. The main app (`app/bin/default.xbe` from the CI artifact) does it: map entries ending in `.zip` ([build-xbox.md](build-xbox.md#zips)), Deflate decompressed as it streams in, with the spool, the second pass and the saved states of [stream-install.md](formats/stream-install.md).
+
+**Before you start:** a full-disc Deflate zip you have access to on archive.org (like the one `xcat-cli zip` showed: Zip64, Deflate, one `.iso`), with its login in `E:\Apps\xcat\credentials` if it needs one. Free space on E: of at least the game's files plus a few GB: the spool uses what's free above 256 MiB, and more space means less read again. `xcat-cli layout` on the PC (if you have the ISO) tells you the game's size. Make sure `E:\Apps\xcat\cacert.pem` and `E:\Apps\xcat\ntp.txt` don't exist and `E:\xcat\isos\` is empty. Write `map.txt` with the zip's download URL (the `.zip` itself, not a file inside it) and FTP it to `E:\xcat\`:
+
+```
+# xcat-map v1
+00000001 = https://archive.org/download/<item>/<file>.zip
+```
+
+| Step | Where | How | Pass |
+|---|---|---|---|
+| 1 | Hardware, LAN (optional rehearsal) | On the PC: `python3 tools/fixtures/fixtures.py --out C:\xcat-fixtures --only late`, `python3 tools/fixtures/zipgen.py --fixtures C:\xcat-fixtures late`, then serve the folder with `rangeserver.py` as for M4 and put `00000002 = http://<pc-ip>:8080/late-deflate.zip` in a test `map.txt`. `late` has its directory tables after its files, so every file goes through the spool on FATX. | "OK: 9 files … verified", "from the zip: late.iso, Deflate" and "1 pass, 0 MiB read again, 8 file(s) from a … spool". No `.xcat-spool-*` or `.xcat-state-*` files are left in `E:\Games\late`. Delete that folder afterwards. |
+| 2 | Hardware, internet | Launch the app with the archive.org `map.txt`. It reads the zip's directory ("reading the directory tables"), then "writing files" with MiB of the image, file count and MB/s every 5 s. Once it's well past the first few hundred MiB, **switch the console off at the power button**. | — |
+| 3 | Hardware, internet | Switch it on and launch the app again. The progress must pick up at most 64 MiB before where it stopped, not at 0. Let it finish. | "OK: … verified (resumed)", "from the zip: <file>.iso, Deflate, …", and "continued N MiB into the image" with N > 0. A damaged byte anywhere would fail the install with "The image in the zip failed its CRC-32 check", so "verified" means every byte matched. Launch the game from the dashboard. |
+| 4 | Hardware | **A link into the zip:** change the entry to `https://archive.org/download/<item>/<file>.zip/<file>.iso` and launch. | When the map loads: "error: URL points to a file inside a zip, which can't be resumed; use the URL of the .zip itself (ADR 0009)", then "Map: 0 entries". Put the `.zip` URL back afterwards. |
+
+Send `E:\xcat\install.log`. Record in the results log (without the item's name, [ADR 0006](adr/0006-no-links-no-bypass.md)): the zip's size and compression, the MB/s of writing and of the read-back, the number of passes, the MiB read again and the spool's largest size, where the resume continued, the free space you started with, and whether the game launches. If a second pass ran, also note how long pass 1 took; that's the cost ADR 0009 amendment 1 asks to show after pass 1.
+
 ## FATX probe (M2)
 
 No authoritative list of FATX naming rules exists, and a game's files can't be renamed on install, because the game opens them by name. So the rules in `core/src/fatx.c` ([fatx-names.md](formats/fatx-names.md)) come from the console's own kernel, measured by `app/fatx-probe`.
