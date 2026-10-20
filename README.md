@@ -6,14 +6,22 @@ Homebrew game catalog and installer for the modded original Xbox. Browse the ful
 
 ## Status
 
-**Pre-alpha. Nothing runs yet.** The repository is being scaffolded. See the [roadmap](docs/HANDOFF.md#41-roadmap) for the milestones and [CHANGELOG.md](CHANGELOG.md) for what has landed.
+**Pre-alpha, installing real games on hardware.** The install engine is done and has been tested on a real console. The catalog UI isn't built yet: for now the app shows a plain text list. Milestones M0–M5b are met, and M6 is waiting for its hardware exit test. What works on the Xbox today:
+
+- **Installs from your map, over HTTP or HTTPS:** TLS 1.2 with certificate checks against built-in roots, the clock set from NTP, and archive.org logins from a [credentials file](docs/formats/credentials.md). Files are stream-extracted straight into `E:\Games\<title>`, with no temporary copy, so full-disc images of 7+ GB install too.
+- **Images and zips:** trimmed xisos, full-disc `.iso` dumps, and `.zip` files holding one image, stored or Deflate (including Zip64). Deflate zips are decompressed as they download.
+- **Resumable and verified:** a pulled cable is retried, and a power cut resumes where it stopped, even in the middle of a Deflate zip. Every file is read back and checked against its CRC-32, and trimmed xisos against their MD5 and SHA-1.
+- **archive.org items:** `@archiveorg <item>` in the map lists every game the item holds, with the size and hashes it publishes.
+- **You choose:** the map is a catalog. The app lists it, and installs only the game you pick with A.
+
+Not there yet: the catalog with metadata and cover art (M7), the real UI and logging in on the console (M8). See the [roadmap](docs/HANDOFF.md#41-roadmap) for the milestones, [docs/testing.md](docs/testing.md#results-log) for what was tested on hardware, and [CHANGELOG.md](CHANGELOG.md) for what has landed. To try it, see [What the app does](docs/build-xbox.md#what-the-app-does-m6).
 
 ## What it will do
 
 - Run on a soft- or hard-modded Xbox (64 or 128 MB), launched from common dashboards such as XBMC4Gamers or UnleashX.
 - Show a catalog of original Xbox titles (title, region, genre, description, cover art, size) built from openly licensed metadata.
 - Read a **map** that you write, which says where each of your disc images lives: an archive.org item you have access to, or a plain HTTP server on your LAN.
-- Download an uncompressed disc image (a trimmed xiso or a full-disc `.iso` dump) and **stream-extract** it straight into `<drive>:\Games\`, with no temporary copy and no PC. Installs are resumable and verified by hash when the source provides one.
+- Download a disc image (a trimmed xiso, a full-disc `.iso` dump, or a `.zip` holding one) and **stream-extract** it straight into `<drive>:\Games\`, with no temporary copy and no PC. Installs are resumable and verified by hash when the source provides one.
 
 ## Legal stance
 
@@ -26,7 +34,7 @@ xiso-cartographer is a tool for installing **backups you are entitled to use**.
 
 ## Building
 
-There are two builds: the portable core library with its unit tests (CMake, on a PC), and the Xbox app (nxdk, in Docker). Right now the app is a "hello" XBE that proves the toolchain.
+There are two builds: the portable core library with its unit tests (CMake, on a PC), and the Xbox app (nxdk, in Docker). CI builds both on every pull request, and its `xiso-cartographer-xbe-<commit>` artifact holds the app.
 
 ```sh
 git clone --recursive https://github.com/jmherren726/xiso-cartographer.git
@@ -67,7 +75,10 @@ See [docs/build-xbox.md](docs/build-xbox.md) for building without `make`, the Wi
 |---|---|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Layers, modules, interfaces, install flow, memory budget |
 | [docs/formats/map.md](docs/formats/map.md) | The map file format (where your images are) |
+| [docs/formats/archiveorg.md](docs/formats/archiveorg.md) | `@archiveorg`: turning an archive.org item's listing into map entries |
 | [docs/formats/credentials.md](docs/formats/credentials.md) | Logins for sources that need them: host-scoped tokens, kept out of maps |
+| [docs/formats/zip.md](docs/formats/zip.md), [stream-install.md](docs/formats/stream-install.md) | Installing from zips, and from Deflate streams that can only be read front to back |
+| [docs/formats/http.md](docs/formats/http.md) | The HTTP client: Range requests, redirects, retries and resume |
 | [docs/formats/fatx-names.md](docs/formats/fatx-names.md) | What the Xbox hard disk can store, measured on the console, and when an install is refused |
 | [docs/formats/journal.md](docs/formats/journal.md) | The install journal that lets an interrupted install resume |
 | [docs/HANDOFF.md](docs/HANDOFF.md) | Goals, design decisions, roadmap and standards |

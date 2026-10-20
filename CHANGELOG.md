@@ -89,6 +89,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- The console's game list draws reliably. nxdk's debug console fits 63 characters per line and clears the whole screen when text passes its last row, so pages with long names wrapped, overflowed and showed only one item, a few, or none. Every line of the list is now cut to fit one row (a cut name ends in `~`), the size sits in its own column before the name, and the highlighted name is shown in full under the list. Found on the first hardware run of the list.
+- README status: what works on the Xbox today, instead of "nothing runs yet".
 - Roadmap: zip support moves from optional M9b to M5b, right after HTTPS (ADR 0009 accepted).
 - Roadmap: logging in to archive.org on the Xbox, with username and password and no PC helper, is now part of the M8 and M9 (beta) exit tests (ADR 0010, amending ADR 0007). The password is used once and never stored; the app may write the login's token to the credentials file. `tools/xcat-login` becomes optional.
 - Unity test framework updated to v2.7.0.

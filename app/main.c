@@ -852,15 +852,39 @@ static int list_local(char names[MAX_LOCAL][XC_NX_PATH_MAX])
 
 /* --- picking what to install: the map is a catalog, nothing installs unasked ---------- */
 
-#define LIST_ROWS 18 /* of the debug console's 25 */
-#define LABEL_MAX 80
+/*
+ * nxdk's debug console has 24 rows of 63 characters (9 x 17 px cells in 590 x 405 px). A
+ * longer line wraps to a second row, and text past the last row clears the whole screen and
+ * carries on at the top, so a page that overflows shows only its tail. Every line of the list
+ * screen is therefore cut to SCREEN_COLS, and the screen has 2 + LIST_ROWS + 3 = 23 lines.
+ */
+#define SCREEN_COLS 62
+#define LIST_ROWS 18
+#define LABEL_MAX 128
 
 typedef struct game {
-    char label[LABEL_MAX];
+    char name[LABEL_MAX];
+    char tag[24];              /* after the name: the title ID, or where it is */
+    uint64_t size;             /* from the listing; 0 if unknown */
     const xc_map_entry *entry; /* a map entry, or */
     const char *path;          /* a file in E:\xcat\isos */
     int result;                /* 0 not tried this run, 1 installed, -1 failed */
 } game;
+
+/* One screen line of at most SCREEN_COLS characters; a cut one ends in '~'. */
+__attribute__((format(printf, 1, 2))) static void screen_line(const char *fmt, ...)
+{
+    char line[256];
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(line, sizeof line, fmt, ap);
+    va_end(ap);
+    if (n > SCREEN_COLS) {
+        line[SCREEN_COLS - 1] = '~';
+        line[SCREEN_COLS] = '\0';
+    }
+    debugPrint("%s\n", line);
+}
 
 /* One line per map entry and local file, in that order. */
 static game *catalog(const xc_map *map, char local[][XC_NX_PATH_MAX], int nlocal, int *count)
@@ -876,21 +900,19 @@ static game *catalog(const xc_map *map, char local[][XC_NX_PATH_MAX], int nlocal
         g->entry = e;
         if (e->name != NULL) {
             /* From an archive.org listing: its name and size. */
-            snprintf(g->label, sizeof g->label, "%.60s  %u MiB", e->name,
-                     (unsigned)(e->size >> 20U));
+            snprintf(g->name, sizeof g->name, "%s", e->name);
+            g->size = e->size;
         } else {
-            char title[LABEL_MAX];
-            title_from(e->url, title, sizeof title);
-            snprintf(g->label, sizeof g->label, "%.56s  [%08lX%s%s]", title,
-                     (unsigned long)e->title_id, e->variant[0] != '\0' ? "@" : "", e->variant);
+            title_from(e->url, g->name, sizeof g->name);
+            snprintf(g->tag, sizeof g->tag, "[%08lX%s%s]", (unsigned long)e->title_id,
+                     e->variant[0] != '\0' ? "@" : "", e->variant);
         }
     }
     for (int i = 0; i < nlocal; i++) {
         game *g = &games[map->entry_count + (size_t)i];
-        char title[LABEL_MAX];
-        title_from(local[i], title, sizeof title);
+        title_from(local[i], g->name, sizeof g->name);
         g->path = local[i];
-        snprintf(g->label, sizeof g->label, "%.60s  (on the HDD)", title);
+        snprintf(g->tag, sizeof g->tag, "(on the HDD)");
     }
     *count = (int)n;
     return games;
@@ -899,15 +921,28 @@ static game *catalog(const xc_map *map, char local[][XC_NX_PATH_MAX], int nlocal
 static void draw_list(const game *games, int count, int cur, int top)
 {
     debugClearScreen();
-    debugPrint("xiso-cartographer %s - pick a game to install\n", xc_version_string());
-    debugPrint("D-pad: move, left/right: page   A: install   Back: dashboard\n\n");
-    for (int row = 0; row < LIST_ROWS && top + row < count; row++) {
+    screen_line("Pick a game (%d of %d)   ok: installed  !!: failed", cur + 1, count);
+    screen_line("D-pad: move  Left/Right: page  A: install  Back: quit");
+    for (int row = 0; row < LIST_ROWS; row++) {
+        if (top + row >= count) {
+            screen_line(" ");
+            continue;
+        }
         const game *g = &games[top + row];
         const char *mark = g->result > 0 ? "ok" : g->result < 0 ? "!!" : "  ";
-        debugPrint("%s %s %.66s\n", top + row == cur ? ">" : " ", mark, g->label);
+        char size[16] = "";
+        if (g->size > 0) {
+            snprintf(size, sizeof size, "%u MiB", (unsigned)(g->size >> 20U));
+        }
+        screen_line("%s%s %8s  %s%s%s", top + row == cur ? ">" : " ", mark, size, g->name,
+                    g->tag[0] != '\0' ? "  " : "", g->tag);
     }
-    debugPrint("\n%d of %d   (ok: installed, !!: failed; see E:\\xcat\\install.log)\n", cur + 1,
-               count);
+    /* The highlighted name in full, as the list may have cut it. */
+    const game *g = &games[cur];
+    size_t len = strlen(g->name);
+    screen_line(" ");
+    screen_line("%.*s", SCREEN_COLS, g->name);
+    screen_line("%s", len > SCREEN_COLS ? g->name + SCREEN_COLS : " ");
 }
 
 /* Waits for a button press (the exit shortcut still works). */
@@ -951,7 +986,7 @@ static void pick_and_install(game *games, int count)
         } else if (b == SDL_CONTROLLER_BUTTON_A) {
             game *g = &games[cur];
             debugClearScreen();
-            out("\nPicked: %s\n", g->label);
+            out("\nPicked: %s%s%s\n", g->name, g->tag[0] != '\0' ? " " : "", g->tag);
             bool ok = g->entry != NULL ? install_url(g->entry) : install_file(g->path);
             g->result = ok ? 1 : -1;
             out("%s\n", ok ? "Installed and verified." : "Not installed.");
