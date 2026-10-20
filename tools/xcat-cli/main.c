@@ -9,7 +9,7 @@
  *   xcat-cli map [options] <map-file>   check a map file and list its entries (docs/formats/map.md)
  *   xcat-cli install [options] <url|image> <games-dir> [title]
  *                                       install like the console: resumable, verified
- * (xcat/install.h)
+ * (xcat/install.h); a name ending in .zip installs the zip's image (docs/formats/zip.md)
  *   xcat-cli ntp [options] [server]     ask a time server like the console (docs/formats/sntp.md)
  *   xcat-cli zip [options] <zip|url>    list a zip and check its image (docs/formats/zip.md)
  *
@@ -57,7 +57,8 @@ static int usage(void)
         "net options: --timeout <ms>, --attempts <n>, --credentials <file>,\n"
         "             --ca-file <pem> (trust these CAs instead of the built-in ones),\n"
         "             --now <unix-seconds> (for tests: the time certificates are checked at)\n"
-        "install options: --md5 <hex>, --sha1 <hex> (the image's expected hashes)\n",
+        "install options: --md5 <hex>, --sha1 <hex> (the image's expected hashes)\n"
+        "install: a <url|image> ending in .zip installs the zip's image\n",
         xc_version_string());
     return 2;
 }
@@ -185,6 +186,9 @@ static void title_from_path(const char *path, char *out, size_t size)
         }
     }
     size_t len = strlen(base);
+    if (ends_with_ci(base, len, ".zip")) {
+        len -= 4;
+    }
     if (ends_with_ci(base, len, ".iso")) {
         len -= 4;
     }
@@ -953,6 +957,14 @@ static int install_fail(const xc_install_result *r, const http_env *env, const c
         (void)fprintf(stderr, "xcat-cli: %s: needs %.1f MiB, %.1f MiB free\n", r->folder,
                       mib(r->space_needed), mib(r->space_free));
         return 1;
+    case XC_ERR_ZIP_UNSUPPORTED:
+        if (r->zip_member[0] != '\0') {
+            const char *m = xc_zip_method_name(r->zip_method);
+            (void)fprintf(stderr, "xcat-cli: %s: %s in the zip is %s (method %u)\n", what,
+                          r->zip_member, m != NULL ? m : "compressed with an unknown method",
+                          (unsigned)r->zip_method);
+        }
+        break;
     case XC_ERR_VERIFY:
         (void)fprintf(stderr,
                       "xcat-cli: %s: %s; it was removed, so running the install again "
@@ -988,6 +1000,13 @@ static void print_image_hash(const xc_install_result *r)
     (void)printf("image md5 %s sha1 %s (%s%s)\n", md5, sha1,
                  r->hash == XC_INSTALL_HASH_MATCHED ? "matches what was expected" : "computed",
                  r->hash_restarted ? "; hashed from the start again" : "");
+}
+
+/* "*.zip", ignoring a URL's query and fragment: installs from the zip's image (zip.md). */
+static bool is_zip_name(const char *s)
+{
+    size_t len = is_url(s) ? strcspn(s, "?#") : strlen(s);
+    return ends_with_ci(s, len, ".zip");
 }
 
 static int cmd_install(int argc, char **argv)
@@ -1058,6 +1077,7 @@ static int cmd_install(int argc, char **argv)
     req.checkpoint_bytes = (uint32_t)o.checkpoint;
     req.progress = install_progress;
     req.progress_ctx = &ui;
+    req.zip = is_zip_name(image);
     req.expect_md5 = o.has_md5 ? o.md5 : NULL;
     req.expect_sha1 = o.has_sha1 ? o.sha1 : NULL;
     static xc_install_result r;
@@ -1078,6 +1098,18 @@ static int cmd_install(int argc, char **argv)
         if (r.files_continued > 0) {
             (void)printf("%zu file%s continued from a checkpoint (%" PRIu64 " bytes kept)\n",
                          r.files_continued, r.files_continued == 1 ? "" : "s", r.bytes_continued);
+        }
+        if (req.zip) {
+            (void)printf("from the zip: %s, %s", r.zip_member,
+                         r.zip_method == 0 ? "stored" : "Deflate");
+            if (r.zip_method != 0) {
+                (void)printf(", %u pass%s, %.1f MiB read again, %zu file%s from a %.1f MiB "
+                             "spool",
+                             r.passes, r.passes == 1 ? "" : "es", mib(r.reread_bytes),
+                             r.files_from_spool, r.files_from_spool == 1 ? "" : "s",
+                             mib(r.spool_peak));
+            }
+            (void)printf("\n");
         }
         print_image_hash(&r);
     } else {

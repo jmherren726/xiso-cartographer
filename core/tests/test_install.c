@@ -9,6 +9,7 @@
 #include "xcat/host.h"
 #include "xcat/install.h"
 #include "xcat/journal.h"
+#include "xcat/zip.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -31,6 +32,7 @@ typedef struct memfs {
     node nodes[MAX_NODES];
     size_t count;
     uint64_t free_bytes;
+    bool track_usage;           /* free space goes down as files grow */
     int appends_before_failure; /* < 0: never fail */
     node *open;                 /* the sink's open file */
     char sink_root[XC_INSTALL_MAX_PATH];
@@ -154,7 +156,47 @@ static xc_err f_free(void *ctx, const char *dir, uint64_t *bytes)
 {
     (void)ctx;
     (void)dir;
-    *bytes = fs.free_bytes;
+    uint64_t used = 0;
+    for (size_t i = 0; fs.track_usage && i < fs.count; i++) {
+        used += fs.nodes[i].len;
+    }
+    *bytes = used < fs.free_bytes ? fs.free_bytes - used : 0;
+    return XC_OK;
+}
+
+static int spool_files_now; /* how many spool files exist */
+static int spool_files_peak;
+
+static xc_err f_spool_append(void *ctx, const char *path, const void *data, size_t len)
+{
+    (void)ctx;
+    node *n = find(path);
+    if (n == NULL) {
+        n = create(path, false);
+        spool_files_now++;
+        spool_files_peak = spool_files_now > spool_files_peak ? spool_files_now : spool_files_peak;
+    }
+    add_bytes(n, data, len);
+    return XC_OK;
+}
+
+static xc_err f_spool_read(void *ctx, const char *path, uint64_t pos, void *out, size_t len)
+{
+    (void)ctx;
+    node *n = find(path);
+    TEST_ASSERT_NOT_NULL(n);
+    TEST_ASSERT_TRUE(pos <= n->len && len <= n->len - pos);
+    memcpy(out, n->data + pos, len);
+    return XC_OK;
+}
+
+static xc_err f_spool_remove(void *ctx, const char *path)
+{
+    (void)ctx;
+    if (find(path) != NULL) {
+        spool_files_now--;
+    }
+    drop(path);
     return XC_OK;
 }
 
@@ -280,8 +322,10 @@ static void f_close_file(void *ctx, void *handle)
 }
 
 static const xc_install_io memio = {
-    '/',    f_exists,    f_size,       f_read_all,  f_append,     f_write_all, f_remove,
-    f_free, f_open_sink, f_close_sink, f_open_file, f_close_file, NULL,
+    '/',         f_exists,     f_size,         f_read_all,   f_append,
+    f_write_all, f_remove,     f_free,         f_open_sink,  f_close_sink,
+    f_open_file, f_close_file, f_spool_append, f_spool_read, f_spool_remove,
+    NULL,
 };
 
 /* --- the image and the request -------------------------------------------------------- */
@@ -319,6 +363,8 @@ void setUp(void)
     memset(&fs, 0, sizeof fs);
     fs.free_bytes = UINT64_MAX;
     fs.appends_before_failure = -1;
+    spool_files_now = 0;
+    spool_files_peak = 0;
     cancel_after = -1;
     cancel_in = NULL;
     syncs = 0;
@@ -487,7 +533,7 @@ static void test_resume_inside_a_file(void)
     size_t parts = count_lines(journal, "part ", "media/intro.xmv");
     TEST_ASSERT_TRUE(parts >= 1);
     TEST_ASSERT_NOT_NULL(strstr((char *)find(journal)->data, "part 16384 "));
-    TEST_ASSERT_NOT_NULL(strstr((char *)find(journal)->data, "# xcat-journal v1.2 *"));
+    TEST_ASSERT_NOT_NULL(strstr((char *)find(journal)->data, "# xcat-journal v1.3 *"));
     cancel_in = NULL;
     TEST_ASSERT_EQUAL_INT(XC_OK, xc_install(&req, &res));
     TEST_ASSERT_TRUE(res.resumed);
@@ -627,6 +673,154 @@ static void test_invalid_arguments(void)
     TEST_ASSERT_EQUAL_INT(XC_ERR_INVALID_ARG, xc_install(NULL, &res));
 }
 
+/* --- zips (docs/formats/zip.md, stream-install.md) ------------------------------------- */
+
+static xc_host_file zip_file;
+static xc_source zip_src;
+static bool zip_open;
+
+/* Points the request at fixtures_dir/<name>.zip. */
+static void use_zip(const char *name)
+{
+    char path[1024];
+    if (zip_open) {
+        xc_host_file_close(&zip_file);
+    }
+    (void)snprintf(path, sizeof path, "%s/%s.zip", fixtures_dir, name);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(XC_OK, xc_host_file_open(&zip_src, &zip_file, path), path);
+    zip_open = true;
+    req.src = &zip_src;
+    req.zip = true;
+    req.source_name = name;
+}
+
+static void expect_finished(void)
+{
+    TEST_ASSERT_NOT_NULL(find("E:/Games/Small Game/.xcat-installed"));
+    TEST_ASSERT_NULL(find("E:/Games/Small Game/.xcat-journal"));
+    TEST_ASSERT_EQUAL_INT(0, spool_files_now);
+    TEST_ASSERT_EQUAL_size_t(res.file_count + 1, count_prefix("E:/Games/Small Game/"));
+}
+
+static void test_zip_stored_member(void)
+{
+    use_zip("small-stored");
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_install(&req, &res));
+    TEST_ASSERT_EQUAL_UINT16(XC_ZIP_STORED, res.zip_method);
+    TEST_ASSERT_EQUAL_STRING("small.iso", res.zip_member);
+    TEST_ASSERT_EQUAL_UINT(0, res.passes); /* read with Range, like a bare image */
+    TEST_ASSERT_EQUAL_INT(XC_INSTALL_HASH_COMPUTED, res.hash);
+    expect_finished();
+}
+
+static void test_zip_deflate_tables_first(void)
+{
+    use_zip("small-deflate");
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_install(&req, &res));
+    TEST_ASSERT_EQUAL_UINT16(XC_ZIP_DEFLATE, res.zip_method);
+    TEST_ASSERT_EQUAL_UINT(1, res.passes);
+    TEST_ASSERT_EQUAL_size_t(0, res.files_from_spool);
+    TEST_ASSERT_EQUAL_size_t(res.file_count, res.files_written);
+    TEST_ASSERT_EQUAL_INT(XC_INSTALL_HASH_NONE, res.hash);
+    expect_finished();
+}
+
+static void test_zip_deflate_late_tables(void)
+{
+    use_zip("late-deflate");
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_install(&req, &res));
+    TEST_ASSERT_EQUAL_UINT(1, res.passes);
+    TEST_ASSERT_TRUE(res.files_from_spool > 0);
+    TEST_ASSERT_TRUE(res.spool_peak > 0);
+    TEST_ASSERT_TRUE(spool_files_peak > 0);
+    expect_finished();
+}
+
+static void test_zip_tight_space_second_pass(void)
+{
+    use_zip("late-deflate");
+    req.cluster_size = 0;
+    req.checkpoint_bytes = 65536; /* spool chunks and zip checkpoints every 64 KiB */
+    req.spool_reserve = 65536;
+    fs.track_usage = true;
+    fs.free_bytes = 197333U + 65536U + 262144U; /* the files, the reserve, 256 KiB to spare */
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_install(&req, &res));
+    TEST_ASSERT_TRUE(res.passes >= 2);
+    TEST_ASSERT_TRUE(res.reread_bytes > 0);
+    expect_finished();
+}
+
+static void test_zip_cancel_then_resume(void)
+{
+    use_zip("small-deflate");
+    cancel_after = 2;
+    TEST_ASSERT_EQUAL_INT(XC_ERR_CANCELLED, xc_install(&req, &res));
+    node *j = find("E:/Games/Small Game/.xcat-journal");
+    TEST_ASSERT_NOT_NULL(j);
+    TEST_ASSERT_NOT_NULL(strstr((const char *)j->data, "zip 786432 "));
+    size_t first = res.files_written;
+    TEST_ASSERT_TRUE(first > 0 && first < res.file_count);
+    cancel_after = -1;
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_install(&req, &res));
+    TEST_ASSERT_TRUE(res.resumed);
+    TEST_ASSERT_EQUAL_size_t(first, res.files_skipped);
+    TEST_ASSERT_EQUAL_size_t(res.file_count, res.files_skipped + res.files_written);
+    expect_finished();
+}
+
+static void test_zip_other_member_is_another_image(void)
+{
+    use_zip("small-deflate");
+    cancel_after = 2;
+    TEST_ASSERT_EQUAL_INT(XC_ERR_CANCELLED, xc_install(&req, &res));
+    cancel_after = -1;
+    use_zip("late-deflate"); /* same files, different member: the journal doesn't match */
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_install(&req, &res));
+    TEST_ASSERT_FALSE(res.resumed);
+    TEST_ASSERT_EQUAL_STRING("E:/Games/Small Game (2)", res.folder);
+    TEST_ASSERT_NOT_NULL(find("E:/Games/Small Game/.xcat-journal"));
+}
+
+static void test_zip_without_spool_io(void)
+{
+    static xc_install_io no_spool;
+    no_spool = memio;
+    no_spool.spool_append = NULL;
+    use_zip("small-deflate");
+    req.io = &no_spool;
+    TEST_ASSERT_EQUAL_INT(XC_ERR_UNSUPPORTED, xc_install(&req, &res));
+}
+
+static void test_zip_damaged_member(void)
+{
+    /* a copy of the zip with one byte of the compressed image changed */
+    char path[1024];
+    (void)snprintf(path, sizeof path, "%s/small-deflate.zip", fixtures_dir);
+    xc_host_file hf = {NULL};
+    xc_source src;
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_host_file_open(&src, &hf, path));
+    size_t len = (size_t)src.size;
+    uint8_t *copy = malloc(len);
+    TEST_ASSERT_NOT_NULL(copy);
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_source_read(&src, 0, copy, len));
+    xc_host_file_close(&hf);
+    copy[len / 2] ^= 0x10U;
+    xc_mem_source mem;
+    xc_source_memory(&zip_src, &mem, copy, len);
+    req.src = &zip_src;
+    req.zip = true;
+    xc_err err = xc_install(&req, &res);
+    TEST_ASSERT_TRUE(err == XC_ERR_ZIP_CRC || err == XC_ERR_CORRUPT);
+    TEST_ASSERT_NULL(find("E:/Games/Small Game/.xcat-installed"));
+    free(copy);
+}
+
+static void test_zip_not_a_zip(void)
+{
+    req.zip = true; /* small.iso is no zip */
+    TEST_ASSERT_EQUAL_INT(XC_ERR_NOT_ZIP, xc_install(&req, &res));
+}
+
 int main(int argc, char **argv)
 {
     if (argc > 1) {
@@ -656,7 +850,19 @@ int main(int argc, char **argv)
     RUN_TEST(test_hash_restarts_when_needed);
     RUN_TEST(test_hash_turned_off);
     RUN_TEST(test_invalid_arguments);
+    RUN_TEST(test_zip_stored_member);
+    RUN_TEST(test_zip_deflate_tables_first);
+    RUN_TEST(test_zip_deflate_late_tables);
+    RUN_TEST(test_zip_tight_space_second_pass);
+    RUN_TEST(test_zip_cancel_then_resume);
+    RUN_TEST(test_zip_other_member_is_another_image);
+    RUN_TEST(test_zip_without_spool_io);
+    RUN_TEST(test_zip_damaged_member);
+    RUN_TEST(test_zip_not_a_zip);
     int rc = UNITY_END();
+    if (zip_open) {
+        xc_host_file_close(&zip_file);
+    }
     setUp(); /* frees the file system */
     xc_host_file_close(&image_file);
     return rc;

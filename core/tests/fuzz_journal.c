@@ -9,8 +9,9 @@
  *
  * Checked after each read; a violation aborts: an invalid journal reports no done
  * files; a valid one only marks files of the listing, at most once each, and
- * matches the image (§4). Seeds are in core/tests/fuzz-seeds/journal/ (written
- * without CRCs, like the second form). Built like fuzz_http.c.
+ * matches the image (§4). Each is also read as a Deflate zip journal (§6.8): a valid one
+ * has its done paths sorted, unique and findable. Seeds are in core/tests/fuzz-seeds/journal/
+ * (written without CRCs, like the second form). Built like fuzz_http.c.
  */
 #include <stdint.h>
 #include <stdlib.h>
@@ -58,6 +59,24 @@ static void read_and_check(const char *text, size_t len, const xc_journal_id *im
               (st.hash_offset % XC_HASH_BLOCK == 0 && st.hash_offset <= image->image_size));
     }
     xc_journal_state_free(&st);
+
+    /* §6.8 (v1.3): the same text as a Deflate zip member's journal */
+    xc_journal_id zip;
+    xc_journal_make_zip_id(&zip, 786432, 0x2862EC8CU, 199506, "\"e\"", NULL);
+    xc_journal_zip_state zs;
+    err = xc_journal_read_zip(text, len, &zip, &zs);
+    check(err == XC_OK);
+    if (!zs.valid) {
+        check(zs.why != NULL && zs.done_count == 0);
+    } else {
+        check(zs.id.zip && xc_journal_same_image(&zs.id, &zip));
+        for (size_t i = 0; i < zs.done_count; i++) {
+            check(zs.done[i].path != NULL && zs.done[i].path[0] != '\0');
+            check(i == 0 || strcmp(zs.done[i - 1].path, zs.done[i].path) < 0);
+            check(xc_journal_zip_find(&zs, zs.done[i].path) == &zs.done[i]);
+        }
+    }
+    xc_journal_zip_state_free(&zs);
 }
 
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)

@@ -12,8 +12,10 @@
 #include "xcat/crc32.h"
 #include "xcat/hash.h"
 #include "xcat/journal.h"
+#include "xcat/seq.h"
 #include "xcat/version.h"
 #include "xcat/xdvdfs.h"
+#include "xcat/zip.h"
 
 #define MIN_BUF ((size_t)64 * 1024)
 #define JOURNAL_LINE_CAP (XC_JOURNAL_MAX_LINE + 16)
@@ -58,12 +60,35 @@ static xc_err counted_read_stream(void *ctx, uint64_t offset, uint64_t len, xc_s
 
 /* --- state -------------------------------------------------------------------------- */
 
+/* A zip checkpoint kept for later passes (zip.md §10). */
+typedef struct zck {
+    xc_zip_position pos;
+    uint8_t *blob;
+    size_t len;
+} zck;
+
+/* A file's CRC-32 by path, for verifying a Deflate zip install. */
+typedef struct path_crc {
+    char *path;
+    uint32_t crc;
+} path_crc;
+
 typedef struct job {
     const xc_install_req *req;
     const xc_install_io *io;
     xc_install_result *res;
     xc_source src; /* counted */
     counted count;
+    xc_source image;      /* the image: src, or a stored zip member's window of it */
+    xc_window_source win; /* a stored member */
+    /* Deflate zip members (stream-install.md) */
+    xc_zip_member member;
+    xc_journal_zip_state zjournal;
+    zck *zcks; /* sorted by offset */
+    size_t nzcks, cap_zcks;
+    path_crc *crcs;
+    size_t ncrcs, cap_crcs;
+    unsigned pass;
     xc_xdvdfs_volume vol;
     xc_xdvdfs_listing listing;
     xc_journal_id id;
@@ -145,18 +170,29 @@ static xc_err choose_folder(job *j)
             return err;
         }
         if (err == XC_OK) {
-            xc_journal_state_free(&j->journal);
-            err = xc_journal_read(data, len, &j->listing, &j->id, &j->journal);
+            bool valid = false;
+            const char *why = NULL;
+            if (j->id.zip) {
+                xc_journal_zip_state_free(&j->zjournal);
+                err = xc_journal_read_zip(data, len, &j->id, &j->zjournal);
+                valid = j->zjournal.valid;
+                why = j->zjournal.why;
+            } else {
+                xc_journal_state_free(&j->journal);
+                err = xc_journal_read(data, len, &j->listing, &j->id, &j->journal);
+                valid = j->journal.valid;
+                why = j->journal.why;
+            }
             free(data);
             if (err != XC_OK) {
                 return err;
             }
-            if (j->journal.valid) {
+            if (valid) {
                 j->res->resumed = true;
                 return XC_OK;
             }
             if (j->res->other_folder_reason == NULL) {
-                j->res->other_folder_reason = j->journal.why;
+                j->res->other_folder_reason = why;
             }
         } else if (j->res->other_folder_reason == NULL) {
             j->res->other_folder_reason = "its journal can't be read";
@@ -309,7 +345,7 @@ static xc_err finish_hash(job *j)
     if (j->hash == NULL) {
         return XC_OK;
     }
-    if (j->hash_broken || j->hash_next != j->src.size) {
+    if (j->hash_broken || j->hash_next != j->image.size) {
         j->res->hash_note = "files overlap in the image, so it couldn't be read front to back";
         return XC_OK;
     }
@@ -421,6 +457,25 @@ static xc_err write_marker(job *j)
     return j->io->write_all(j->io->ctx, j->path, text, len);
 }
 
+/* ADR 0008: the paths are what they'd be under \Games\<folder> on the console. */
+static xc_err check_fatx(job *j, const xc_xdvdfs_listing *listing)
+{
+    xc_install_result *res = j->res;
+    const char *name = strrchr(res->folder, j->io->separator);
+    name = name != NULL ? name + 1 : res->folder;
+    xc_err err = xc_fatx_check_listing(listing, strlen("\\Games\\") + strlen(name), res->problems,
+                                       XC_INSTALL_MAX_PROBLEMS, &res->problem_count);
+    if (err == XC_OK && res->problem_count > 0) {
+        for (size_t i = 0; i < res->problem_count && i < XC_INSTALL_MAX_PROBLEMS; i++) {
+            (void)snprintf(res->problem_paths[i], sizeof res->problem_paths[i], "%s",
+                           res->problems[i].path);
+            res->problems[i].path = res->problem_paths[i];
+        }
+        err = XC_ERR_NOT_INSTALLABLE;
+    }
+    return err;
+}
+
 static uint64_t round_up(uint64_t v, uint32_t cluster)
 {
     return cluster == 0 ? v : (v + cluster - 1U) / cluster * cluster;
@@ -436,9 +491,9 @@ static xc_err run_install(job *j)
     if (!report(j)) {
         return XC_ERR_CANCELLED;
     }
-    xc_err err = xc_xdvdfs_open(&j->src, &j->vol);
+    xc_err err = xc_xdvdfs_open(&j->image, &j->vol);
     if (err == XC_OK) {
-        err = xc_xdvdfs_list(&j->src, &j->vol, NULL, &j->listing);
+        err = xc_xdvdfs_list(&j->image, &j->vol, NULL, &j->listing);
     }
     if (err != XC_OK) {
         return err;
@@ -452,26 +507,14 @@ static xc_err run_install(job *j)
     if (j->done == NULL || j->crc == NULL || j->resume_bytes == NULL || j->resume_crc == NULL) {
         return XC_ERR_NOMEM;
     }
-    xc_journal_make_id(&j->id, &j->listing, j->vol.partition_offset, j->src.size, req->etag,
+    xc_journal_make_id(&j->id, &j->listing, j->vol.partition_offset, j->image.size, req->etag,
                        req->last_modified);
 
     err = choose_folder(j);
     if (err != XC_OK) {
         return err;
     }
-    /* ADR 0008: the paths are what they'd be under \Games\<folder> on the console. */
-    const char *name = strrchr(res->folder, io->separator);
-    name = name != NULL ? name + 1 : res->folder;
-    err = xc_fatx_check_listing(&j->listing, strlen("\\Games\\") + strlen(name), res->problems,
-                                XC_INSTALL_MAX_PROBLEMS, &res->problem_count);
-    if (err == XC_OK && res->problem_count > 0) {
-        for (size_t i = 0; i < res->problem_count && i < XC_INSTALL_MAX_PROBLEMS; i++) {
-            (void)snprintf(res->problem_paths[i], sizeof res->problem_paths[i], "%s",
-                           res->problems[i].path);
-            res->problems[i].path = res->problem_paths[i];
-        }
-        err = XC_ERR_NOT_INSTALLABLE;
-    }
+    err = check_fatx(j, &j->listing);
     if (err != XC_OK) {
         return err;
     }
@@ -552,7 +595,7 @@ static xc_err run_install(job *j)
             memcpy(skip, j->done, files * sizeof *skip);
             o.skip = skip;
             xc_extract_stats st;
-            err = xc_extract(&j->src, &j->listing, &sink, &o, &st);
+            err = xc_extract(&j->image, &j->listing, &sink, &o, &st);
             res->files_skipped = st.files_skipped;
             res->files_written = st.files_written;
             res->bytes_written = st.bytes_written;
@@ -573,6 +616,321 @@ static xc_err run_install(job *j)
         (void)io->remove(io->ctx, j->journal_path); /* §2.4: finished */
     }
     return err;
+}
+
+/* --- Deflate zip members (stream-install.md, zip.md §9-§10) ----------------------------- */
+
+static uint64_t zip_checkpoint_every(const job *j)
+{
+    uint64_t every =
+        j->req->checkpoint_bytes != 0 ? j->req->checkpoint_bytes : XC_INSTALL_CHECKPOINT;
+    every = (every + XC_ZIP_DICT_SIZE - 1U) / XC_ZIP_DICT_SIZE * XC_ZIP_DICT_SIZE;
+    return every;
+}
+
+/* Keeps a checkpoint, or checks a later pass against the one pass 1 kept (zip.md §9.5). */
+static xc_err on_zip_checkpoint(void *ctx, const xc_zip_position *pos, const uint8_t *blob,
+                                size_t len)
+{
+    job *j = ctx;
+    size_t at = 0;
+    while (at < j->nzcks && j->zcks[at].pos.offset < pos->offset) {
+        at++;
+    }
+    if (at < j->nzcks && j->zcks[at].pos.offset == pos->offset) {
+        /* the same bytes again: their CRC-32 so far must match */
+        return j->zcks[at].pos.crc32 == pos->crc32 ? XC_OK : XC_ERR_ZIP_CRC;
+    }
+    if (j->nzcks == j->cap_zcks) {
+        size_t cap = j->cap_zcks > 0 ? j->cap_zcks * 2 : 32;
+        zck *v = realloc(j->zcks, cap * sizeof *v);
+        if (v == NULL) {
+            return XC_ERR_NOMEM;
+        }
+        j->zcks = v;
+        j->cap_zcks = cap;
+    }
+    uint8_t *copy = malloc(len);
+    if (copy == NULL) {
+        return XC_ERR_NOMEM;
+    }
+    memcpy(copy, blob, len);
+    memmove(j->zcks + at + 1, j->zcks + at, (j->nzcks - at) * sizeof *j->zcks);
+    j->zcks[at].pos = *pos;
+    j->zcks[at].blob = copy;
+    j->zcks[at].len = len;
+    j->nzcks++;
+    return XC_OK;
+}
+
+/* xc_seq_stream_fn: the member from the last checkpoint at or before `from`. */
+static xc_err zip_stream(void *ctx, uint64_t from, xc_source_data_fn fn, void *fn_ctx)
+{
+    job *j = ctx;
+    const zck *best = NULL;
+    for (size_t i = 0; i < j->nzcks && j->zcks[i].pos.offset <= from; i++) {
+        best = &j->zcks[i];
+    }
+    xc_zip_read q;
+    memset(&q, 0, sizeof q);
+    q.src = &j->src;
+    q.member = &j->member;
+    q.on_data = fn;
+    q.data_ctx = fn_ctx;
+    q.checkpoint_every = zip_checkpoint_every(j);
+    q.on_checkpoint = on_zip_checkpoint;
+    q.checkpoint_ctx = j;
+    q.resume = best != NULL ? best->blob : NULL;
+    q.resume_len = best != NULL ? best->len : 0;
+    j->pass++;
+    return xc_zip_read_member(&q, NULL);
+}
+
+/* xc_seq_spool on the install folder's spool files. */
+static bool spool_path(const job *j, uint32_t chunk, char *out)
+{
+    char name[48];
+    (void)snprintf(name, sizeof name, "%s%u", XC_INSTALL_SPOOL_PREFIX, (unsigned)chunk);
+    return join(j, out, j->res->folder, name);
+}
+
+static xc_err spool_append(void *ctx, uint32_t chunk, const uint8_t *data, size_t len)
+{
+    job *j = ctx;
+    char path[XC_INSTALL_MAX_PATH];
+    return spool_path(j, chunk, path) ? j->io->spool_append(j->io->ctx, path, data, len)
+                                      : XC_ERR_LIMIT;
+}
+
+static xc_err spool_read(void *ctx, uint32_t chunk, uint64_t pos, uint8_t *buf, size_t len)
+{
+    job *j = ctx;
+    char path[XC_INSTALL_MAX_PATH];
+    return spool_path(j, chunk, path) ? j->io->spool_read(j->io->ctx, path, pos, buf, len)
+                                      : XC_ERR_LIMIT;
+}
+
+static xc_err spool_drop(void *ctx, uint32_t chunk)
+{
+    job *j = ctx;
+    char path[XC_INSTALL_MAX_PATH];
+    return spool_path(j, chunk, path) ? j->io->spool_remove(j->io->ctx, path) : XC_ERR_LIMIT;
+}
+
+static xc_err spool_free(void *ctx, uint64_t *bytes)
+{
+    job *j = ctx;
+    return j->io->free_space(j->io->ctx, j->req->games_dir, bytes);
+}
+
+static xc_err seq_listing(void *ctx, const xc_xdvdfs_volume *vol, const xc_xdvdfs_listing *l,
+                          bool complete)
+{
+    job *j = ctx;
+    (void)vol;
+    if (complete) {
+        j->res->file_count = l->file_count;
+    }
+    return check_fatx(j, l); /* names and paths as soon as they're known */
+}
+
+static int path_crc_cmp(const void *a, const void *b)
+{
+    const path_crc *x = a;
+    const path_crc *y = b;
+    return strcmp(x->path, y->path);
+}
+
+static xc_err add_crc(job *j, const char *path, uint32_t crc)
+{
+    if (j->ncrcs == j->cap_crcs) {
+        size_t cap = j->cap_crcs > 0 ? j->cap_crcs * 2 : 256;
+        path_crc *v = realloc(j->crcs, cap * sizeof *v);
+        if (v == NULL) {
+            return XC_ERR_NOMEM;
+        }
+        j->crcs = v;
+        j->cap_crcs = cap;
+    }
+    size_t len = strlen(path) + 1;
+    char *copy = malloc(len);
+    if (copy == NULL) {
+        return XC_ERR_NOMEM;
+    }
+    memcpy(copy, path, len);
+    j->crcs[j->ncrcs].path = copy;
+    j->crcs[j->ncrcs].crc = crc;
+    j->ncrcs++;
+    return XC_OK;
+}
+
+/* journal.md §6.8 and §6.5: done in an earlier attempt, and still there with its size. */
+static bool seq_is_done(void *ctx, const xc_xdvdfs_entry *f)
+{
+    job *j = ctx;
+    const xc_journal_done *d = xc_journal_zip_find(&j->zjournal, f->path);
+    uint64_t size = 0;
+    if (d == NULL || d->size != f->size || !join(j, j->path, j->res->folder, f->path) ||
+        j->io->file_size(j->io->ctx, j->path, &size) != XC_OK || size != f->size) {
+        return false;
+    }
+    return add_crc(j, f->path, d->crc) == XC_OK;
+}
+
+static xc_err seq_file_done(void *ctx, const xc_xdvdfs_entry *f, uint32_t crc)
+{
+    job *j = ctx;
+    size_t len = 0;
+    xc_err err = xc_journal_format_done(f->path, f->size, crc, j->line, sizeof j->line, &len);
+    if (err == XC_OK) {
+        err = j->io->append(j->io->ctx, j->journal_path, j->line, len);
+    }
+    return err == XC_OK ? add_crc(j, f->path, crc) : err;
+}
+
+static bool seq_progress(void *ctx, const xc_seq_progress *sp)
+{
+    job *j = ctx;
+    j->p.phase = XC_INSTALL_WRITING;
+    j->p.bytes_done = sp->offset;
+    j->p.bytes_total = sp->image_size;
+    j->p.files_done = sp->files_done;
+    j->p.file_count = sp->file_count;
+    j->p.current = sp->current;
+    return report(j);
+}
+
+static xc_err run_zip_install(job *j)
+{
+    const xc_install_req *req = j->req;
+    const xc_install_io *io = j->io;
+    xc_install_result *res = j->res;
+    if (io->spool_append == NULL || io->spool_read == NULL || io->spool_remove == NULL) {
+        return XC_ERR_UNSUPPORTED;
+    }
+    xc_journal_make_zip_id(&j->id, j->member.size, j->member.crc32, j->member.compressed_size,
+                           req->etag, req->last_modified);
+    xc_err err = choose_folder(j);
+    if (err != XC_OK) {
+        return err;
+    }
+    xc_sink sink;
+    void *sink_handle = NULL;
+    err = io->open_sink(io->ctx, res->folder, &sink, &sink_handle);
+    if (err != XC_OK) {
+        return err;
+    }
+    if (!res->resumed) {
+        size_t len = 0;
+        char *start = malloc((size_t)3 * XC_JOURNAL_MAX_LINE);
+        err = start != NULL ? xc_journal_format_start(&j->id, req->source_name, start,
+                                                      (size_t)3 * XC_JOURNAL_MAX_LINE, &len)
+                            : XC_ERR_NOMEM;
+        if (err == XC_OK) {
+            err = io->append(io->ctx, j->journal_path, start, len);
+        }
+        free(start);
+    }
+    xc_seq_result sr;
+    memset(&sr, 0, sizeof sr);
+    if (err == XC_OK) {
+        xc_seq_spool spool = {spool_append, spool_read, spool_drop, spool_free, j};
+        xc_seq_req q;
+        memset(&q, 0, sizeof q);
+        q.image_size = j->member.size;
+        q.stream = zip_stream;
+        q.stream_ctx = j;
+        q.sink = &sink;
+        q.spool = &spool;
+        q.chunk_bytes = zip_checkpoint_every(j);
+        q.reserve = req->spool_reserve != 0 ? req->spool_reserve : XC_INSTALL_SPOOL_RESERVE;
+        q.cluster_size = req->cluster_size;
+        q.buf = req->buf;
+        q.buf_size = req->buf_size;
+        q.full_first_pass = true; /* the member's CRC-32 covers every byte */
+        q.on_listing = seq_listing;
+        q.file_done = seq_file_done;
+        q.is_done = seq_is_done;
+        q.progress = seq_progress;
+        q.ctx = j;
+        q.listing_out = &j->listing;
+        err = xc_seq_extract(&q, &sr);
+        res->passes = sr.passes;
+        res->reread_bytes = sr.reread;
+        res->spool_peak = sr.spool_peak;
+        res->files_from_spool = sr.files_from_spool;
+        res->files_written = sr.files_written + sr.files_from_spool;
+        res->files_skipped = sr.files_skipped;
+        res->bytes_written = sr.bytes_written;
+        if (err == XC_ERR_NO_SPACE) {
+            res->space_needed = sr.space_needed;
+            res->space_free = sr.space_free;
+        }
+        j->vol = sr.vol;
+    }
+    io->close_sink(io->ctx, sink_handle);
+    if (err != XC_OK) {
+        return err;
+    }
+    res->file_count = j->listing.file_count;
+    res->hash_note = "zip: every byte checked by the member's CRC-32 instead (zip.md §9)";
+
+    /* §7: read back against the CRC-32s, from this attempt or the journal */
+    size_t files = j->listing.file_count > 0 ? j->listing.file_count : 1;
+    j->crc = calloc(files, sizeof *j->crc);
+    if (j->crc == NULL) {
+        return XC_ERR_NOMEM;
+    }
+    if (j->ncrcs > 0) {
+        qsort(j->crcs, j->ncrcs, sizeof *j->crcs, path_crc_cmp);
+    }
+    for (size_t i = 0; i < j->listing.file_count; i++) {
+        path_crc key = {(char *)j->listing.files[i].path, 0};
+        const path_crc *hit =
+            j->ncrcs > 0 ? bsearch(&key, j->crcs, j->ncrcs, sizeof *j->crcs, path_crc_cmp) : NULL;
+        if (hit == NULL) {
+            return XC_ERR_VERIFY; /* can't happen: every file was written or kept */
+        }
+        j->crc[i] = hit->crc;
+    }
+    err = verify(j);
+    if (err == XC_OK) {
+        err = write_marker(j);
+    }
+    if (err == XC_OK) {
+        (void)io->remove(io->ctx, j->journal_path); /* journal.md §2.4: finished */
+    }
+    return err;
+}
+
+/* zip.md §2-§6: the member, then its install as a bare image (stored) or a stream. */
+static xc_err run_zip(job *j)
+{
+    j->p.phase = XC_INSTALL_READING_TABLES;
+    if (!report(j)) {
+        return XC_ERR_CANCELLED;
+    }
+    xc_zip_listing zl;
+    xc_err err = xc_zip_list(&j->src, &zl);
+    if (err != XC_OK) {
+        return err;
+    }
+    size_t index = 0;
+    err = xc_zip_pick_image(&zl, &index);
+    if (err == XC_OK) {
+        (void)snprintf(j->res->zip_member, sizeof j->res->zip_member, "%s", zl.entries[index].name);
+        j->res->zip_method = zl.entries[index].method;
+        err = xc_zip_open_member(&j->src, &zl, index, &j->member);
+    }
+    xc_zip_listing_free(&zl);
+    if (err != XC_OK) {
+        return err;
+    }
+    if (j->member.method == XC_ZIP_STORED) {
+        xc_source_window(&j->image, &j->win, &j->src, j->member.data_offset, j->member.size);
+        return run_install(j);
+    }
+    return run_zip_install(j);
 }
 
 xc_err xc_install(const xc_install_req *req, xc_install_result *res)
@@ -596,12 +954,22 @@ xc_err xc_install(const xc_install_req *req, xc_install_result *res)
     j->src.read_stream = req->src->read_stream != NULL ? counted_read_stream : NULL;
     j->src.ctx = &j->count;
     j->src.size = req->src->size;
-    xc_err err = run_install(j);
+    j->image = j->src;
+    xc_err err = req->zip ? run_zip(j) : run_install(j);
     res->bytes_read = j->count.bytes;
     if (err != XC_OK && j->p.current != NULL) {
         (void)snprintf(res->current_file, sizeof res->current_file, "%s", j->p.current);
     }
     xc_journal_state_free(&j->journal);
+    xc_journal_zip_state_free(&j->zjournal);
+    for (size_t i = 0; i < j->nzcks; i++) {
+        free(j->zcks[i].blob);
+    }
+    free(j->zcks);
+    for (size_t i = 0; i < j->ncrcs; i++) {
+        free(j->crcs[i].path);
+    }
+    free(j->crcs);
     xc_xdvdfs_listing_free(&j->listing);
     free(j->done);
     free(j->crc);

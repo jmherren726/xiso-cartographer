@@ -1,4 +1,5 @@
 /* xc_install_io (xcat/install.h) for PCs: plain files, UTF-8 and long paths (host_path.c). */
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -131,6 +132,71 @@ static void io_close_file(void *ctx, void *handle)
     }
 }
 
+/*
+ * Spool files (xcat/install.h): one is kept open between calls, since a Deflate zip install
+ * appends to the same chunk many times in a row. Not durable (stream-install.md §4). One
+ * install at a time per process.
+ */
+static struct {
+    char path[4096];
+    FILE *f;
+} spool;
+
+static void spool_close(void)
+{
+    if (spool.f != NULL) {
+        (void)fclose(spool.f);
+        spool.f = NULL;
+    }
+    spool.path[0] = '\0';
+}
+
+static FILE *spool_open(const char *path)
+{
+    if (spool.f != NULL && strcmp(spool.path, path) == 0) {
+        return spool.f;
+    }
+    spool_close();
+    if (strlen(path) >= sizeof spool.path) {
+        return NULL;
+    }
+    spool.f = xc_host_fopen(path, "a+b");
+    if (spool.f != NULL) {
+        memcpy(spool.path, path, strlen(path) + 1);
+    }
+    return spool.f;
+}
+
+static xc_err io_spool_append(void *ctx, const char *path, const void *data, size_t len)
+{
+    (void)ctx;
+    FILE *f = spool_open(path);
+    if (f == NULL || fseek(f, 0, SEEK_END) != 0) {
+        return XC_ERR_IO;
+    }
+    return fwrite(data, 1, len, f) == len ? XC_OK : XC_ERR_IO;
+}
+
+static xc_err io_spool_read(void *ctx, const char *path, uint64_t pos, void *buf, size_t len)
+{
+    (void)ctx;
+    FILE *f = spool_open(path);
+    if (f == NULL || pos > (uint64_t)LONG_MAX || fflush(f) != 0 ||
+        fseek(f, (long)pos, SEEK_SET) != 0) {
+        return XC_ERR_IO;
+    }
+    return fread(buf, 1, len, f) == len ? XC_OK : XC_ERR_IO;
+}
+
+static xc_err io_spool_remove(void *ctx, const char *path)
+{
+    (void)ctx;
+    if (strcmp(spool.path, path) == 0) {
+        spool_close();
+    }
+    return xc_host_remove(path) ? XC_OK : XC_ERR_IO;
+}
+
 void xc_host_install_io(xc_install_io *io)
 {
     memset(io, 0, sizeof *io);
@@ -150,4 +216,7 @@ void xc_host_install_io(xc_install_io *io)
     io->close_sink = io_close_sink;
     io->open_file = io_open_file;
     io->close_file = io_close_file;
+    io->spool_append = io_spool_append;
+    io->spool_read = io_spool_read;
+    io->spool_remove = io_spool_remove;
 }
