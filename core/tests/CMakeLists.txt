@@ -14,7 +14,7 @@ option(XCAT_LARGE_FIXTURES "Also generate and test the >4 GiB sparse fixture" OF
 set(XCAT_FIXTURES_DIR ${CMAKE_BINARY_DIR}/fixtures)
 # The late* fixtures put their directory tables after their files (sequential installs).
 set(XCAT_FIXTURES small deep redump-xgd1 redump-xgd2 redump-xgd3 late late-deep late-xgd3 late-root)
-set(XCAT_TABLES_FIRST_FIXTURES small deep redump-xgd1 redump-xgd2 redump-xgd3)
+set(XCAT_LATE_FIXTURES late late-deep late-xgd3 late-root)
 set(_fixture_args)
 if(XCAT_LARGE_FIXTURES)
   list(APPEND XCAT_FIXTURES large)
@@ -136,10 +136,10 @@ set_tests_properties(check_deep check_late-deep check_late-root PROPERTIES WILL_
 # need a second pass, the others don't.
 foreach(_name IN LISTS XCAT_FIXTURES)
   add_test(NAME layout_${_name} COMMAND xcat-cli layout ${XCAT_FIXTURES_DIR}/${_name}.iso)
-  if(_name IN_LIST XCAT_TABLES_FIRST_FIXTURES)
-    set_tests_properties(layout_${_name} PROPERTIES PASS_REGULAR_EXPRESSION "one sequential pass can install it")
-  else()
+  if(_name IN_LIST XCAT_LATE_FIXTURES)
     set_tests_properties(layout_${_name} PROPERTIES PASS_REGULAR_EXPRESSION "one sequential pass is not enough")
+  else()
+    set_tests_properties(layout_${_name} PROPERTIES PASS_REGULAR_EXPRESSION "one sequential pass can install it")
   endif()
   xcat_test_env(layout_${_name})
 endforeach()
