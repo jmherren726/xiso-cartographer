@@ -40,6 +40,9 @@ DISCS = [
     (109, "Foxtrot Demo (USA)", "Demos", "FF-001"),
     (110, "Golf (Scandinavia)", "Games", "GG-003"),
     (None, "Hotel (USA)", "Games", ""),  # in the datfile, no disc page
+    (112, "India Quest (Germany)", "Games", "II-005"),  # one game, two regional titles
+    (113, "India Adventure (USA)", "Games", "II-005"),
+    (114, "India Extra (Japan)", "Games", "II-005"),  # [game] = "none" in test_overrides
 ]
 MISSING_PAGE = 111  # listed, but its page isn't in the cache
 
@@ -147,7 +150,8 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(sorted(by_name), sorted([
             "Alpha Racer (USA)", "Alpha Racer (Europe) (En,Fr,De)", "Alpha Racer (USA) (Rev 1)",
             "Bravo, The - Tactics (Japan)", "Charlie Quest (USA, Europe)",
-            "Delta (Europe) (En,Fr)", "Delta (Europe) (En,Es)", "Golf (Scandinavia)"]))
+            "Delta (Europe) (En,Fr)", "Delta (Europe) (En,Es)", "Golf (Scandinavia)",
+            "India Quest (Germany)", "India Adventure (USA)", "India Extra (Japan)"]))
         # Title IDs from serials; variants by region, then tags, then disc number.
         self.assertEqual(by_name["Alpha Racer (USA)"].title_id, 0x41410001)
         self.assertEqual(by_name["Charlie Quest (USA, Europe)"].title_id, 0x4343FFFF)
@@ -164,7 +168,8 @@ class Pipeline(unittest.TestCase):
         # Games: by Redump ID (Alpha), shared title ID (Alpha Europe, Rev 1), name (Bravo),
         # and games of their own; Delta's two releases are one game.
         titles = {g.title: g for g in games}
-        self.assertEqual(sorted(titles), ["Alpha Racer", "Bravo Tactics", "Charlie Quest", "Delta", "Golf"])
+        self.assertEqual(sorted(titles), ["Alpha Racer", "Bravo Tactics", "Charlie Quest", "Delta", "Golf",
+                                          "India Adventure"])
         alpha = titles["Alpha Racer"]
         self.assertEqual((alpha.wikidata, alpha.year, alpha.developer, alpha.publisher, alpha.genres),
                          (1001, 2001, "Studio One, Studio Two", "Pub A", "racing"))
@@ -172,12 +177,16 @@ class Pipeline(unittest.TestCase):
         self.assertEqual((titles["Bravo Tactics"].wikidata, titles["Bravo Tactics"].year), (1002, 0))
         self.assertEqual(titles["Charlie Quest"].wikidata, 0)
         self.assertEqual(len({r.game for r in releases if r.name.startswith("Delta")}), 1)
+        # Without Wikidata data, one title ID is one game, titled by its USA release.
+        self.assertEqual({games[r.game].title for r in releases if r.name.startswith("India")},
+                         {"India Adventure"})
         # The report says what was left out and what to check.
         text = report.text()
         for line in ("Echo (USA) (serial 'N/A')", "Hotel (USA) (no disc page)", str(MISSING_PAGE),
                      "Bravo, The - Tactics (Japan) -> Q1002", "Alpha Racer (Europe) (En,Fr,De) -> Q1001"):
             self.assertIn(line, text)
         self.assertNotIn("Foxtrot", text + "".join(by_name))
+        self.assertIn("India Adventure <- India Adventure | India Extra | India Quest", text)
 
     def test_deterministic(self) -> None:
         a, _ = run_build(self.cache)
@@ -189,7 +198,8 @@ class Pipeline(unittest.TestCase):
     def test_overrides(self) -> None:
         ov = {"region": {"Scandinavia": "SC"}, "exclude": ["Golf (Scandinavia)"],
               "categories": ["Games", "Demos"], "title_id": {"Echo (USA)": "4D530004"},
-              "game": {"Charlie Quest (USA, Europe)": "Q1003", "Alpha Racer (Europe) (En,Fr,De)": "none"},
+              "game": {"Charlie Quest (USA, Europe)": "Q1003", "Alpha Racer (Europe) (En,Fr,De)": "none",
+                       "India Extra (Japan)": "none"},
               "variant": {"Delta (Europe) (En,Es)": "EU-SPAIN"}, "title": {"Q1003": "Charlie (Renamed)"}}
         data, _ = run_build(self.cache, ov)
         games, releases = cb.read(data)
@@ -200,6 +210,8 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(by_name["Delta (Europe) (En,Es)"].variant, "EU-SPAIN")
         self.assertEqual(games[by_name["Charlie Quest (USA, Europe)"].game].title, "Charlie (Renamed)")
         self.assertEqual(games[by_name["Alpha Racer (Europe) (En,Fr,De)"].game].wikidata, 0)
+        self.assertEqual(games[by_name["India Extra (Japan)"].game].title, "India Extra")
+        self.assertEqual(games[by_name["India Quest (Germany)"].game].title, "India Adventure")
 
     def test_unknown_region_fails(self) -> None:
         with self.assertRaises(SystemExit) as e:
@@ -252,7 +264,7 @@ class Pipeline(unittest.TestCase):
                            capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("44440002@EU-2", r.stdout)
-        self.assertIn("8 releases", r.stdout)
+        self.assertIn("11 releases", r.stdout)
 
 
 def main() -> None:

@@ -14,8 +14,13 @@ exclude = []
 [title_id]
 
 # The game a release belongs to: "Redump name" = "Q12345", or "none" for a game of its
-# own without Wikidata data.
+# own without Wikidata data (grouped by its title, not its title ID).
 [game]
+# Dead or Alive Ultimate is two discs with one title ID; each disc is its own game.
+"Dead or Alive 2 Ultimate (Europe) (En,Ja,Fr,De,Es,It)" = "none"
+"Dead or Alive 2 Ultimate (USA, Asia) (En,Ja)" = "none"
+# Two different bundles that share a title ID.
+"Top Spin & Amped 2 (Canada)" = "none"
 
 # Display titles: "Q12345" = "Title", or, for a game without Wikidata data, the Redump
 # name of one of its releases = "Title".
@@ -25,5 +30,8 @@ exclude = []
 # "Redump name" = "US-X"
 [variant]
 
-# Codes for Redump regions build.py doesn't know: "Region" = "XX".
+# Codes for Redump regions build.py doesn't know: "Region" = "XX". Groups of countries get
+# a longer code, so they never read as one ISO 3166 country (SC is Seychelles, LA Laos).
 [region]
+"Latin America" = "LATAM"
+"Scandinavia" = "SCAN"

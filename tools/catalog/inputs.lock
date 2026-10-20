@@ -1,0 +1,9 @@
+# SHA-256 of the catalog's cached inputs, per group (count, then the digest of
+# their sorted "path NUL sha256" lines), and of the catalog.bin they build.
+# Written by tools/catalog/build.py --update-lock (README.md); never edited by hand.
+meta 1 796ce1f34428a61ca6e82b972db20eb2cb9d2311ec02189f114f2e12c91640cc
+redump-datfile 1 8e35b6f8ba39930517b6d0c5d49b8880c18d9b6207b8b8cb4d7f5f1ee9cbd9b8
+redump-disc 2683 bc5562f13d704a32ae99c315059c10101a806c4e4664fc276018becf1f080034
+redump-list 27 cbd6c34a9ee033f80acab17fa08230c8df4aa2cd72f57b9471d6056d39619f04
+wikidata 6 0c03b484237359c7c9cb5966dfe2511cd588ca741dab83e02dda43d73ffd6016
+catalog.bin c4ca03c1ae70b62d5d8206bb5d77a51fcecd6e9ed34190e9977b1be86db8773c

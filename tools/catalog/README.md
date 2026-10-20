@@ -30,7 +30,7 @@ Then review `build/catalog/report.txt`, fix what needs fixing in `overrides.toml
 
 `fetch.py` asks each host one request at a time, at least 1 s apart, with backoff on errors and a User-Agent that names the project. Redump's robots.txt allows everything (checked 2026-10-20).
 
-1. Wikidata: the six queries in `sources.WIKIDATA_QUERIES` (games and their English labels, developers, publishers, genres, dates, Redump IDs).
+1. Wikidata: the six queries in `sources.WIKIDATA_QUERIES` (games and their names, developers, publishers, genres, dates, Redump IDs). A name is the English (`en`) label, else the `mul` label: Wikidata keeps names that are the same in every language only under `mul`, and Halo: Combat Evolved is one of them.
 2. Redump's Xbox datfile: every disc's Redump name and full-disc size, CRC-32, MD5 and SHA-1. It has no serials.
 3. Redump's Xbox list pages (27 in 2026), for the disc numbers.
 4. One page per disc, for its serial and region, and its track's SHA-1, which ties it to its datfile entry. Pages already cached aren't fetched again (`--refresh-discs` does), so only the first fetch takes long: about 2,700 discs, 45 minutes.
@@ -55,11 +55,11 @@ A release joins a game in this order:
 
 1. `[game]` in `overrides.toml`: a Wikidata game, or `none`.
 2. The Wikidata game that links its Redump disc number (P5290).
-3. The one Wikidata game whose English label matches its title. Titles are compared as letters and digits only, in lower case, with `&` read as "and", after Redump's title is turned around (`Elder Scrolls III, The - Morrowind` → `The Elder Scrolls III: Morrowind`). Two or more matches is no match.
+3. The one Wikidata game whose name matches its title. Titles are compared as letters and digits only, in lower case, with `&` read as "and", after Redump's title is turned around (`Elder Scrolls III, The - Morrowind` → `The Elder Scrolls III: Morrowind`). Two or more matches is no match.
 4. The one Wikidata game that other releases with its title ID joined.
-5. Otherwise, a game without Wikidata data, shared by the releases whose titles compare equal. Its title is Redump's, turned around as above.
+5. Otherwise, a game without Wikidata data, shared by the releases with its title ID: one game is often sold under a different title in each region (`Finding Nemo`, `A Procura de Nemo`). Its title is that of its first release in the order USA, USA and Europe, World, Europe, UK, Australia, then any other, turned around as above. `[game] = "none"` takes a release out of its title ID's game into one of its own, shared only by releases whose titles compare equal (two discs of one set, two bundles).
 
-The report lists every join made by steps 3 and 4, for review. A game's developers, publishers and genres are its English labels, joined with `, ` in §6.1 order, dropping the last until they fit 255 bytes; its year is the earliest publication date. `[title]` replaces a display title.
+The report lists every join made by steps 3 and 4, and every step-5 game with several titles, for review. A game's developers, publishers and genres are their names, joined with `, ` in §6.1 order, dropping the last until they fit 255 bytes; its year is the earliest publication date. `[title]` replaces a display title.
 
 ## Variant names
 
