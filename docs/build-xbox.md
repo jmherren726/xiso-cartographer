@@ -61,12 +61,12 @@ Every CI run also uploads all of these files as the `xiso-cartographer-xbe-<sha>
 1. Set up xemu with your own BIOS, MCPX boot ROM and HDD image. These are never part of this repo; see the [xemu docs](https://xemu.app/docs/required-files/).
 2. **Machine → Load Disc…** and choose `app/xiso-cartographer.iso`. Then reset the machine (**Machine → Reset**) if it doesn't boot on its own.
 
-## What the app does (M5)
+## What the app does (M5b)
 
 Until the real UI arrives (M8), the app installs everything it's given, one after another:
 
-1. **Every entry of the map `E:\xcat\map.txt`** ([map.md](formats/map.md)), downloaded over HTTP and installed while it streams in. Nothing is stored except the game's files ([ADR 0004](adr/0004-streaming-install.md)), so images of 4 GiB and more, such as full-disc dumps, install too. Entries that need a login use `E:\Apps\xcat\credentials` ([credentials.md](formats/credentials.md)). Entries can be `http://` or `https://` (see [HTTPS](#https) below).
-2. **Every image in `E:\xcat\isos\`**, as in M2. These must be under 4 GiB, since FATX can't store a larger file.
+1. **Every entry of the map `E:\xcat\map.txt`** ([map.md](formats/map.md)), downloaded over HTTP and installed while it streams in. Nothing is stored except the game's files ([ADR 0004](adr/0004-streaming-install.md)), so images of 4 GiB and more, such as full-disc dumps, install too. Entries that need a login use `E:\Apps\xcat\credentials` ([credentials.md](formats/credentials.md)). Entries can be `http://` or `https://` (see [HTTPS](#https) below). An entry whose URL ends in `.zip` installs the zip's one image (see [Zips](#zips) below).
+2. **Every image or zip in `E:\xcat\isos\`** (`*.iso`, `*.zip`), as in M2. These must be under 4 GiB, since FATX can't store a larger file.
 3. If there's neither, the bundled test image from `D:\samples\` (`D:` is the folder or disc the XBE was started from), copied to `E:\xcat\isos\` first.
 
 Each install, network or local, follows the same steps ([ARCHITECTURE.md §5](ARCHITECTURE.md#5-install-flow)):
@@ -76,6 +76,16 @@ Each install, network or local, follows the same steps ([ARCHITECTURE.md §5](AR
 - It **reads every installed file back and compares its CRC-32** with what was received, then writes `E:\Games\<title>\.xcat-installed`, with the hashes when there are some.
 
 A title that's already installed gets a numbered folder (`small (2)`). An unfinished install of the same image is resumed in its own folder; one of a different image is left alone. The run ends with "Done: N of M image(s) installed and verified." Everything on screen is also appended to `E:\xcat\install.log`.
+
+### Zips
+
+A zip must hold exactly one `.iso` or `.xiso` image, stored or Deflate-compressed ([zip.md](formats/zip.md), [ADR 0009](adr/0009-install-from-zip-archives.md)). A stored image installs like a bare one. A Deflate image is decompressed as it streams in ([stream-install.md](formats/stream-install.md)):
+- Files whose directory table has already passed are written as they arrive. Everything else that might belong to a file goes to **spool files** (`.xcat-spool-<n>`) in the install folder. They use the free space on E: minus 256 MiB, and when that runs out the oldest are dropped.
+- Once every table is known, the files that came before their tables are copied out of the spool. If the spool had to drop some, the zip is read again from a checkpoint for just those bytes (a second pass), and the log says how much was read again.
+- The member's CRC-32 checks every decompressed byte. Later passes are checked against the first at every checkpoint.
+- Every 64 MiB the install saves its state, so after a power cut it **continues from the last checkpoint**: the log then says "continued N MiB into the image". It also keeps `.xcat-state-0`, `.xcat-state-1` and `.xcat-zip-checkpoints` in the install folder until it's finished.
+
+The log ends a zip install with "from the zip: <image>, Deflate", the number of passes, the MiB read again and the spool's largest size. Map entries that point *into* a zip (`…/game.zip/game.iso`, archive.org's on-the-fly extraction) are refused when the map is loaded, since such a download can't be resumed: use the zip's own URL.
 
 ### HTTPS
 

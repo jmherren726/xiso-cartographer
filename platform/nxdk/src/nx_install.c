@@ -1,7 +1,8 @@
 /*
  * xc_install_io (xcat/install.h) for the Xbox: nxdk's Win32-style file API on FATX.
  * "Durable" is NtFlushBuffersFile before the handle is closed, so a journal line or a
- * game file survives the power switch (docs/formats/journal.md §2).
+ * game file survives the power switch (docs/formats/journal.md §2). Spool files for Deflate
+ * zips are flushed when the install asks (stream-install.md §7.1).
  */
 #include <stdlib.h>
 #include <string.h>
@@ -157,6 +158,121 @@ static void io_close_file(void *ctx, void *handle)
     }
 }
 
+/*
+ * Spool files for Deflate zip installs (docs/formats/stream-install.md §4): one stays open
+ * between calls, since the install appends to the same chunk many times in a row. A file
+ * that was appended to is flushed to disk before another is opened, so spool_sync only has
+ * the open one left to do (§7.1). One install at a time.
+ */
+static struct {
+    char path[XC_NX_PATH_MAX];
+    HANDLE h;
+    bool dirty; /* appended to since it was last flushed */
+} spool = {"", INVALID_HANDLE_VALUE, false};
+
+static bool spool_flush(void)
+{
+    if (spool.h == INVALID_HANDLE_VALUE || !spool.dirty) {
+        return true;
+    }
+    IO_STATUS_BLOCK io;
+    spool.dirty = false;
+    return NT_SUCCESS(NtFlushBuffersFile(spool.h, &io));
+}
+
+static bool spool_close(void)
+{
+    bool ok = spool_flush();
+    if (spool.h != INVALID_HANDLE_VALUE) {
+        ok = CloseHandle(spool.h) != 0 && ok;
+        spool.h = INVALID_HANDLE_VALUE;
+    }
+    spool.path[0] = '\0';
+    return ok;
+}
+
+static HANDLE spool_open(const char *path)
+{
+    if (spool.h != INVALID_HANDLE_VALUE && strcmp(spool.path, path) == 0) {
+        return spool.h;
+    }
+    if (!spool_close() || strlen(path) >= sizeof spool.path) {
+        return INVALID_HANDLE_VALUE;
+    }
+    spool.h = CreateFileA(path, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_ALWAYS,
+                          FILE_ATTRIBUTE_NORMAL, NULL);
+    if (spool.h != INVALID_HANDLE_VALUE) {
+        memcpy(spool.path, path, strlen(path) + 1);
+    }
+    return spool.h;
+}
+
+static xc_err io_spool_append(void *ctx, const char *path, const void *data, size_t len)
+{
+    (void)ctx;
+    HANDLE h = spool_open(path);
+    if (h == INVALID_HANDLE_VALUE ||
+        SetFilePointer(h, 0, NULL, FILE_END) == INVALID_SET_FILE_POINTER) {
+        return XC_ERR_IO;
+    }
+    spool.dirty = true;
+    const uint8_t *p = data;
+    while (len > 0) {
+        DWORD put = 0;
+        DWORD chunk = len > 0x40000000U ? 0x40000000U : (DWORD)len;
+        if (!WriteFile(h, p, chunk, &put, NULL) || put != chunk) {
+            return XC_ERR_IO;
+        }
+        p += put;
+        len -= put;
+    }
+    return XC_OK;
+}
+
+static xc_err io_spool_read(void *ctx, const char *path, uint64_t pos, void *buf, size_t len)
+{
+    (void)ctx;
+    HANDLE h = spool_open(path);
+    LONG hi = (LONG)(pos >> 32U);
+    if (h == INVALID_HANDLE_VALUE ||
+        (SetFilePointer(h, (LONG)(uint32_t)pos, &hi, FILE_BEGIN) == INVALID_SET_FILE_POINTER &&
+         GetLastError() != NO_ERROR)) {
+        return XC_ERR_IO;
+    }
+    uint8_t *p = buf;
+    while (len > 0) {
+        DWORD got = 0;
+        DWORD chunk = len > 0x40000000U ? 0x40000000U : (DWORD)len;
+        if (!ReadFile(h, p, chunk, &got, NULL) || got == 0) {
+            return XC_ERR_IO;
+        }
+        p += got;
+        len -= got;
+    }
+    return XC_OK;
+}
+
+static xc_err io_spool_remove(void *ctx, const char *path)
+{
+    (void)ctx;
+    if (strcmp(spool.path, path) == 0) {
+        spool.dirty = false; /* going anyway */
+        (void)spool_close();
+    }
+    return DeleteFileA(path) ? XC_OK : XC_ERR_IO;
+}
+
+static xc_err io_spool_sync(void *ctx)
+{
+    (void)ctx;
+    return spool_flush() ? XC_OK : XC_ERR_IO;
+}
+
+void xc_nx_spool_close(void)
+{
+    (void)spool_close();
+}
+
 void xc_nx_install_io(xc_install_io *io)
 {
     memset(io, 0, sizeof *io);
@@ -172,4 +288,8 @@ void xc_nx_install_io(xc_install_io *io)
     io->close_sink = io_close_sink;
     io->open_file = io_open_file;
     io->close_file = io_close_file;
+    io->spool_append = io_spool_append;
+    io->spool_read = io_spool_read;
+    io->spool_remove = io_spool_remove;
+    io->spool_sync = io_spool_sync;
 }

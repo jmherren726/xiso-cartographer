@@ -89,6 +89,8 @@ variant    = 1*16( ALPHA / DIGIT / "-" / "_" )   ; case-insensitive, normalised 
 - The URL **must not** contain a literal `#` (fragment) or any control character. Write `%23` for a `#` in a file name.
 - The URL **must not** contain user credentials (`user:pass@host`). Such entries are invalid: credentials would sit in plain text on the HDD and in logs. Sources that need a login get it from the separate, host-scoped [credentials file](credentials.md), never from the map.
 - The URL **should** point to an uncompressed image, either a trimmed `.xiso.iso` or a full-disc `.iso` dump ([xdvdfs.md §1](xdvdfs.md#1-image-layouts)), on a server that supports HTTP `Range` requests. The layout is detected from the content, not the file name. That is checked at install time, not at load time.
+- A URL whose path ends in `.zip` (any case; the query doesn't count) points to a **zip** holding one image, which is installed from it ([zip.md](zip.md), [ADR 0009](../adr/0009-install-from-zip-archives.md)).
+- The URL **must not** point to a file inside a zip: a path segment ending in `.zip` followed by more path (`…/game.zip/game.iso`, archive.org's on-the-fly extraction, which can't be resumed). Such entries are invalid, with a message to use the zip's own URL.
 
 ### 4.3 Duplicate keys
 
@@ -175,3 +177,4 @@ eol         = LF / CRLF / end-of-file
 |---|---|---|
 | 1.0 | 2026-10-13 | First version. |
 | 1.0 | 2026-10-15 | Implemented. §6 states the cap of 256 stored problems; nothing else changed. |
+| 1.0 | 2026-10-20 | §4.2: zip URLs, and URLs inside a zip are invalid ([ADR 0009](../adr/0009-install-from-zip-archives.md) §8). Before any release, so the version stays 1.0. |

@@ -351,6 +351,16 @@ bool xc_zip_is_image_name(const char *name)
     return ends_with_ci(name, len, ".iso") || ends_with_ci(name, len, ".xiso");
 }
 
+bool xc_zip_is_zip_name(const char *path_or_url)
+{
+    if (path_or_url == NULL) {
+        return false;
+    }
+    bool url = strstr(path_or_url, "://") != NULL;
+    size_t len = url ? strcspn(path_or_url, "?#") : strlen(path_or_url);
+    return ends_with_ci(path_or_url, len, ".zip");
+}
+
 xc_err xc_zip_pick_image(const xc_zip_listing *listing, size_t *index)
 {
     if (listing == NULL || index == NULL) {

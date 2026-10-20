@@ -1,6 +1,7 @@
 /* Tests for the map loader (core/src/map.c, docs/formats/map.md). */
 #include "unity.h"
 #include "xcat/map.h"
+#include "xcat/zip.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -222,6 +223,31 @@ static void test_line_errors_keep_loading(void)
     }
 }
 
+static void test_zip_urls(void)
+{
+    /* §4.2: a zip is an entry like any other; a file inside one isn't (ADR 0009). */
+    TEST_ASSERT_EQUAL_INT(XC_OK,
+                          load(HDR "0000000A = https://h.lan/d/x/Game (USA).zip\n"        /* 2 */
+                                   "0000000B = https://h.lan/d/x/Game.ZIP?a=b.zip/c\n"    /* 3 */
+                                   "0000000C = https://h.lan/d/x/Game.zip/Game.iso\n"     /* 4 */
+                                   "0000000D = https://h.lan/d/x/Game.Zip/sub/Game.iso\n" /* 5 */
+                                   "0000000E = https://h.lan/d/x.zip.d/Game.iso\n"        /* 6 */
+                                   "0000000F = https://h.lan/d/x/Game.zip/\n"));          /* 7 */
+    TEST_ASSERT_EQUAL_size_t(4, map.entry_count);
+    TEST_ASSERT_NOT_NULL(url_of(0xAU, NULL));
+    TEST_ASSERT_NOT_NULL(url_of(0xBU, NULL));
+    TEST_ASSERT_NOT_NULL(url_of(0xEU, NULL)); /* ".zip.d" is a directory name */
+    TEST_ASSERT_NOT_NULL(url_of(0xFU, NULL)); /* nothing after the slash */
+    expect_problem(XC_MAP_ERROR, 4, "inside a zip");
+    expect_problem(XC_MAP_ERROR, 5, "use the URL of the .zip itself");
+    TEST_ASSERT_TRUE(xc_zip_is_zip_name("https://h.lan/d/x/Game (USA).ZIP?download=1#x"));
+    TEST_ASSERT_TRUE(xc_zip_is_zip_name("E:\\xcat\\isos\\game.zip"));
+    TEST_ASSERT_FALSE(xc_zip_is_zip_name("https://h.lan/d/x/Game.zip/Game.iso"));
+    TEST_ASSERT_FALSE(xc_zip_is_zip_name("https://h.lan/d/x/Game.iso?f=a.zip"));
+    TEST_ASSERT_FALSE(xc_zip_is_zip_name("zip"));
+    TEST_ASSERT_FALSE(xc_zip_is_zip_name(NULL));
+}
+
 static void test_duplicates(void)
 {
     TEST_ASSERT_EQUAL_INT(XC_OK, load(HDR "0000000A = http://h.lan/1.iso\n"
@@ -429,6 +455,7 @@ int main(void)
     RUN_TEST(test_spec_example);
     RUN_TEST(test_lines_and_header);
     RUN_TEST(test_line_errors_keep_loading);
+    RUN_TEST(test_zip_urls);
     RUN_TEST(test_duplicates);
     RUN_TEST(test_lines_too_long_and_files_too_big);
     RUN_TEST(test_entry_limit);

@@ -1,11 +1,12 @@
 /*
- * xiso-cartographer XBE, milestone M5: install games over the network (HTTP or HTTPS),
- * resumably.
+ * xiso-cartographer XBE, milestone M5b: install games over the network (HTTP or HTTPS),
+ * resumably, from images or from zips holding one (ADR 0009).
  *
  * What it installs, in this order:
  *   1. every entry of the map E:\xcat\map.txt (docs/formats/map.md), downloaded over HTTP
- *      with Range and installed while it streams in (ADR 0004);
- *   2. every image in E:\xcat\isos\ (the M2 local install);
+ *      with Range and installed while it streams in (ADR 0004); an entry ending in .zip
+ *      installs the zip's image (docs/formats/zip.md, stream-install.md);
+ *   2. every image or zip in E:\xcat\isos\ (the M2 local install);
  *   3. if there is neither, the bundled synthetic test image (D:\samples\*.iso).
  * Each one goes through xc_install (xcat/install.h): FATX check, free space, a journal so a
  * pulled cable or a power cut resumes instead of starting over, a read-back check of every
@@ -29,6 +30,7 @@
 #include "xcat/map.h"
 #include "xcat/nxdk.h"
 #include "xcat/version.h"
+#include "xcat/zip.h"
 
 #define XCAT_DIR "E:\\xcat"
 #define MAP_FILE XCAT_DIR "\\map.txt"
@@ -451,7 +453,7 @@ static int hexval(char c)
                                   : -1;
 }
 
-/* "dir/Halo%20(USA).xiso.iso?x" -> "Halo (USA)" */
+/* "dir/Halo%20(USA).xiso.iso?x" -> "Halo (USA)"; likewise "Halo (USA).zip" */
 static void title_from(const char *name, char *out_title, size_t size)
 {
     const char *end = name + strcspn(name, "?#");
@@ -465,6 +467,9 @@ static void title_from(const char *name, char *out_title, size_t size)
         int lo = hi >= 0 ? hexval(p[2]) : -1;
         out_title[n++] = lo >= 0 ? (char)(hi * 16 + lo) : *p;
         p += lo >= 0 ? 3 : 1;
+    }
+    if (ends_with_ci(out_title, n, ".zip")) {
+        n -= 4;
     }
     if (ends_with_ci(out_title, n, ".iso")) {
         n -= 4;
@@ -571,6 +576,22 @@ static void log_image_hash(const xc_install_result *r)
         r->hash_restarted ? " (hashed from the start again)" : "");
 }
 
+/* ADR 0009 amendment 1: how a zip install went, and what a Deflate one cost. */
+static void log_zip(const xc_install_result *r)
+{
+    out("  from the zip: %s, %s\n", r->zip_member, r->zip_method == 0 ? "stored" : "Deflate");
+    if (r->zip_method == 0) {
+        return;
+    }
+    out("  %u pass%s, %llu MiB read again, %u file(s) from a %llu MiB spool\n", r->passes,
+        r->passes == 1 ? "" : "es", (unsigned long long)(r->reread_bytes >> 20U),
+        (unsigned)r->files_from_spool, (unsigned long long)(r->spool_peak >> 20U));
+    if (r->zip_resumed_at > 0) {
+        out("  continued %llu MiB into the image\n",
+            (unsigned long long)(r->zip_resumed_at >> 20U));
+    }
+}
+
 /* Installs one image; true if it ended installed and verified. */
 static bool install(const xc_source *src, const char *name, const char *etag,
                     const char *last_modified)
@@ -598,7 +619,9 @@ static bool install(const xc_source *src, const char *name, const char *etag,
     req.cluster_size = CLUSTER;
     req.progress = on_progress;
     req.progress_ctx = &u;
+    req.zip = xc_zip_is_zip_name(name);
     xc_err err = xc_install(&req, &result);
+    xc_nx_spool_close();
     end_phase(&u, now_ms(), last_bytes_done);
     if (result.other_folder_reason != NULL) {
         out("  (not the existing folder of that name: %s)\n", result.other_folder_reason);
@@ -621,10 +644,19 @@ static bool install(const xc_source *src, const char *name, const char *etag,
                 (unsigned)result.files_continued,
                 (unsigned long long)(result.bytes_continued >> 20U));
         }
+        if (req.zip) {
+            log_zip(&result);
+        }
         log_image_hash(&result);
         return true;
     }
     out("  NOT INSTALLED: %s\n", xc_err_str(err));
+    if (err == XC_ERR_ZIP_UNSUPPORTED && result.zip_method != 0 && result.zip_method != 8) {
+        const char *method = xc_zip_method_name(result.zip_method);
+        out("   %s in the zip uses %s (method %u); only stored and Deflate can be read\n",
+            result.zip_member[0] != '\0' ? result.zip_member : "the image",
+            method != NULL ? method : "an unknown method", (unsigned)result.zip_method);
+    }
     if (err == XC_ERR_IMAGE_HASH) {
         log_image_hash(&result);
     }
@@ -734,12 +766,17 @@ static void seed_samples(void)
     FindClose(h);
 }
 
+/* The images and zips in E:\xcat\isos. */
 static int list_local(char names[MAX_LOCAL][XC_NX_PATH_MAX])
 {
+    static const char *const patterns[] = {ISO_DIR "\\*.iso", ISO_DIR "\\*.zip"};
     int count = 0;
-    WIN32_FIND_DATAA fd;
-    HANDLE h = FindFirstFileA(ISO_DIR "\\*.iso", &fd);
-    if (h != INVALID_HANDLE_VALUE) {
+    for (size_t k = 0; k < sizeof patterns / sizeof patterns[0]; k++) {
+        WIN32_FIND_DATAA fd;
+        HANDLE h = FindFirstFileA(patterns[k], &fd);
+        if (h == INVALID_HANDLE_VALUE) {
+            continue;
+        }
         do {
             if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && count < MAX_LOCAL) {
                 snprintf(names[count++], XC_NX_PATH_MAX, ISO_DIR "\\%s", fd.cFileName);
@@ -753,7 +790,7 @@ static int list_local(char names[MAX_LOCAL][XC_NX_PATH_MAX])
 int main(void)
 {
     XVideoSetMode(640, 480, 32, REFRESH_DEFAULT);
-    debugPrint("xiso-cartographer %s - install (M5)\n", xc_version_string());
+    debugPrint("xiso-cartographer %s - install (M5b)\n", xc_version_string());
     xc_nx_clock(&clk);
     run_start_ms = now_ms();
     pads_init();

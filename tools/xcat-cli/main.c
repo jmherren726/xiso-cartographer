@@ -1002,13 +1002,6 @@ static void print_image_hash(const xc_install_result *r)
                  r->hash_restarted ? "; hashed from the start again" : "");
 }
 
-/* "*.zip", ignoring a URL's query and fragment: installs from the zip's image (zip.md). */
-static bool is_zip_name(const char *s)
-{
-    size_t len = is_url(s) ? strcspn(s, "?#") : strlen(s);
-    return ends_with_ci(s, len, ".zip");
-}
-
 static int cmd_install(int argc, char **argv)
 {
     net_opts o;
@@ -1077,7 +1070,7 @@ static int cmd_install(int argc, char **argv)
     req.checkpoint_bytes = (uint32_t)o.checkpoint;
     req.progress = install_progress;
     req.progress_ctx = &ui;
-    req.zip = is_zip_name(image);
+    req.zip = xc_zip_is_zip_name(image);
     req.expect_md5 = o.has_md5 ? o.md5 : NULL;
     req.expect_sha1 = o.has_sha1 ? o.sha1 : NULL;
     static xc_install_result r;
