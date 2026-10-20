@@ -1,6 +1,6 @@
 # archive.org item metadata (`@archiveorg`)
 
-**Status:** Normative. §1–§5 are implemented by `xcat/archiveorg.h` (M6), with the JSON subset in §6. The map loader's use of it (§7) and the install checks (§8) follow later in M6. The reasons are in [ADR 0013](../adr/0013-archiveorg-source.md).
+**Status:** Normative. §1–§6 are implemented by `xcat/archiveorg.h` (M6), and §7 by the map loader (`xcat/map.h`, `xcat-cli map`). The install checks (§8) follow later in M6. The reasons are in [ADR 0013](../adr/0013-archiveorg-source.md).
 
 `@archiveorg <identifier>` in a map ([map.md §5.2](map.md#52-archiveorg-identifier)) turns the image files of one archive.org item into map entries. The item's listing comes from archive.org's public metadata API. It is input from the network, so every field is checked.
 
@@ -96,7 +96,7 @@ Anything else makes the whole body invalid. Strings and numbers in parts the rea
 
 ## 7. In the map
 
-*(Implemented later in M6.)* The directive's entries are inserted at its position, so [map.md §4.3](map.md#43-duplicate-keys) applies: a later entry with the same name replaces an earlier one, with a warning. Errors from §2 are line errors of the directive's line.
+The directive's entries are inserted at its position, so [map.md §4.3](map.md#43-duplicate-keys) applies: a later entry with the same name (ASCII case-insensitive) replaces an earlier one, with a warning. Errors from §2 are line errors of the directive's line. Each generated URL is also checked like a written one ([map.md §4.2](map.md#42-url)): a file in a folder whose name ends in `.zip` would be read as a file inside a zip, so it is skipped with a warning. Warnings name the item and count what was skipped: files with a bad name or size (naming the first), URLs refused, malformed hashes. The console lists generated entries without installing them until choosing what to install comes later in M6.
 
 ## 8. Installing a generated entry
 

@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "text.h"
+#include "xcat/archiveorg.h"
 #include "xcat/url.h"
 
 typedef struct loader {
@@ -19,7 +20,8 @@ typedef struct loader {
     bool is_url[XC_MAP_MAX_FILES];      /* per source */
     size_t stack[XC_MAP_MAX_DEPTH + 1]; /* sources being processed, outermost first */
     size_t depth;
-    bool stopped; /* the entry limit was reached */
+    size_t listings; /* @archiveorg directives fetched so far (§6) */
+    bool stopped;    /* the entry limit was reached */
     xc_url scratch;
     xc_url base;
 } loader;
@@ -193,26 +195,64 @@ static const char *url_problem(loader *L, const char *url)
     return NULL;
 }
 
+/* Fills in an entry's URL and, for a generated one, its name and listing (§5.2). */
+static xc_err set_entry(xc_map_entry *e, const char *url, const xc_archiveorg_file *f)
+{
+    char *copy = dup_str(url);
+    char *name = f != NULL ? dup_str(f->name) : NULL;
+    if (copy == NULL || (f != NULL && name == NULL)) {
+        free(copy);
+        free(name);
+        return XC_ERR_NOMEM;
+    }
+    free(e->url);
+    free(e->name);
+    e->url = copy;
+    e->name = name;
+    e->size = 0;
+    e->has_md5 = false;
+    e->has_sha1 = false;
+    e->has_crc32 = false;
+    memset(e->md5, 0, sizeof e->md5);
+    memset(e->sha1, 0, sizeof e->sha1);
+    e->crc32 = 0;
+    if (f != NULL) {
+        e->size = f->size;
+        e->has_md5 = f->has_md5;
+        e->has_sha1 = f->has_sha1;
+        e->has_crc32 = f->has_crc32;
+        memcpy(e->md5, f->md5, sizeof e->md5);
+        memcpy(e->sha1, f->sha1, sizeof e->sha1);
+        e->crc32 = f->crc32;
+    }
+    return XC_OK;
+}
+
+/* Adds an entry keyed by title ID and variant, or, for a file `f` of an archive.org listing,
+ * by f->name (§5.2), with `url`. */
 static xc_err add_entry(loader *L, size_t source, size_t line, uint32_t title_id,
-                        const char *variant, const char *url)
+                        const char *variant, const char *url, const xc_archiveorg_file *f)
 {
     xc_map *m = L->m;
     for (size_t i = 0; i < m->entry_count; i++) {
         xc_map_entry *e = &m->entries[i];
-        if (e->title_id == title_id && strcmp(e->variant, variant) == 0) {
+        bool same = f != NULL ? e->name != NULL && xc_text_eq_ci(e->name, f->name)
+                              : e->name == NULL && e->title_id == title_id &&
+                                    strcmp(e->variant, variant) == 0;
+        if (same) {
             /* §4.3: the last entry wins. */
-            char *copy = dup_str(url);
-            if (copy == NULL) {
-                return XC_ERR_NOMEM;
+            if (f != NULL) {
+                problem(L, XC_MAP_WARNING, source, line,
+                        "\"%s\" also defined at %s:%zu; this line wins", f->name,
+                        m->sources[e->source], e->line);
+            } else {
+                problem(L, XC_MAP_WARNING, source, line,
+                        "%08X%s%s also defined at %s:%zu; this line wins", (unsigned)title_id,
+                        variant[0] != '\0' ? "@" : "", variant, m->sources[e->source], e->line);
             }
-            problem(L, XC_MAP_WARNING, source, line,
-                    "%08X%s%s also defined at %s:%zu; this line wins", (unsigned)title_id,
-                    variant[0] != '\0' ? "@" : "", variant, m->sources[e->source], e->line);
-            free(e->url);
-            e->url = copy;
             e->source = source;
             e->line = line;
-            return XC_OK;
+            return set_entry(e, url, f);
         }
     }
     if (m->entry_count == XC_MAP_MAX_ENTRIES) {
@@ -233,15 +273,15 @@ static xc_err add_entry(loader *L, size_t source, size_t line, uint32_t title_id
         m->entries = grown;
         m->entry_cap = cap;
     }
-    char *copy = dup_str(url);
-    if (copy == NULL) {
-        return XC_ERR_NOMEM;
-    }
-    xc_map_entry *e = &m->entries[m->entry_count++];
+    xc_map_entry *e = &m->entries[m->entry_count];
     memset(e, 0, sizeof *e);
-    e->title_id = title_id;
-    memcpy(e->variant, variant, strlen(variant) + 1);
-    e->url = copy;
+    xc_err err = set_entry(e, url, f);
+    if (err != XC_OK) {
+        return err;
+    }
+    m->entry_count++;
+    e->title_id = f != NULL ? 0 : title_id;
+    memcpy(e->variant, f != NULL ? "" : variant, f != NULL ? 1 : strlen(variant) + 1);
     e->source = source;
     e->line = line;
     return XC_OK;
@@ -269,7 +309,7 @@ static xc_err entry_line(loader *L, size_t source, size_t line, char *text)
         problem(L, XC_MAP_ERROR, source, line, "%s", why);
         return XC_OK;
     }
-    return add_entry(L, source, line, title_id, variant, url);
+    return add_entry(L, source, line, title_id, variant, url, NULL);
 }
 
 /* --- §5: directives --------------------------------------------------------------------- */
@@ -409,21 +449,102 @@ static xc_err include_line(loader *L, size_t source, size_t line, char *arg)
     return err;
 }
 
-/* §5.2: 1-100 characters from A-Z a-z 0-9 . _ - */
-static bool archiveorg_id_ok(const char *id)
+/* Turns a listing's files into entries (archiveorg.md §4, §7). */
+static xc_err add_listing(loader *L, size_t source, size_t line, const char *id,
+                          const xc_archiveorg_item *item)
 {
-    size_t n = strlen(id);
-    if (n == 0 || n > 100) {
-        return false;
-    }
-    for (size_t i = 0; i < n; i++) {
-        char c = id[i];
-        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
-              c == '.' || c == '_' || c == '-')) {
-            return false;
+    size_t bad_urls = 0;
+    for (size_t i = 0; i < item->file_count && !L->stopped; i++) {
+        const xc_archiveorg_file *f = &item->files[i];
+        /* The URL is built from checked parts, but goes through the same rules as any
+         * other (§4.2): a file in a folder named *.zip would be read as a file in a zip. */
+        if (url_problem(L, f->url) != NULL) {
+            bad_urls++;
+            continue;
+        }
+        xc_err err = add_entry(L, source, line, 0, "", f->url, f);
+        if (err != XC_OK) {
+            return err;
         }
     }
-    return true;
+    if (item->file_count == 0 && item->invalid == 0) {
+        problem(L, XC_MAP_WARNING, source, line,
+                "archive.org item %s has no .iso, .xiso or .zip files", id);
+    }
+    if (item->invalid > 0) {
+        problem(L, XC_MAP_WARNING, source, line,
+                "@archiveorg %s: skipped %zu file(s) with a bad name or size, first \"%s\"", id,
+                item->invalid, item->first_invalid);
+    }
+    if (bad_urls > 0) {
+        problem(L, XC_MAP_WARNING, source, line,
+                "@archiveorg %s: skipped %zu file(s) whose URL isn't accepted", id, bad_urls);
+    }
+    if (item->hashes_dropped > 0) {
+        problem(L, XC_MAP_WARNING, source, line, "@archiveorg %s: ignored %zu malformed hash(es)",
+                id, item->hashes_dropped);
+    }
+    return XC_OK;
+}
+
+/* §5.2: generates entries from an archive.org item's listing (archiveorg.md). */
+static xc_err archiveorg_line(loader *L, size_t source, size_t line, const char *id)
+{
+    char url[XC_ARCHIVEORG_MAX_ID + 40];
+    if (xc_archiveorg_metadata_url(id, url, sizeof url) != XC_OK) {
+        problem(L, XC_MAP_ERROR, source, line, "invalid archive.org identifier");
+        return XC_OK;
+    }
+    if (L->ld == NULL || L->ld->fetch == NULL) {
+        problem(L, XC_MAP_ERROR, source, line, "@archiveorg isn't available here");
+        return XC_OK;
+    }
+    if (L->listings == XC_MAP_MAX_LISTINGS) {
+        problem(L, XC_MAP_ERROR, source, line, "@archiveorg %s: more than %d items", id,
+                XC_MAP_MAX_LISTINGS);
+        return XC_OK;
+    }
+    L->listings++;
+    char *data = NULL;
+    size_t len = 0;
+    xc_err err = L->ld->fetch(L->ld->ctx, url, true, XC_ARCHIVEORG_MAX_METADATA, &data, &len);
+    if (err != XC_OK) {
+        free(data);
+        if (err == XC_ERR_NOMEM) {
+            return err;
+        }
+        problem(L, XC_MAP_ERROR, source, line,
+                "@archiveorg %s: couldn't get the item's listing: %s", id,
+                err == XC_ERR_LIMIT ? "larger than 4 MiB" : xc_err_str(err));
+        return XC_OK;
+    }
+    xc_archiveorg_item item;
+    err = xc_archiveorg_parse(id, data, len, &item);
+    free(data);
+    if (err == XC_OK) {
+        switch (item.status) {
+        case XC_ARCHIVEORG_OK:
+            err = add_listing(L, source, line, id, &item);
+            break;
+        case XC_ARCHIVEORG_NOT_METADATA:
+            problem(L, XC_MAP_ERROR, source, line,
+                    "archive.org didn't send the metadata of item %s", id);
+            break;
+        case XC_ARCHIVEORG_DARK:
+            problem(L, XC_MAP_ERROR, source, line, "archive.org item %s was taken down", id);
+            break;
+        case XC_ARCHIVEORG_MISSING:
+            problem(L, XC_MAP_ERROR, source, line,
+                    "archive.org item %s doesn't exist or was removed", id);
+            break;
+        }
+    } else if (err == XC_ERR_LIMIT) {
+        problem(L, XC_MAP_ERROR, source, line,
+                "@archiveorg %s: couldn't get the item's listing: larger than 4 MiB", id);
+        err = XC_OK;
+    }
+    xc_archiveorg_free(&item);
+    return err;
 }
 
 static xc_err directive_line(loader *L, size_t source, size_t line, char *text)
@@ -444,17 +565,8 @@ static xc_err directive_line(loader *L, size_t source, size_t line, char *text)
             problem(L, XC_MAP_ERROR, source, line, "@%s needs an argument", name);
             return XC_OK;
         }
-        if (name[0] == 'i') {
-            return include_line(L, source, line, arg);
-        }
-        if (!archiveorg_id_ok(arg)) {
-            problem(L, XC_MAP_ERROR, source, line, "invalid archive.org identifier");
-        } else {
-            problem(L, XC_MAP_WARNING, source, line,
-                    "@archiveorg %s: not supported yet (comes with the archive.org source, M6)",
-                    arg);
-        }
-        return XC_OK;
+        return name[0] == 'i' ? include_line(L, source, line, arg)
+                              : archiveorg_line(L, source, line, arg);
     }
     problem(L, XC_MAP_WARNING, source, line, "unknown directive @%s skipped", name);
     return XC_OK;
@@ -580,6 +692,7 @@ xc_err xc_map_load(const char *data, size_t len, const char *location, const xc_
             /* §7: a rejected top-level file has no entries at all. */
             for (size_t i = 0; i < map->entry_count; i++) {
                 free(map->entries[i].url);
+                free(map->entries[i].name);
             }
             map->entry_count = 0;
             problem(L, XC_MAP_ERROR, root, 0, "%s", why);
@@ -597,6 +710,7 @@ void xc_map_free(xc_map *map)
     }
     for (size_t i = 0; i < map->entry_count; i++) {
         free(map->entries[i].url);
+        free(map->entries[i].name);
     }
     free(map->entries);
     free(map->problems);
@@ -628,7 +742,7 @@ const xc_map_entry *xc_map_find(const xc_map *map, uint32_t title_id, const char
     const xc_map_entry *fallback = NULL;
     for (size_t i = 0; i < map->entry_count; i++) {
         const xc_map_entry *e = &map->entries[i];
-        if (e->title_id != title_id) {
+        if (e->name != NULL || e->title_id != title_id) {
             continue;
         }
         if (strcmp(e->variant, want) == 0) {
@@ -639,4 +753,18 @@ const xc_map_entry *xc_map_find(const xc_map *map, uint32_t title_id, const char
         }
     }
     return fallback;
+}
+
+const xc_map_entry *xc_map_find_name(const xc_map *map, const char *name)
+{
+    if (map == NULL || name == NULL) {
+        return NULL;
+    }
+    for (size_t i = 0; i < map->entry_count; i++) {
+        const xc_map_entry *e = &map->entries[i];
+        if (e->name != NULL && xc_text_eq_ci(e->name, name)) {
+            return e;
+        }
+    }
+    return NULL;
 }

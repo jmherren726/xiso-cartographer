@@ -1,5 +1,6 @@
 /* Tests for the map loader (core/src/map.c, docs/formats/map.md). */
 #include "unity.h"
+#include "xcat/archiveorg.h"
 #include "xcat/map.h"
 #include "xcat/zip.h"
 
@@ -28,8 +29,9 @@ static xc_err fake_fetch(void *ctx, const char *location, bool is_url, size_t ma
                          size_t *len)
 {
     (void)ctx;
-    (void)is_url;
-    TEST_ASSERT_EQUAL_size_t(XC_MAP_MAX_FILE, max_len);
+    bool listing = strncmp(location, "https://archive.org/metadata/", 29) == 0;
+    TEST_ASSERT_TRUE(!listing || is_url);
+    TEST_ASSERT_EQUAL_size_t(listing ? XC_ARCHIVEORG_MAX_METADATA : XC_MAP_MAX_FILE, max_len);
     if (fetches < 64) {
         (void)snprintf(fetched[fetches], sizeof fetched[0], "%s", location);
     }
@@ -112,16 +114,25 @@ static void test_spec_example(void)
 {
     static const ffile inc[] = {
         {"E:\\xcat\\more.txt", HDR "4D530064 = http://192.168.1.20:8080/xbox/Halo 2.iso\n"},
+        {"https://archive.org/metadata/some-item_1.0",
+         "{\"files\":[{\"name\":\"Game (USA).zip\",\"source\":\"original\",\"size\":\"5\"}]}"},
     };
-    set_files(inc, 1);
+    set_files(inc, 2);
     TEST_ASSERT_EQUAL_INT(
         XC_OK, load("# xcat-map v1\n# Lines starting with # are comments.\n\n"
                     "4D530004       = https://archive.org/download/item/file.xiso.iso\n"
                     "4d530004@pal   = http://192.168.1.20:8080/xbox/Halo (Europe).xiso.iso\n"
                     "@include more.txt\n"
                     "@archiveorg some-item_1.0\n"));
-    TEST_ASSERT_EQUAL_size_t(3, map.entry_count);
+    TEST_ASSERT_EQUAL_size_t(4, map.entry_count);
     TEST_ASSERT_EQUAL_size_t(0, map.error_count);
+    TEST_ASSERT_EQUAL_size_t(0, map.problem_count);
+    const xc_map_entry *g = xc_map_find_name(&map, "game (usa)");
+    TEST_ASSERT_NOT_NULL(g);
+    TEST_ASSERT_EQUAL_STRING("https://archive.org/download/some-item_1.0/Game%20%28USA%29.zip",
+                             g->url);
+    TEST_ASSERT_EQUAL_size_t(7, g->line);
+    TEST_ASSERT_EQUAL_size_t(0, g->source);
     TEST_ASSERT_EQUAL_STRING("https://archive.org/download/item/file.xiso.iso",
                              url_of(0x4D530004U, NULL));
     TEST_ASSERT_EQUAL_STRING("http://192.168.1.20:8080/xbox/Halo (Europe).xiso.iso",
@@ -132,7 +143,6 @@ static void test_spec_example(void)
     TEST_ASSERT_EQUAL_size_t(2, map.source_count);
     TEST_ASSERT_EQUAL_STRING("E:\\xcat\\more.txt", map.sources[1]);
     TEST_ASSERT_EQUAL_size_t(1, map.entries[2].source);
-    expect_problem(XC_MAP_WARNING, 7, "not supported yet");
     /* A variant without its own entry falls back to the default; another title has none. */
     TEST_ASSERT_EQUAL_STRING("https://archive.org/download/item/file.xiso.iso",
                              url_of(0x4D530004U, "NTSC-J"));
@@ -449,9 +459,152 @@ static void test_find(void)
     TEST_ASSERT_NULL(xc_map_find(NULL, 0xAU, NULL));
 }
 
+/* --- §5.2: @archiveorg ---------------------------------------------------------------------- */
+
+#define MD "https://archive.org/metadata/"
+
+static void test_archiveorg(void)
+{
+    static const ffile fs[] = {
+        {MD "games-a",
+         "{\"files\":[{\"name\":\"Game A "
+         "(USA).zip\",\"source\":\"original\",\"size\":\"6266337551\","
+         "\"md5\":\"38b167e84cd7f5342419b83e7896c992\",\"crc32\":\"57654766\","
+         "\"sha1\":\"0bf206772bb82ead1eb27c24531c2042b719011b\",\"private\":\"true\"},"
+         "{\"name\":\"Game B (Europe).xiso.iso\",\"size\":\"3728867328\",\"md5\":\"x\"},"
+         "{\"name\":\"bad.iso\",\"size\":\"0\"},"
+         "{\"name\":\"in.zip/Game C.iso\",\"size\":\"9\"},"
+         "{\"name\":\"cover.jpg\",\"size\":\"9\"}]}"},
+        {MD "games-b", "{\"files\":[{\"name\":\"GAME A (USA).iso\",\"size\":\"7\"}]}"},
+    };
+    set_files(fs, 2);
+    TEST_ASSERT_EQUAL_INT(XC_OK, load(HDR "@archiveorg games-a\n"           /* 2 */
+                                          "0000000A = http://h.lan/a.iso\n" /* 3 */
+                                          "@archiveorg games-b\n"));        /* 4 */
+    TEST_ASSERT_EQUAL_size_t(0, map.error_count);
+    TEST_ASSERT_EQUAL_size_t(3, map.entry_count);
+    TEST_ASSERT_EQUAL_INT(2, fetches);
+    TEST_ASSERT_EQUAL_STRING(MD "games-a", fetched[0]);
+
+    /* games-b's "GAME A (USA)" replaces games-a's "Game A (USA)" (§4.3, case-insensitive). */
+    const xc_map_entry *a = xc_map_find_name(&map, "Game A (USA)");
+    TEST_ASSERT_NOT_NULL(a);
+    TEST_ASSERT_EQUAL_STRING("GAME A (USA)", a->name);
+    TEST_ASSERT_EQUAL_STRING("https://archive.org/download/games-b/GAME%20A%20%28USA%29.iso",
+                             a->url);
+    TEST_ASSERT_EQUAL_size_t(4, a->line);
+    TEST_ASSERT_TRUE(a->size == 7);
+    TEST_ASSERT_FALSE(a->has_md5 || a->has_sha1 || a->has_crc32);
+    expect_problem(XC_MAP_WARNING, 4, "\"GAME A (USA)\" also defined at E:\\xcat\\map.txt:2");
+
+    const xc_map_entry *b = xc_map_find_name(&map, "game b (europe)");
+    TEST_ASSERT_NOT_NULL(b);
+    TEST_ASSERT_EQUAL_STRING(
+        "https://archive.org/download/games-a/Game%20B%20%28Europe%29.xiso.iso", b->url);
+    TEST_ASSERT_TRUE(b->size == UINT64_C(3728867328));
+    TEST_ASSERT_EQUAL_UINT32(0, b->title_id);
+    TEST_ASSERT_EQUAL_STRING("", b->variant);
+    TEST_ASSERT_EQUAL_size_t(2, b->line);
+    expect_problem(XC_MAP_WARNING, 2,
+                   "skipped 1 file(s) with a bad name or size, first \"bad.iso\"");
+    expect_problem(XC_MAP_WARNING, 2, "skipped 1 file(s) whose URL isn't accepted");
+    expect_problem(XC_MAP_WARNING, 2, "ignored 1 malformed hash(es)");
+
+    /* Title-ID lookups never return a generated entry, and the reverse. */
+    TEST_ASSERT_EQUAL_STRING("http://h.lan/a.iso", url_of(0xAU, NULL));
+    TEST_ASSERT_EQUAL_STRING("-", url_of(0, NULL));
+    TEST_ASSERT_NULL(xc_map_find_name(&map, "Game C"));
+    TEST_ASSERT_NULL(xc_map_find_name(&map, "cover"));
+    TEST_ASSERT_NULL(xc_map_find_name(NULL, "x"));
+}
+
+static void test_archiveorg_listing_details(void)
+{
+    static const ffile fs[] = {
+        {MD "full", "{\"files\":[{\"name\":\"Game (USA).zip\",\"size\":\"6266337551\","
+                    "\"md5\":\"38B167E84CD7F5342419B83E7896C992\",\"crc32\":\"57654766\","
+                    "\"sha1\":\"0bf206772bb82ead1eb27c24531c2042b719011b\"}]}"},
+    };
+    set_files(fs, 1);
+    TEST_ASSERT_EQUAL_INT(XC_OK, load(HDR "@archiveorg full\n"));
+    TEST_ASSERT_EQUAL_size_t(1, map.entry_count);
+    const xc_map_entry *e = &map.entries[0];
+    TEST_ASSERT_TRUE(e->has_md5 && e->has_sha1 && e->has_crc32);
+    TEST_ASSERT_EQUAL_HEX8(0x38, e->md5[0]);
+    TEST_ASSERT_EQUAL_HEX8(0x92, e->md5[15]);
+    TEST_ASSERT_EQUAL_HEX8(0x0B, e->sha1[0]);
+    TEST_ASSERT_EQUAL_HEX8(0x1B, e->sha1[19]);
+    TEST_ASSERT_EQUAL_HEX32(0x57654766U, e->crc32);
+    TEST_ASSERT_TRUE(e->size == UINT64_C(6266337551));
+
+    /* A hand-written entry keeps no listing fields. */
+    TEST_ASSERT_EQUAL_INT(XC_OK, load(HDR "0000000A = http://h.lan/a.iso\n"));
+    TEST_ASSERT_NULL(map.entries[0].name);
+    TEST_ASSERT_TRUE(map.entries[0].size == 0);
+    TEST_ASSERT_FALSE(map.entries[0].has_md5);
+}
+
+static void test_archiveorg_failures(void)
+{
+    static const ffile fs[] = {
+        {MD "gone", "{}"},
+        {MD "dark", "{\"is_dark\":true,\"files\":[{\"name\":\"a.iso\",\"size\":\"1\"}]}"},
+        {MD "html", "<html>busy</html>"},
+        {MD "empty", "{\"files\":[{\"name\":\"cover.jpg\",\"size\":\"1\"}]}"},
+        {MD "ok", "{\"files\":[{\"name\":\"a.iso\",\"size\":\"1\"}]}"},
+    };
+    set_files(fs, 5);
+    TEST_ASSERT_EQUAL_INT(XC_OK, load(HDR "@archiveorg gone\n"    /* 2 */
+                                          "@archiveorg dark\n"    /* 3 */
+                                          "@archiveorg html\n"    /* 4 */
+                                          "@archiveorg empty\n"   /* 5 */
+                                          "@archiveorg unknown\n" /* 6 */
+                                          "@archiveorg\n"         /* 7 */
+                                          "@archiveorg a b\n"     /* 8 */
+                                          "@archiveorg ok\n"));   /* 9 */
+    expect_problem(XC_MAP_ERROR, 2, "archive.org item gone doesn't exist or was removed");
+    expect_problem(XC_MAP_ERROR, 3, "archive.org item dark was taken down");
+    expect_problem(XC_MAP_ERROR, 4, "archive.org didn't send the metadata of item html");
+    expect_problem(XC_MAP_WARNING, 5, "archive.org item empty has no .iso, .xiso or .zip files");
+    expect_problem(XC_MAP_ERROR, 6, "@archiveorg unknown: couldn't get the item's listing");
+    expect_problem(XC_MAP_ERROR, 7, "@archiveorg needs an argument");
+    expect_problem(XC_MAP_ERROR, 8, "invalid archive.org identifier");
+    TEST_ASSERT_EQUAL_size_t(6, map.error_count);
+    TEST_ASSERT_EQUAL_size_t(1, map.entry_count); /* every other line still loads */
+    TEST_ASSERT_NOT_NULL(xc_map_find_name(&map, "a"));
+    TEST_ASSERT_EQUAL_size_t(1, map.source_count); /* listings aren't map files */
+
+    /* Without a fetch callback the directive fails, and nothing else does. */
+    xc_map_free(&map);
+    const char *text = HDR "@archiveorg ok\n0000000A = http://h.lan/a.iso\n";
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_map_load(text, strlen(text), "m.txt", NULL, &map));
+    expect_problem(XC_MAP_ERROR, 2, "@archiveorg isn't available here");
+    TEST_ASSERT_EQUAL_size_t(1, map.entry_count);
+}
+
+static void test_archiveorg_limit(void)
+{
+    static const ffile fs[] = {{MD "ok", "{\"files\":[{\"name\":\"a.iso\",\"size\":\"1\"}]}"}};
+    set_files(fs, 1);
+    char text[2048];
+    size_t n = (size_t)snprintf(text, sizeof text, HDR);
+    for (int i = 0; i < XC_MAP_MAX_LISTINGS + 2; i++) {
+        n += (size_t)snprintf(text + n, sizeof text - n, "@archiveorg ok\n");
+    }
+    TEST_ASSERT_EQUAL_INT(XC_OK, load(text));
+    TEST_ASSERT_EQUAL_INT(XC_MAP_MAX_LISTINGS, fetches);
+    expect_problem(XC_MAP_ERROR, XC_MAP_MAX_LISTINGS + 2, "more than 32 items");
+    TEST_ASSERT_EQUAL_size_t(2, map.error_count);
+    TEST_ASSERT_EQUAL_size_t(1, map.entry_count);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
+    RUN_TEST(test_archiveorg);
+    RUN_TEST(test_archiveorg_listing_details);
+    RUN_TEST(test_archiveorg_failures);
+    RUN_TEST(test_archiveorg_limit);
     RUN_TEST(test_spec_example);
     RUN_TEST(test_lines_and_header);
     RUN_TEST(test_line_errors_keep_loading);
