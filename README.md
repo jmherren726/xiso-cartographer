@@ -6,7 +6,7 @@ Homebrew game catalog and installer for the modded original Xbox. Browse the ful
 
 ## Status
 
-**Pre-alpha, installing real games on hardware.** The install engine is done and has been tested on a real console. The catalog UI isn't built yet: for now the app shows a plain text list. Milestones M0–M5b are met, and M6 is waiting for its hardware exit test. What works on the Xbox today:
+**Pre-alpha, installing real games on hardware.** The install engine is done and has been tested on a real console. The catalog UI isn't built yet: for now the app shows a plain text list. Milestones M0–M6 are met on hardware. What works on the Xbox today:
 
 - **Installs from your map, over HTTP or HTTPS:** TLS 1.2 with certificate checks against built-in roots, the clock set from NTP, and archive.org logins from a [credentials file](docs/formats/credentials.md). Files are stream-extracted straight into `E:\Games\<title>`, with no temporary copy, so full-disc images of 7+ GB install too.
 - **Images and zips:** trimmed xisos, full-disc `.iso` dumps, and `.zip` files holding one image, stored or Deflate (including Zip64). Deflate zips are decompressed as they download.
