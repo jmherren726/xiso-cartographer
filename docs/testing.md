@@ -233,12 +233,13 @@ The UI test XBE (`app/ui-test`, [build-xbox.md](build-xbox.md)) draws through th
 
 | Step | Where | How | Pass |
 |---|---|---|---|
-| 1 | xemu | Load `app/ui-test/xcat-ui-test.iso` | One screen, no debug text: a grey outline 5 % inside each edge; a green title; "Body: Café, naïve, Ærøskøbing" with the accents; a bold Greek and Cyrillic line; two boxes after "drawn as boxes:"; a line cut with "…" inside a 300 px frame; a three-line paragraph ending in "…"; a list of "Game number" lines. The screen stays steady (no black frames). After a second the bottom line starts "On change:" with the time the last frame took to draw |
-| 2 | xemu | D-pad up and down | The highlighted (bold, blue) line moves and the list scrolls inside its frame; nothing is drawn outside it. Text cache misses stop growing once every line has been seen |
-| 3 | xemu | Y, then Y again | "Every frame:" with frames per second (at most the TV's refresh, about 60), then back to "On change:". Note whether the screen stays steady while it draws every frame |
-| 4 | Hardware | Copy all of `app/ui-test/bin/` (with `fonts\`) to the console, launch it, repeat 1–3 on the TV | The same; the outline is fully visible on the TV (title-safe area). Back returns to the dashboard |
+| 1 | xemu | Load `app/ui-test/xcat-ui-test.iso` | One screen in the UI's look ([ui-style.md](ui-style.md)), no debug text: the green panorama behind everything; a "UI TEST" tab; GAMES (highlighted), DOWNLOADS, INSTALLED, SETTINGS, none cut; a list of "Test game" lines; a detail panel with "Game 1", "Café, naïve, Ærøskøbing" with the accents, a Greek and Cyrillic line, two boxes after "Boxes:", a line cut with "…", and a wrapped paragraph ending in "…"; a footer. The panels have cut corners (top left, bottom right) and the background shows through them a little. The screen stays steady (no black frames) |
+| 2 | xemu | Watch for a minute | The background pans slowly to the right, slowing to a stop at the end, then back, without jumps. The footer's first line starts "On change:" with up to about 20 frames/s, the time to draw a frame, and "Pan N of 800" |
+| 3 | xemu | D-pad up and down | The highlighted line moves, the list scrolls inside its panel, nothing is drawn outside it, and the detail panel names the line. Text cache misses stop growing once every line has been seen, apart from the footer's changing numbers |
+| 4 | xemu | Y, then Y again | "Every frame:" with frames per second (at most the TV's refresh, about 60), then back to "On change:" |
+| 5 | Hardware | Copy all of `app/ui-test/bin/` (with `fonts\` and `ui\`) to the console, launch it, repeat 1–4 on the TV | The same; the panels sit fully inside the TV's picture (title-safe area). Back returns to the dashboard |
 
-Record the time to draw a frame, and the frames per second with Y, on xemu and on hardware.
+Record the time to draw a frame, the frames per second on change and with Y, on xemu and on hardware.
 
 The screens draw a frame only when something on them changed, like the "On change" mode: each frame is a full-screen copy by the CPU, which an install needs for itself.
 
