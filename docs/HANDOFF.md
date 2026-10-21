@@ -335,6 +335,6 @@ xiso images, HTTP responses, JSON metadata and map files all come from outside, 
 1. **PC speed baseline:** run `curl.exe -sS -o NUL -r 0-104857599 -w "%{speed_download} bytes/sec\n" <archive.org storage URL>` and record the result in `docs/testing.md`.
 2. ~~**Final name and licence**~~: `xiso-cartographer`, MIT ([ADR 0002](./adr/0002-license.md)).
 3. ~~**Test framework choice**~~: Unity ([ADR 0003](./adr/0003-unit-test-framework.md)).
-4. **UI approach:** SDL2 software rendering vs pbkit, and whether to use an immediate-mode UI library (ADR before M8). It must include text entry with an on-screen keyboard for the on-box login ([ADR 0010](./adr/0010-on-box-login-required-for-beta.md)).
+4. ~~**UI approach**~~: SDL2 and SDL_ttf as nxdk builds them, with our own controller-first widgets and on-screen keyboard, and the Noto Sans font ([ADR 0015](./adr/0015-ui-sdl2-own-widgets.md)).
 5. ~~**Catalog sources and licences**~~: Wikidata (CC0) and Redump (factual fields), no art, pipeline in `tools/catalog/` with the data as release assets ([ADR 0014](./adr/0014-catalog-sources-and-format.md), [`tools/catalog/SOURCES.md`](../tools/catalog/SOURCES.md)).
 6. **Hardware test bench:** which consoles/revisions, HDD sizes and dashboards are available for M0/M5/M9.
