@@ -18,4 +18,4 @@ NXDK_DIR ?= $(ROOT_DIR)/third_party/nxdk
 
 include $(NXDK_DIR)/Makefile
 
-include $(ROOT_DIR)/app/ui/ui-fonts.mk
+include $(ROOT_DIR)/app/ui/ui-assets.mk

@@ -124,6 +124,8 @@ jobs:
           ls -l app/fatx-probe/bin/default.xbe app/fatx-probe/xcat-fatx-probe.iso
           ls -l app/net-test/bin/default.xbe app/net-test/xcat-net-test.iso
           ls -l app/ui-test/bin/default.xbe app/ui-test/xcat-ui-test.iso app/ui-test/bin/fonts/*.ttf
+          # The background, converted to BMP (app/ui/ui-assets.mk).
+          test "$(head -c 2 app/ui-test/bin/ui/background.bmp)" = "BM"
           # Every XBE starts with the "XBEH" magic.
           test "$(head -c 4 app/bin/default.xbe)" = "XBEH"
           test "$(head -c 4 app/fatx-probe/bin/default.xbe)" = "XBEH"

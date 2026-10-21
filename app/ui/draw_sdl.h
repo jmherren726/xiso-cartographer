@@ -15,10 +15,12 @@
 extern "C" {
 #endif
 
-/* Opens the window, the renderer and the fonts in `font_dir` (NotoSans-Regular.ttf and
-   NotoSans-Bold.ttf, third_party/fonts) and fills `d`. On failure returns false and sets
-   *why to a message for the debug console. Call after XVideoSetMode. */
-bool ui_sdl_open(ui_draw *d, const char *font_dir, const char **why);
+/* Opens the window and the renderer, loads the assets from `asset_dir` (the XBE's folder,
+   app/ui/ui-assets.mk) and fills `d`: the fonts from fonts\ (NotoSans-Regular.ttf and
+   NotoSans-Bold.ttf, third_party/fonts), which must be there, and the images from ui\
+   (ui_image), which may be missing. On failure returns false and sets *why to a message
+   for the debug console. Call after XVideoSetMode. */
+bool ui_sdl_open(ui_draw *d, const char *asset_dir, const char **why);
 
 /* Starts a frame: clears the screen to `bg`. */
 void ui_sdl_begin(ui_color bg);

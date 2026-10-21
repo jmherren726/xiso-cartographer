@@ -28,6 +28,12 @@ typedef enum ui_font {
     UI_FONT_COUNT_
 } ui_font;
 
+/* Images the backend loads from the XBE's ui\ folder (app/ui/assets, docs/ui-style.md). */
+typedef enum ui_image {
+    UI_IMAGE_BACKGROUND, /* background.bmp: the panorama behind every screen */
+    UI_IMAGE_COUNT_
+} ui_image;
+
 typedef struct ui_color {
     uint8_t r, g, b, a;
 } ui_color;
@@ -48,6 +54,11 @@ typedef struct ui_draw {
     int (*line_height)(void *ctx, ui_font f);
     /* Limits drawing to `r`; NULL draws everywhere again. */
     void (*clip)(void *ctx, const ui_rect *r);
+    /* Draws the part `src` of an image, unscaled, with its top left at (x, y). Draws nothing
+       if the image isn't loaded. */
+    void (*image)(void *ctx, ui_image img, ui_rect src, int x, int y);
+    /* The image's size, or 0 x 0 if it isn't loaded. */
+    void (*image_size)(void *ctx, ui_image img, int *w, int *h);
 } ui_draw;
 
 /* The title-safe area: the screen less 5 % on each side, which TVs may hide (ADR 0015). */

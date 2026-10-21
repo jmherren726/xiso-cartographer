@@ -48,6 +48,16 @@ static char scratch[1024];   /* the n bytes of a string, NUL-terminated for SDL_
 static unsigned char *fb[2]; /* [0] XVideoSetMode's framebuffer, [1] ours (ui_sdl_present) */
 static int shown;            /* the one on screen */
 
+/* The files of ui_image, in the XBE's ui\ folder (app/ui/ui-assets.mk). */
+static const char *const image_file[UI_IMAGE_COUNT_] = {
+    [UI_IMAGE_BACKGROUND] = "background.bmp",
+};
+
+static struct {
+    SDL_Texture *tex; /* NULL: not loaded */
+    int w, h;
+} images[UI_IMAGE_COUNT_];
+
 /* s[0, n) as a C string in `scratch`, cut at its size. */
 static const char *terminated(const char *s, size_t n)
 {
@@ -180,6 +190,45 @@ static void sdl_clip(void *ctx, const ui_rect *r)
     set_clip(&rect);
 }
 
+static void sdl_image(void *ctx, ui_image img, ui_rect src, int x, int y)
+{
+    (void)ctx;
+    if (images[img].tex == NULL) {
+        return;
+    }
+    SDL_Rect from = {src.x, src.y, src.w, src.h};
+    SDL_Rect to = {x, y, src.w, src.h};
+    SDL_RenderCopy(renderer, images[img].tex, &from, &to);
+}
+
+static void sdl_image_size(void *ctx, ui_image img, int *w, int *h)
+{
+    (void)ctx;
+    *w = images[img].tex != NULL ? images[img].w : 0;
+    *h = images[img].tex != NULL ? images[img].h : 0;
+}
+
+/* Loads the images that exist; a missing one is drawn without (theme.c falls back). */
+static void load_images(const char *asset_dir)
+{
+    for (int i = 0; i < UI_IMAGE_COUNT_; i++) {
+        char path[260];
+        snprintf(path, sizeof path, "%s\\ui\\%s", asset_dir, image_file[i]);
+        SDL_Surface *surface = SDL_LoadBMP(path);
+        if (surface == NULL) {
+            continue;
+        }
+        images[i].tex = SDL_CreateTextureFromSurface(renderer, surface);
+        images[i].w = surface->w;
+        images[i].h = surface->h;
+        SDL_FreeSurface(surface);
+        if (images[i].tex != NULL) {
+            /* Opaque: a plain copy, much cheaper than blending in software. */
+            SDL_SetTextureBlendMode(images[i].tex, SDL_BLENDMODE_NONE);
+        }
+    }
+}
+
 /* A failed SDL_assert: SDL's handler would exit, which reboots without a word. Show it on
    the debug console instead, and stop. */
 static SDL_AssertState on_assert(const SDL_AssertData *a, void *userdata)
@@ -194,7 +243,7 @@ static SDL_AssertState on_assert(const SDL_AssertData *a, void *userdata)
     }
 }
 
-bool ui_sdl_open(ui_draw *d, const char *font_dir, const char **why)
+bool ui_sdl_open(ui_draw *d, const char *asset_dir, const char **why)
 {
     static char message[160];
     SDL_SetAssertionHandler(on_assert, NULL);
@@ -221,7 +270,7 @@ bool ui_sdl_open(ui_draw *d, const char *font_dir, const char **why)
     /* Only the bundled font is ever opened: nxdk's FreeType is old (ADR 0015). */
     for (int f = 0; f < UI_FONT_COUNT_; f++) {
         char path[260];
-        snprintf(path, sizeof path, "%s\\%s", font_dir, font_spec[f].file);
+        snprintf(path, sizeof path, "%s\\fonts\\%s", asset_dir, font_spec[f].file);
         fonts[f] = TTF_OpenFont(path, font_spec[f].size);
         if (fonts[f] == NULL) {
             snprintf(message, sizeof message, "Can't open the font %s: %s", path, TTF_GetError());
@@ -229,12 +278,15 @@ bool ui_sdl_open(ui_draw *d, const char *font_dir, const char **why)
             return false;
         }
     }
+    load_images(asset_dir);
     d->ctx = NULL;
     d->fill = sdl_fill;
     d->text = sdl_text;
     d->text_width = sdl_text_width;
     d->line_height = sdl_line_height;
     d->clip = sdl_clip;
+    d->image = sdl_image;
+    d->image_size = sdl_image_size;
     return true;
 }
 
@@ -282,6 +334,12 @@ void ui_sdl_close(void)
         if (cache[i].tex != NULL) {
             SDL_DestroyTexture(cache[i].tex);
             cache[i].tex = NULL;
+        }
+    }
+    for (int i = 0; i < UI_IMAGE_COUNT_; i++) {
+        if (images[i].tex != NULL) {
+            SDL_DestroyTexture(images[i].tex);
+            images[i].tex = NULL;
         }
     }
     for (int f = 0; f < UI_FONT_COUNT_; f++) {
