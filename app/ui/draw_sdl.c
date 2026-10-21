@@ -22,10 +22,11 @@ static const struct {
     const char *file;
     int size;
 } font_spec[UI_FONT_COUNT_] = {
-    [UI_FONT_BODY] = {"NotoSans-Regular.ttf", 20},
-    [UI_FONT_BOLD] = {"NotoSans-Bold.ttf", 20},
-    [UI_FONT_TITLE] = {"NotoSans-Bold.ttf", 28},
-    [UI_FONT_SMALL] = {"NotoSans-Regular.ttf", 16},
+    [UI_FONT_BODY] = {"NotoSans-Regular.ttf", 20},  /* list lines, text */
+    [UI_FONT_BOLD] = {"NotoSans-Bold.ttf", 20},     /* the selected line */
+    [UI_FONT_TITLE] = {"Michroma-Regular.ttf", 22}, /* titles; wide, so keep them short */
+    [UI_FONT_SMALL] = {"NotoSans-Regular.ttf", 16}, /* details, hints */
+    [UI_FONT_LABEL] = {"ChakraPetch-Bold.ttf", 21}, /* section names, labels */
 };
 
 typedef struct slot {

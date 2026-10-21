@@ -35,6 +35,8 @@ Options considered: SDL2 with our own widgets; SDL2 with Nuklear; pbkit.
 6. **A scripted input mode for the exit test's xemu walkthrough.** If `E:\xcat\ui-script.txt` exists, the app reads controller presses (and waits) from it instead of the pad, and logs each screen it reaches. Its exact format is specified in the PR that adds it, in `docs/testing.md`.
 7. **One bundled font: Noto Sans** (SIL Open Font License 1.1), Regular and Bold. It is vendored under `third_party/fonts/` with its licence text, listed in THIRD_PARTY.md, and shipped next to the XBE. It covers the Latin, Greek and Cyrillic in the catalog's titles. A character it lacks is drawn as a box, never skipped.
 
+   *Amended 2026-10-21 (owner decision, [ui-style.md](../ui-style.md#fonts)):* two display faces join it, for the look of the owner's mockups: **Michroma** for screen titles and **Chakra Petch Bold** for section names and labels, both SIL OFL 1.1, static TrueType, vendored and pinned the same way. They lack Greek and Cyrillic, so they draw only the app's own fixed words; game names and all other text stay in Noto Sans.
+
 ## Consequences
 
 - No new library: SDL2, SDL_ttf and FreeType are already part of nxdk, and the app already links SDL. Only the font is new, at about 0.5 MB per face, which must ship with every release under its OFL licence.

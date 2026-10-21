@@ -23,8 +23,9 @@ extern "C" {
 typedef enum ui_font {
     UI_FONT_BODY,  /* Noto Sans Regular, list lines and text */
     UI_FONT_BOLD,  /* Noto Sans Bold, the highlighted line and labels */
-    UI_FONT_TITLE, /* Noto Sans Bold, larger: screen titles */
+    UI_FONT_TITLE, /* Michroma: screen titles; the app's own words only (no Greek, Cyrillic) */
     UI_FONT_SMALL, /* Noto Sans Regular, smaller: hints and details */
+    UI_FONT_LABEL, /* Chakra Petch Bold: section names, labels; the app's own words only */
     UI_FONT_COUNT_
 } ui_font;
 

@@ -25,7 +25,19 @@ Owner decisions of 2026-10-21:
 | `highlight` | 40, 110, 20, alpha 235 | The selected line or section |
 | `highlight_border` | 160, 255, 70 | Its border |
 
-Text is Noto Sans, the bundled font (ADR 0015 decision 7): Bold 28 for titles, Bold 20 for the selected line and section names, Regular 20 for list lines, Regular 16 for details and hints.
+## Fonts
+
+Three bundled fonts (ADR 0015 decision 7, [third_party/fonts](../third_party/fonts/README.md)), all SIL OFL 1.1:
+
+| `ui_font` | Font | Size | Use |
+|---|---|---|---|
+| `UI_FONT_TITLE` | Michroma | 22 | Screen titles in the title tab, in capitals |
+| `UI_FONT_LABEL` | Chakra Petch Bold | 21 | Section names and labels, in capitals |
+| `UI_FONT_BOLD` | Noto Sans Bold | 20 | The selected line, the selected game's name |
+| `UI_FONT_BODY` | Noto Sans Regular | 20 | List lines, text |
+| `UI_FONT_SMALL` | Noto Sans Regular | 16 | Details and hints |
+
+Michroma is wide and geometric like the mockups' titles; Chakra Petch's cut corners match the panels'. Both lack Greek and Cyrillic, so they're for the app's own fixed words only: **anything from outside the app (game names, the catalog, error details) is drawn in Noto Sans.** Picked on 2026-10-21 from a comparison of static OFL fonts (Michroma, Chakra Petch, Audiowide, Share Tech; variable fonts such as Orbitron and Oxanium were out, since nxdk's FreeType 2.4.12 predates them).
 
 ## Panels
 
@@ -39,7 +51,7 @@ All inside the title-safe area (32, 24, 576 × 432), as in ui-test and the libra
 
 | Part | Rectangle | Holds |
 |---|---|---|
-| Title tab | 32, 24, 240 × 46 | The screen's name in capitals, Bold 28, `accent` |
+| Title tab | 32, 24, 240 × 46 | The screen's name in capitals, `UI_FONT_TITLE`, `accent` |
 | Sections | 32, 80, 170 × 196 | GAMES, DOWNLOADS, INSTALLED, SETTINGS |
 | List | 210, 80, 212 × 320 | The games, one row per line, the selected one highlighted |
 | Detail | 430, 80, 178 × 320 | The selected game: name, details, description |
