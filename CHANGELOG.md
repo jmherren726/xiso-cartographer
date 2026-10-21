@@ -93,6 +93,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - First catalog snapshot (M7): `tools/catalog/inputs.lock` records the inputs fetched on 2026-10-20 (Wikidata; Redump datfile of 2026-06-14, 27 list pages, 2,683 disc pages) and the catalog they build: 1,074 games and 2,213 releases, 327 KB, byte-identical on Windows (Python 3.15) and Linux (Python 3.12). `overrides.toml` gains region codes for Scandinavia and Latin America and keeps two discs of one set and two bundles apart.
 - The console uses the catalog (M7): with `E:\Apps\xcat\catalog.bin` present, the list shows each game by its catalog title with its map key (`[4D530004@US]`) and Redump name, marks games it doesn't know `not in catalog`, and after an install says whether `default.xbe`'s title ID matches the catalog. Without the file, or with a damaged one, the list works as before. `tools/catalog/README.md` says how to ship `catalog.bin` and `CREDITS.txt` with a release. docs/testing.md has the M7 exit test; steps 1–3 (deterministic rebuild on Windows and Linux, schema tests, licences) pass.
 - **M7 exit test met** (docs/testing.md): with step 4, the console names its list from the catalog on hardware.
+- ADR 0015 (M8): the UI uses nxdk's SDL2 and SDL_ttf with a small controller-first widget set of our own (list, text, progress, dialog, on-screen keyboard with a password mode), screen logic testable on the PC, a scripted input mode for the xemu walkthrough, and the Noto Sans font (OFL).
 
 ### Changed
 
