@@ -15,6 +15,7 @@ PLATFORM_DIR := $(ROOT_DIR)/platform/nxdk
 # platform dependencies, so it needs no separate library build here.
 SRCS = $(CURDIR)/main.c \
        $(CORE_DIR)/src/archiveorg.c \
+       $(CORE_DIR)/src/catalog.c \
        $(CORE_DIR)/src/crc32.c \
        $(CORE_DIR)/src/credentials.c \
        $(CORE_DIR)/src/error.c \

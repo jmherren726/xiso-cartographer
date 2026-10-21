@@ -13,7 +13,9 @@
  * pulled cable or a power cut resumes instead of starting over, a read-back check of every
  * file, and the .xcat-installed marker. Logins come from E:\Apps\xcat\credentials
  * (docs/formats/credentials.md). Everything shown is also appended to E:\xcat\install.log.
- * The real UI replaces this in M8.
+ * The game catalog E:\Apps\xcat\catalog.bin (docs/formats/catalog.md, M7), if present,
+ * names the listed games and marks those it doesn't know; after an install, the title ID
+ * from default.xbe is compared with the catalog's. The real UI replaces this in M8.
  */
 #include <SDL.h>
 #include <hal/debug.h>
@@ -25,6 +27,7 @@
 #include <windows.h>
 #include <xboxkrnl/xboxkrnl.h>
 
+#include "xcat/catalog.h"
 #include "xcat/credentials.h"
 #include "xcat/http_client.h"
 #include "xcat/install.h"
@@ -38,6 +41,7 @@
 #define ISO_DIR XCAT_DIR "\\isos"
 #define LOG_FILE XCAT_DIR "\\install.log"
 #define CRED_FILE "E:\\Apps\\xcat\\credentials"
+#define CATALOG_FILE "E:\\Apps\\xcat\\catalog.bin"
 #define SAMPLE_DIR "D:\\samples"
 #define GAMES_DIR "E:\\Games"
 #define IO_BUF_SIZE ((size_t)1024 * 1024)
@@ -466,6 +470,34 @@ static bool load_map(xc_map *map)
     return err == XC_OK;
 }
 
+/* --- the catalog (docs/formats/catalog.md) ------------------------------------------------ */
+
+static xc_catalog cat; /* zeroed, so every lookup finds nothing, if there is none */
+
+/* Loads E:\Apps\xcat\catalog.bin. Without one, or with a bad one, games show their file
+   names and every map entry is "not in catalog" (catalog.md §7). Its bytes stay loaded. */
+static void load_catalog(void)
+{
+    if (!xc_nx_exists(CATALOG_FILE)) {
+        out("No catalog (" CATALOG_FILE "): games show their file names\n");
+        return;
+    }
+    char *data = NULL;
+    size_t len = 0;
+    xc_err err = read_local(CATALOG_FILE, XC_CATALOG_MAX_SIZE, &data, &len);
+    if (err == XC_OK) {
+        err = xc_catalog_open(&cat, data, len);
+    }
+    if (err != XC_OK) {
+        free(data);
+        out(CATALOG_FILE ": %s; games show their file names\n",
+            err == XC_ERR_LIMIT ? "larger than 8 MiB" : xc_err_str(err));
+        return;
+    }
+    out("Catalog: %u games, %u releases (%s)\n", (unsigned)cat.game_count,
+        (unsigned)cat.release_count, cat.snapshot);
+}
+
 /* --- installing --------------------------------------------------------------------------- */
 
 static bool ends_with_ci(const char *s, size_t len, const char *suffix)
@@ -633,10 +665,28 @@ static void log_zip(const xc_install_result *r)
     }
 }
 
+/* After an install: does default.xbe's title ID agree with the catalog's release? A
+   disagreement means the catalog's serial-derived title ID is wrong for this disc (fixed in
+   tools/catalog/overrides.toml [title_id]), or the image isn't that release. */
+static void check_catalog_title(size_t release, uint32_t title_id)
+{
+    xc_catalog_release r;
+    if (!xc_catalog_release_at(&cat, release, &r)) {
+        return;
+    }
+    if (r.title_id == title_id) {
+        out("  matches the catalog: %08lX@%s, %s\n", (unsigned long)r.title_id, r.variant, r.name);
+    } else {
+        out("  the catalog expected %08lX for %s: please report it\n", (unsigned long)r.title_id,
+            r.name);
+    }
+}
+
 /* Installs one image; true if it ended installed and verified. `listing` is the map entry
-   when an archive.org listing describes the file (archiveorg.md §8), else NULL. */
+   when an archive.org listing describes the file (archiveorg.md §8), else NULL. `release`
+   is the catalog's release for it, or XC_CATALOG_NONE. */
 static bool install(const xc_source *src, const char *name, const char *etag,
-                    const char *last_modified, const xc_map_entry *listing)
+                    const char *last_modified, const xc_map_entry *listing, size_t release)
 {
     char title[128];
     title_from(name, title, sizeof title);
@@ -701,6 +751,7 @@ static bool install(const xc_source *src, const char *name, const char *etag,
         if (result.has_title_id) {
             out("  title ID %08lX, \"%s\" (from default.xbe)\n", (unsigned long)result.title_id,
                 result.title_name);
+            check_catalog_title(release, result.title_id);
         } else {
             out("  no title ID: %s\n", result.title_note != NULL ? result.title_note : "?");
         }
@@ -753,7 +804,7 @@ static bool install(const xc_source *src, const char *name, const char *etag,
     return false;
 }
 
-static bool install_url(const xc_map_entry *e)
+static bool install_url(const xc_map_entry *e, size_t release)
 {
     const char *url = e->url;
     if (!network()) {
@@ -779,7 +830,7 @@ static bool install_url(const xc_map_entry *e)
         return false;
     }
     bool ok = install(&src, url, res.etag[0] != '\0' ? res.etag : NULL,
-                      res.last_modified[0] != '\0' ? res.last_modified : NULL, e);
+                      res.last_modified[0] != '\0' ? res.last_modified : NULL, e, release);
     if (is_https(url) && tls != NULL) {
         /* After redirects: the server the data came from (ADR 0005 asks to watch the suite). */
         xc_tls_info info;
@@ -793,7 +844,7 @@ static bool install_url(const xc_map_entry *e)
     return ok;
 }
 
-static bool install_file(const char *path)
+static bool install_file(const char *path, size_t release)
 {
     xc_nx_file f = {NULL};
     xc_source src;
@@ -802,7 +853,7 @@ static bool install_file(const char *path)
         out("\n%s\n  can't read it: %s\n", path, xc_err_str(err));
         return false;
     }
-    bool ok = install(&src, path, NULL, NULL, NULL);
+    bool ok = install(&src, path, NULL, NULL, NULL, release);
     xc_nx_file_close(&f);
     return ok;
 }
@@ -863,13 +914,44 @@ static int list_local(char names[MAX_LOCAL][XC_NX_PATH_MAX])
 #define LABEL_MAX 128
 
 typedef struct game {
-    char name[LABEL_MAX];
-    char tag[24];              /* after the name: the title ID, or where it is */
+    char name[LABEL_MAX];      /* the catalog's title, else the file or listing name */
+    char tag[40];              /* after the name: the title ID, where it is, or "not in catalog" */
     uint64_t size;             /* from the listing; 0 if unknown */
     const xc_map_entry *entry; /* a map entry, or */
     const char *path;          /* a file in E:\xcat\isos */
+    size_t release;            /* the catalog's release, or XC_CATALOG_NONE */
     int result;                /* 0 not tried this run, 1 installed, -1 failed */
 } game;
+
+/* The catalog's release for a map entry or local file (map.md §4.1, §5.2): by title ID and
+   variant (the first release of the title ID for its default entry), else by name: an
+   archive.org file's, or a local file's without its extension. */
+static size_t find_release(const xc_map_entry *e, const char *name)
+{
+    if (e != NULL && e->name == NULL) {
+        size_t count = 0;
+        return e->variant[0] != '\0' ? xc_catalog_find_release(&cat, e->title_id, e->variant)
+                                     : xc_catalog_find_title(&cat, e->title_id, &count);
+    }
+    return xc_catalog_find_name(&cat, name);
+}
+
+/* Names a list line from the catalog: the game's title, and the release's key as its tag. */
+static void label(game *g)
+{
+    g->release = find_release(g->entry, g->name);
+    xc_catalog_release r;
+    xc_catalog_game cg;
+    if (xc_catalog_release_at(&cat, g->release, &r) && xc_catalog_game_at(&cat, r.game, &cg)) {
+        snprintf(g->name, sizeof g->name, "%s", cg.title);
+        if (g->path == NULL) {
+            snprintf(g->tag, sizeof g->tag, "[%08lX@%s]", (unsigned long)r.title_id, r.variant);
+        }
+    } else if (cat.release_count > 0) {
+        size_t n = strlen(g->tag);
+        snprintf(g->tag + n, sizeof g->tag - n, "%snot in catalog", n > 0 ? " " : "");
+    }
+}
 
 /* One screen line of at most SCREEN_COLS characters; a cut one ends in '~'. */
 __attribute__((format(printf, 1, 2))) static void screen_line(const char *fmt, ...)
@@ -907,12 +989,14 @@ static game *catalog(const xc_map *map, char local[][XC_NX_PATH_MAX], int nlocal
             snprintf(g->tag, sizeof g->tag, "[%08lX%s%s]", (unsigned long)e->title_id,
                      e->variant[0] != '\0' ? "@" : "", e->variant);
         }
+        label(g);
     }
     for (int i = 0; i < nlocal; i++) {
         game *g = &games[map->entry_count + (size_t)i];
         title_from(local[i], g->name, sizeof g->name);
         g->path = local[i];
         snprintf(g->tag, sizeof g->tag, "(on the HDD)");
+        label(g);
     }
     *count = (int)n;
     return games;
@@ -937,12 +1021,18 @@ static void draw_list(const game *games, int count, int cur, int top)
         screen_line("%s%s %8s  %s%s%s", top + row == cur ? ">" : " ", mark, size, g->name,
                     g->tag[0] != '\0' ? "  " : "", g->tag);
     }
-    /* The highlighted name in full, as the list may have cut it. */
+    /* The highlighted name in full, as the list may have cut it; for a catalog game, its
+       release's Redump name below it. */
     const game *g = &games[cur];
     size_t len = strlen(g->name);
+    xc_catalog_release r;
     screen_line(" ");
     screen_line("%.*s", SCREEN_COLS, g->name);
-    screen_line("%s", len > SCREEN_COLS ? g->name + SCREEN_COLS : " ");
+    if (xc_catalog_release_at(&cat, g->release, &r)) {
+        screen_line("%s", r.name);
+    } else {
+        screen_line("%s", len > SCREEN_COLS ? g->name + SCREEN_COLS : " ");
+    }
 }
 
 /* Waits for a button press (the exit shortcut still works). */
@@ -987,7 +1077,8 @@ static void pick_and_install(game *games, int count)
             game *g = &games[cur];
             debugClearScreen();
             out("\nPicked: %s%s%s\n", g->name, g->tag[0] != '\0' ? " " : "", g->tag);
-            bool ok = g->entry != NULL ? install_url(g->entry) : install_file(g->path);
+            bool ok = g->entry != NULL ? install_url(g->entry, g->release)
+                                       : install_file(g->path, g->release);
             g->result = ok ? 1 : -1;
             out("%s\n", ok ? "Installed and verified." : "Not installed.");
             debugPrint("\nPress A to go back to the list.\n");
@@ -1019,6 +1110,7 @@ int main(void)
     open_log();
     out("==== xiso-cartographer %s install ====\n", xc_version_string());
     load_credentials();
+    load_catalog();
 
     static xc_map map;
     bool have_map = load_map(&map);
@@ -1039,7 +1131,7 @@ int main(void)
         out("No controller support (SDL), so nothing can be picked\n");
         halt();
     }
-    out("Catalog: %d game(s). Pick one on the screen; nothing installs until you do.\n", count);
+    out("List: %d game(s). Pick one on the screen; nothing installs until you do.\n", count);
     debugPrint("\nPress A to see the list.\n");
     while (wait_press() != SDL_CONTROLLER_BUTTON_A) {
     }
