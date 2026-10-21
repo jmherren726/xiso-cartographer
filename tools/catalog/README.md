@@ -71,3 +71,13 @@ Map keys pick a release with `<title-id>@<variant>` ([map.md §4.1](../../docs/f
 4. A name longer than 16 characters is cut to 16 before any `-N` suffix of step 3 is added, then the suffix replaces its last characters.
 
 `[variant]` wins over all of this. Changing a published variant breaks users' map keys, so `--previous` lists in the report every variant that differs from an older `catalog.bin`.
+
+## Shipping it
+
+`catalog.bin` and `CREDITS.txt` aren't committed (ADR 0014 decision 5). For a release, build them from a cache that matches `inputs.lock` (`build.py` without `--update-lock` checks this) and attach both to the GitHub release next to the XBE:
+
+```bash
+gh release upload <tag> build/catalog/catalog.bin build/catalog/CREDITS.txt
+```
+
+On the console they go in `E:\Apps\xcat\` next to `default.xbe` ([build-xbox.md](../../docs/build-xbox.md#the-catalog-m7)). The app works without them, showing file names instead of titles.

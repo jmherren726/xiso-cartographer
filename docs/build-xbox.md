@@ -75,6 +75,10 @@ Each install, network or local, follows the same steps ([ARCHITECTURE.md §5](AR
 - For a trimmed xiso it reads the image front to back in full and computes its **MD5 and SHA-1**, which it logs (from M6 they're compared with archive.org's; [journal.md §7](formats/journal.md#7-verification)). Full-disc layouts are checked by size and CRC-32 only.
 - It **reads every installed file back and compares its CRC-32** with what was received, then writes `E:\Games\<title>\.xcat-installed`, with the hashes when there are some.
 
+### The catalog (M7)
+
+If `E:\Apps\xcat\catalog.bin` exists ([catalog.md](formats/catalog.md), built by [`tools/catalog/`](../tools/catalog/README.md#shipping-it)), the log says "Catalog: N games, M releases (<snapshot>)" and the list shows each game by its catalog title. An archive.org game is found by its name (its Redump name), an entry keyed by title ID by its title ID and variant, and a file in `E:\xcat\isos\` by its file name. The line's tag becomes the release's map key, `[4D530004@US]`, and under the list the highlighted game's Redump name is shown. A game the catalog doesn't know is shown by its file name and tagged `not in catalog`; it still installs. After an install, the title ID read from `default.xbe` is compared with the catalog's: "matches the catalog: 4D530004@US, …", or "the catalog expected … : please report it", which means the catalog needs a fix (`[title_id]` in `overrides.toml`). Without the file, or with a damaged one (the log says why), the list works as before.
+
 A title that's already installed gets a numbered folder (`small (2)`). An unfinished install of the same image is resumed in its own folder (pick the same game again after a power cut); one of a different image is left alone. Each install ends with "Installed and verified." or "Not installed.", and A goes back to the list. Everything on screen except the list itself is also appended to `E:\xcat\install.log`, starting with "Picked: <game>".
 
 ### Zips
