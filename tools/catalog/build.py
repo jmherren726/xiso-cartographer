@@ -42,6 +42,8 @@ REGION_CODES = {
     "South Africa": "ZA", "Spain": "ES", "Sweden": "SE", "Switzerland": "CH", "Taiwan": "TW",
     "Turkey": "TR", "UK": "GB",
 }
+# Whose title a game without Wikidata data shows, in this order (README.md "Games").
+TITLE_REGIONS = ["USA", "USA, Europe", "World", "Europe", "UK", "Australia"]
 SERIAL = re.compile(r"(?<![A-Z])([A-Z]{2})-(\d{1,5})(?![0-9])")
 LANGUAGES = re.compile(r"[A-Z][a-z](-[A-Z][a-z]+)?(,[A-Z][a-z](-[A-Z][a-z]+)?)*")
 TAG = re.compile(r" \(([^()]*)\)")
@@ -287,21 +289,36 @@ def build(inputs: Inputs, overrides: dict, report: Report) -> tuple[bytes, dict]
         elif r["q"] is None:
             report.add("Games without Wikidata data", r["name"])
 
-    games: list[cb.Game] = []
-    game_of: dict[object, int] = {}
-    titles = overrides.get("title", {})
+    # Step 5: releases without Wikidata data share a game by title ID (one game sold under
+    # several regional names), except "none" overrides, which group by their own title.
+    groups: dict[object, list[dict]] = {}
     for r in releases:
-        key = r["q"] if r["q"] else ("base", match_key(display_title(r["base"])))
-        if key not in game_of:
-            game_of[key] = len(games)
-            if r["q"]:
-                q = r["q"]
-                games.append(cb.Game(titles.get(f"Q{q}", labels[q]), fit(facts["developers"][q]),
-                                     fit(facts["publishers"][q]), fit(facts["genres"][q]), q,
-                                     years.get(q, 0)))
-            else:
-                games.append(cb.Game(titles.get(r["name"], display_title(r["base"]))))
-        r["game"] = game_of[key]
+        if r["q"]:
+            key: object = r["q"]
+        elif overrides.get("game", {}).get(r["name"]) == "none":
+            key = ("none", match_key(display_title(r["base"])))
+        else:
+            key = ("title_id", r["title_id"])
+        groups.setdefault(key, []).append(r)
+    games: list[cb.Game] = []
+    titles = overrides.get("title", {})
+    for key, group in groups.items():
+        for r in group:
+            r["game"] = len(games)
+        q = group[0]["q"]
+        if q:
+            games.append(cb.Game(titles.get(f"Q{q}", labels[q]), fit(facts["developers"][q]),
+                                 fit(facts["publishers"][q]), fit(facts["genres"][q]), q,
+                                 years.get(q, 0)))
+            continue
+        # Its title: from [title] by any of its releases' names, else the USA release's.
+        named = [titles[r["name"]] for r in group if r["name"] in titles]
+        first = min(group, key=lambda r: (TITLE_REGIONS.index(r["region"]) if r["region"] in TITLE_REGIONS
+                                          else len(TITLE_REGIONS), cb.collate_key(r["name"])))
+        games.append(cb.Game(min(named, key=cb.collate_key) if named else display_title(first["base"])))
+        if len({match_key(display_title(r["base"])) for r in group}) > 1:
+            report.add("Games without Wikidata data, with several titles (check these)",
+                       f"{games[-1].title} <- " + " | ".join(sorted({r['base'] for r in group})))
 
     variants(releases, overrides, report)
     if report.errors:

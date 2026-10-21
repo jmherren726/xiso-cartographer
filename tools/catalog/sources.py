@@ -123,30 +123,26 @@ def read_disc_page(redump_id: int, text: str) -> Disc:
 
 # ---- Wikidata: games, and the facts ADR 0014 takes ------------------------------------
 
+# The English name of ?v: its "en" label, else its "mul" (default for all languages) label.
+# Wikidata moves names that are the same in every language to "mul" and drops the "en"
+# copy; Halo: Combat Evolved has only "mul" (2026-10-20), so "en" alone misses games.
+# Labels are read directly, not through the label service, so a missing name is missing
+# rather than replaced by the Q number.
+_NAME = """
+  OPTIONAL { ?v rdfs:label ?en. FILTER(LANG(?en) = "en") }
+  OPTIONAL { ?v rdfs:label ?mul. FILTER(LANG(?mul) = "mul") }
+  BIND(COALESCE(?en, ?mul) AS ?label)
+  FILTER(BOUND(?label))"""
+
+_XBOX_GAME = "?item wdt:P31 wd:Q7889; wdt:P400 wd:Q132020"  # video game (Q7889) for the Xbox
+
 WIKIDATA_QUERIES = {
-    # Items that are video games (P31 Q7889) for the Xbox (P400 Q132020), with an English
-    # label. Labels are read directly, not through the label service, so a missing label
-    # is missing rather than replaced by the Q number.
-    "games": """
-SELECT ?item ?label WHERE {
-  ?item wdt:P31 wd:Q7889; wdt:P400 wd:Q132020; rdfs:label ?label.
-  FILTER(LANG(?label) = "en")
-}""",
-    "developers": """
-SELECT ?item ?label WHERE {
-  ?item wdt:P31 wd:Q7889; wdt:P400 wd:Q132020; wdt:P178 ?v. ?v rdfs:label ?label.
-  FILTER(LANG(?label) = "en")
-}""",
-    "publishers": """
-SELECT ?item ?label WHERE {
-  ?item wdt:P31 wd:Q7889; wdt:P400 wd:Q132020; wdt:P123 ?v. ?v rdfs:label ?label.
-  FILTER(LANG(?label) = "en")
-}""",
-    "genres": """
-SELECT ?item ?label WHERE {
-  ?item wdt:P31 wd:Q7889; wdt:P400 wd:Q132020; wdt:P136 ?v. ?v rdfs:label ?label.
-  FILTER(LANG(?label) = "en")
-}""",
+    # Xbox games and their names.
+    "games": f"SELECT ?item ?label WHERE {{\n  {_XBOX_GAME}. BIND(?item AS ?v){_NAME}\n}}",
+    # The names of their developers (P178), publishers (P123) and genres (P136).
+    "developers": f"SELECT ?item ?label WHERE {{\n  {_XBOX_GAME}; wdt:P178 ?v.{_NAME}\n}}",
+    "publishers": f"SELECT ?item ?label WHERE {{\n  {_XBOX_GAME}; wdt:P123 ?v.{_NAME}\n}}",
+    "genres": f"SELECT ?item ?label WHERE {{\n  {_XBOX_GAME}; wdt:P136 ?v.{_NAME}\n}}",
     "dates": """
 SELECT ?item ?label WHERE {
   ?item wdt:P31 wd:Q7889; wdt:P400 wd:Q132020; wdt:P577 ?label.
