@@ -57,6 +57,32 @@ All inside the title-safe area (32, 24, 576 × 432), as in ui-test and the libra
 | Detail | 430, 80, 178 × 320 | The selected game: name, details, description |
 | Footer | 32, 408, 576 × 48 | Status and the buttons' meanings |
 
+## Widgets
+
+The widgets of ADR 0015 decisions 2 and 3, in [`app/ui/widgets.h`](../app/ui/widgets.h) and [`keyboard.h`](../app/ui/keyboard.h). Each is a plain struct the screen owns: `*_input` changes it for one button press, `*_draw` draws it, and both are tested on the PC. ui-test shows them all ([testing.md](testing.md#m8-ui-test-rendering)).
+
+**Buttons** ([`input.h`](../app/ui/input.h)). A chooses, B goes back, Y opens search and Back leaves the app, on every screen. A held D-pad direction presses again after 400 ms, then every 80 ms; no other button repeats, so holding A never chooses twice. The triggers count as pressed past half way and are ready again below a quarter. `input_sdl.c` reads every plugged-in controller.
+
+**List.** One line per item in `UI_FONT_BODY`, 6 pixels apart, cut with "…" when too wide; the highlighted line is a small panel (`highlight`, chamfer 6) in `UI_FONT_BOLD`. Up and Down move a line, LT and RT a page, and the highlight stops at the ends. When not all lines fit, a 4-pixel scroll bar runs down the right edge: the track in `highlight`, the thumb in `highlight_border`.
+
+**Progress bar.** A small panel (chamfer 6) filled in `highlight` from the left, with its label (say "48 %") centred on it in `UI_FONT_BOLD`. `ui_percent` rounds down, so it shows 100 % only once the last byte is in.
+
+**Dialog.** The screen dimmed (black at alpha 150), then a 520-pixel panel centred on it: the title in `UI_FONT_LABEL` and `accent`, the message wrapped in `UI_FONT_BODY` (at most six lines), and one to three buttons side by side in `UI_FONT_LABEL`, the highlighted one in `highlight`. Left and Right move between them; A chooses; B gives the choice marked as cancel, if any. Error dialogs (ADR 0015 decision 5) will use it with RETRY, LOG IN AGAIN and BACK, which fit.
+
+**On-screen keyboard.** The dimmed screen, then a 520-pixel panel: the field's name in `UI_FONT_LABEL`, the field, 10 × 5 keys and a line of hints.
+
+| Row | Small letters | Capitals | Symbols |
+|---|---|---|---|
+| 1 | `1234567890` | the same | the same |
+| 2 | `qwertyuiop` | `QWERTYUIOP` | `!?#$%^&*()` |
+| 3 | `asdfghjkl-` | `ASDFGHJKL-` | `` ~`+=[]{}<> `` |
+| 4 | `zxcvbnm.@_` | `ZXCVBNM.@_` | backslash, pipe, then `/;:'",-_` |
+| 5 | SHIFT, #+= (ABC on the symbols), SPACE, DELETE, DONE: two columns each | | |
+
+Between them the three layers type every printable ASCII character, so any password can be typed. The D-pad moves and wraps around the edges; on the bottom row it goes key by key. A types the highlighted key, X deletes the last character, Y adds a space, LT switches capitals on and off and RT the symbols (the SHIFT and #+= keys do the same), Start or DONE finishes, B cancels. SHIFT is drawn in `accent` while capitals are on.
+
+The field shows the end of its text when it's wider, with an `accent` caret after it. The keyboard edits the caller's buffer in place, up to its size, and keeps no copy. **A password field shows one dot (U+2022) per character, and its text never reaches the drawing backend**, not even to be measured, so it never sits in a texture or the text cache; the caller wipes the buffer once it's used (ADR 0010 decision 2). A test checks that the backend never sees it.
+
 ## The background
 
 `app/ui/assets/background.png` is 1440 × 480: the screen's height, and 800 pixels wider than the screen. The XBE build converts it to `ui\background.bmp` next to the XBE (`tools/ui/png2bmp.py`, since nxdk's SDL loads BMP without SDL2_image), and the backend loads it at start. Without it, the screens draw on `ui_col_bg`.

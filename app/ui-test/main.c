@@ -1,49 +1,102 @@
 /*
- * UI test XBE (M8, ADR 0015, docs/ui-style.md): draws the theme, the bundled font and the
- * text helpers through the SDL backend, so they can be checked in xemu and on hardware
- * before the real screens exist.
+ * UI test XBE (M8, ADR 0015, docs/ui-style.md): draws the theme, the bundled fonts, the text
+ * helpers and the widgets through the SDL backend, so they can be checked in xemu and on
+ * hardware before the real screens exist.
  *
  * One screen laid out like the library: the panorama panning behind everything, a title tab,
- * a column of sections, a list of 40 lines that the D-pad scrolls, and a detail panel with
- * Latin, Greek and Cyrillic text, characters the font lacks (drawn as boxes), a line cut with
- * an ellipsis and a wrapped paragraph. The bottom lines show the time to draw a frame, the
- * frames drawn per second and the text cache's hits. A frame is drawn only when something
- * changed: a button, the stats, or the background moving a pixel. Y switches to drawing
- * every frame. Back returns to the dashboard.
+ * a column of sections, a progress bar that fills over 20 seconds, a list of 40 lines that
+ * the D-pad scrolls and LT / RT page, and a detail panel with Latin, Greek and Cyrillic text,
+ * characters the font lacks (drawn as boxes), a line cut with an ellipsis and a wrapped
+ * paragraph. A opens a dialog on the highlighted line, Y the keyboard for a search and X for
+ * a password; the footer shows what came back. The footer's first line shows the time to
+ * draw a frame, the frames drawn per second and the text cache's hits. A frame is drawn only
+ * when something changed: a button, the stats, the progress or the background moving a
+ * pixel. White switches to drawing every frame. Back returns to the dashboard.
  */
 #include <SDL.h>
 #include <hal/debug.h>
 #include <hal/video.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <string.h>
 #include <windows.h>
 #include <xboxkrnl/xboxkrnl.h>
 
 #include "draw_sdl.h"
+#include "input_sdl.h"
+#include "keyboard.h"
 #include "theme.h"
 #include "ui.h"
+#include "widgets.h"
 #include "xcat/version.h"
 
 #define LIST_LINES 40
 #define PAD 10
+#define PROGRESS_MS 20000u /* the progress bar fills in this long, then starts again */
+#define RESULT_MS 5000u    /* how long the footer shows what a dialog or keyboard returned */
 
 static const char *const sections[] = {"GAMES", "DOWNLOADS", "INSTALLED", "SETTINGS"};
-
-/* The rows of the list that fit in `list`, each `row_h` high. */
-static int rows_shown(const ui_draw *d, ui_rect list)
-{
-    int row_h = d->line_height(d->ctx, UI_FONT_BODY) + 6;
-    return (list.h - 2 * PAD) / row_h;
-}
+static const char *const choices[] = {"INSTALL", "DETAILS", "CANCEL"};
 
 /* The title-safe area (32, 24, 576 x 432), split like the library screen. */
 static const ui_rect tab = {32, 24, 240, 46};
 static const ui_rect nav = {32, 80, 170, 196};
+static const ui_rect progress = {32, 284, 170, 116};
 static const ui_rect list = {210, 80, 212, 320};
 static const ui_rect detail = {430, 80, 178, 320};
 static const ui_rect footer = {32, 408, 576, 48};
 
-static void draw(const ui_draw *d, int pan, int cur, int top, const char *stats)
+/* The list's lines, inside its panel: 8 pixels in at the sides, PAD at the top and bottom. */
+static const ui_rect list_in = {218, 90, 196, 300};
+
+typedef enum mode { MODE_LIST, MODE_DIALOG, MODE_KEYBOARD } mode;
+
+static const char *line_text(void *ctx, int i)
+{
+    static char line[32];
+    (void)ctx;
+    snprintf(line, sizeof line, "Test game %d", i + 1);
+    return line;
+}
+
+static void draw_detail(const ui_draw *d, int cur)
+{
+    ui_panel(d, detail, UI_CHAMFER, ui_col_panel, ui_col_border);
+    int x = detail.x + PAD + 4;
+    int w = detail.w - 2 * PAD - 4;
+    int y = detail.y + PAD;
+    char name[32];
+    snprintf(name, sizeof name, "Game %d", cur + 1);
+    (void)ui_text_fit(d, UI_FONT_BOLD, x, y, w, ui_col_accent, name);
+    y += d->line_height(d->ctx, UI_FONT_BOLD);
+    int sh = d->line_height(d->ctx, UI_FONT_SMALL);
+    (void)ui_text_fit(d, UI_FONT_SMALL, x, y, w, ui_col_dim, "Test  |  2026  |  1.2 GB");
+    y += sh + 6;
+    /* Latin with accents; Greek and Cyrillic; CJK, which Noto Sans lacks. */
+    (void)ui_text_fit(d, UI_FONT_SMALL, x, y, w, ui_col_text,
+                      "Caf\xC3\xA9, na\xC3\xAFve, \xC3\x86r\xC3\xB8sk\xC3\xB8"
+                      "bing");
+    y += sh;
+    (void)ui_text_fit(d, UI_FONT_SMALL, x, y, w, ui_col_text,
+                      "\xCE\x9A\xCE\xB1\xCE\xBB\xCE\xB7\xCE\xBC\xCE\xAD\xCF\x81\xCE\xB1 "
+                      "\xD0\x9F\xD1\x80\xD0\xB8\xD0\xB2\xD0\xB5\xD1\x82");
+    y += sh;
+    (void)ui_text_fit(d, UI_FONT_SMALL, x, y, w, ui_col_dim, "Boxes: \xE6\x97\xA5\xE6\x9C\xAC");
+    y += sh + 6;
+    int lh = d->line_height(d->ctx, UI_FONT_BODY);
+    (void)ui_text_fit(d, UI_FONT_BODY, x, y, w, ui_col_text,
+                      "Cut here: a long game title that does not fit");
+    y += lh + 6;
+    ui_rect para = {x, y, w, detail.y + detail.h - PAD - y};
+    (void)ui_text_wrap(d, UI_FONT_SMALL, para, ui_col_dim,
+                       "Wrapped: the words break at spaces, a very-long-word-like-this is cut "
+                       "between characters, and text that doesn't fit ends with an ellipsis, "
+                       "like this paragraph, which goes on for longer than the panel has room "
+                       "for, so its last line is cut.");
+}
+
+static void draw(const ui_draw *d, int pan, const ui_list *l, uint32_t done, const char *stats,
+                 const char *status)
 {
     ui_background(d, pan);
 
@@ -62,63 +115,25 @@ static void draw(const ui_draw *d, int pan, int cur, int top, const char *stats)
         (void)ui_text_fit(d, UI_FONT_LABEL, item.x + 10, item.y + 5, item.w - 14,
                           i == 0 ? ui_col_text : ui_col_dim, sections[i]);
     }
-    int bh = d->line_height(d->ctx, UI_FONT_BOLD);
+
+    ui_panel(d, progress, UI_CHAMFER, ui_col_panel, ui_col_border);
+    (void)ui_text_fit(d, UI_FONT_LABEL, progress.x + 14, progress.y + PAD, progress.w - 24,
+                      ui_col_accent, "DOWNLOAD");
+    char pct[16];
+    snprintf(pct, sizeof pct, "%d %%", ui_percent(done, PROGRESS_MS));
+    ui_progress(d, (ui_rect){progress.x + 12, progress.y + PAD + lbh + 10, progress.w - 24, 34},
+                done, PROGRESS_MS, pct);
 
     ui_panel(d, list, UI_CHAMFER, ui_col_panel, ui_col_border);
-    int lh = d->line_height(d->ctx, UI_FONT_BODY);
-    int shown = rows_shown(d, list);
-    d->clip(d->ctx, &list);
-    for (int i = 0; i < shown && top + i < LIST_LINES; i++) {
-        ui_rect row = {list.x + 8, list.y + PAD + i * (lh + 6), list.w - 16, lh + 4};
-        char line[64];
-        snprintf(line, sizeof line, "Test game %d", top + i + 1);
-        if (top + i == cur) {
-            ui_panel(d, row, 6, ui_col_highlight, ui_col_highlight_border);
-        }
-        (void)ui_text_fit(d, top + i == cur ? UI_FONT_BOLD : UI_FONT_BODY, row.x + 10, row.y + 2,
-                          row.w - 18, ui_col_text, line);
-    }
-    d->clip(d->ctx, NULL);
+    ui_list_draw(d, l, list_in, line_text, NULL);
 
-    ui_panel(d, detail, UI_CHAMFER, ui_col_panel, ui_col_border);
-    int x = detail.x + PAD + 4;
-    int w = detail.w - 2 * PAD - 4;
-    int y = detail.y + PAD;
-    char name[32];
-    snprintf(name, sizeof name, "Game %d", cur + 1);
-    (void)ui_text_fit(d, UI_FONT_BOLD, x, y, w, ui_col_accent, name);
-    y += bh;
-    int sh = d->line_height(d->ctx, UI_FONT_SMALL);
-    (void)ui_text_fit(d, UI_FONT_SMALL, x, y, w, ui_col_dim, "Test  |  2026  |  1.2 GB");
-    y += sh + 6;
-    /* Latin with accents; Greek and Cyrillic; CJK, which Noto Sans lacks. */
-    (void)ui_text_fit(d, UI_FONT_SMALL, x, y, w, ui_col_text,
-                      "Caf\xC3\xA9, na\xC3\xAFve, \xC3\x86r\xC3\xB8sk\xC3\xB8"
-                      "bing");
-    y += sh;
-    (void)ui_text_fit(d, UI_FONT_SMALL, x, y, w, ui_col_text,
-                      "\xCE\x9A\xCE\xB1\xCE\xBB\xCE\xB7\xCE\xBC\xCE\xAD\xCF\x81\xCE\xB1 "
-                      "\xD0\x9F\xD1\x80\xD0\xB8\xD0\xB2\xD0\xB5\xD1\x82");
-    y += sh;
-    (void)ui_text_fit(d, UI_FONT_SMALL, x, y, w, ui_col_dim, "Boxes: \xE6\x97\xA5\xE6\x9C\xAC");
-    y += sh + 6;
-    (void)ui_text_fit(d, UI_FONT_BODY, x, y, w, ui_col_text,
-                      "Cut here: a long game title that does not fit");
-    y += lh + 6;
-    ui_rect para = {x, y, w, detail.y + detail.h - PAD - y};
-    (void)ui_text_wrap(d, UI_FONT_SMALL, para, ui_col_dim,
-                       "Wrapped: the words break at spaces, a very-long-word-like-this is cut "
-                       "between characters, and text that doesn't fit ends with an ellipsis, "
-                       "like this paragraph, which goes on for longer than the panel has room "
-                       "for, so its last line is cut.");
+    draw_detail(d, l->cur);
 
     ui_panel(d, footer, 0, ui_col_panel, ui_col_border);
+    int sh = d->line_height(d->ctx, UI_FONT_SMALL);
     int by = footer.y + (footer.h - 2 * sh) / 2;
     (void)ui_text_fit(d, UI_FONT_SMALL, footer.x + 12, by, footer.w - 24, ui_col_dim, stats);
-    char hints[96];
-    snprintf(hints, sizeof hints, "%d / %d    D-pad: list    Y: draw every frame    Back: exit",
-             cur + 1, LIST_LINES);
-    (void)ui_text_fit(d, UI_FONT_SMALL, footer.x + 12, by + sh, footer.w - 24, ui_col_text, hints);
+    (void)ui_text_fit(d, UI_FONT_SMALL, footer.x + 12, by + sh, footer.w - 24, ui_col_text, status);
 }
 
 int main(void)
@@ -132,11 +147,18 @@ int main(void)
             Sleep(1000);
         }
     }
-    int cur = 0;
-    int top = 0;
-    int shown = rows_shown(&d, list);
+    int rows = ui_list_rows(&d, list_in);
+    ui_list l = {LIST_LINES, 0, 0};
+    mode m = MODE_LIST;
+    ui_dialog dialog = {0};
+    ui_kbd kbd;
+    char search[64] = "";
+    char password[64] = "";
+    char result[128] = "";
+    Uint32 result_at = 0;
     int range = ui_pan_range(&d);
     int pan = -1;
+    int pct = -1;
     bool continuous = false;
     bool dirty = true;
     char stats[160] = "measuring...";
@@ -144,39 +166,86 @@ int main(void)
     Uint32 draw_ms_sum = 0;
     int frames = 0;
     for (;;) {
-        SDL_Event e;
-        while (SDL_PollEvent(&e)) {
-            if (e.type == SDL_CONTROLLERDEVICEADDED) {
-                (void)SDL_GameControllerOpen(e.cdevice.which);
-            } else if (e.type == SDL_CONTROLLERBUTTONDOWN) {
-                dirty = true;
-                if (e.cbutton.button == SDL_CONTROLLER_BUTTON_BACK) {
-                    ui_sdl_close();
-                    HalReturnToFirmware(HalQuickRebootRoutine);
-                } else if (e.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_UP && cur > 0) {
-                    cur--;
-                } else if (e.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_DOWN &&
-                           cur + 1 < LIST_LINES) {
-                    cur++;
-                } else if (e.cbutton.button == SDL_CONTROLLER_BUTTON_Y) {
-                    continuous = !continuous;
+        ui_button b;
+        while ((b = ui_sdl_button()) != UI_BTN_NONE) {
+            dirty = true;
+            if (b == UI_BTN_BACK) {
+                ui_sdl_close();
+                HalReturnToFirmware(HalQuickRebootRoutine);
+            }
+            if (b == UI_BTN_WHITE) {
+                continuous = !continuous;
+            } else if (m == MODE_DIALOG) {
+                int c = ui_dialog_input(&dialog, b);
+                if (c != UI_DIALOG_OPEN) {
+                    snprintf(result, sizeof result, "Dialog: %s for Test game %d", choices[c],
+                             l.cur + 1);
+                    result_at = SDL_GetTicks();
+                    m = MODE_LIST;
                 }
+            } else if (m == MODE_KEYBOARD) {
+                ui_kbd_result r = ui_kbd_input(&kbd, b);
+                if (r != UI_KBD_EDITING) {
+                    if (kbd.password) {
+                        snprintf(result, sizeof result, "Password: %s, %u characters (wiped)",
+                                 r == UI_KBD_DONE ? "done" : "cancelled",
+                                 (unsigned)strlen(password));
+                        memset(password, 0, sizeof password);
+                    } else {
+                        snprintf(result, sizeof result, "Search: %s \"%s\"",
+                                 r == UI_KBD_DONE ? "done" : "cancelled", search);
+                    }
+                    result_at = SDL_GetTicks();
+                    m = MODE_LIST;
+                }
+            } else if (b == UI_BTN_A) {
+                dialog = (ui_dialog){"INSTALL",
+                                     "Install this test game? Nothing is installed: the choice "
+                                     "is shown in the footer.",
+                                     {choices[0], choices[1], choices[2]},
+                                     0,
+                                     2};
+                m = MODE_DIALOG;
+            } else if (b == UI_BTN_Y) {
+                ui_kbd_open(&kbd, "SEARCH", search, sizeof search, false);
+                m = MODE_KEYBOARD;
+            } else if (b == UI_BTN_X) {
+                ui_kbd_open(&kbd, "PASSWORD", password, sizeof password, true);
+                m = MODE_KEYBOARD;
+            } else {
+                (void)ui_list_input(&l, b, rows);
             }
         }
-        if (cur < top) {
-            top = cur;
-        } else if (cur >= top + shown) {
-            top = cur - shown + 1;
-        }
-        int now_pan = ui_pan_x(SDL_GetTicks(), range);
-        if (now_pan != pan) {
+        Uint32 now = SDL_GetTicks();
+        int now_pan = ui_pan_x(now, range);
+        uint32_t done = now % PROGRESS_MS;
+        int now_pct = ui_percent(done, PROGRESS_MS);
+        if (now_pan != pan || now_pct != pct) {
             pan = now_pan;
+            pct = now_pct;
+            dirty = true;
+        }
+        if (result[0] != '\0' && now - result_at >= RESULT_MS) {
+            result[0] = '\0';
             dirty = true;
         }
         if (dirty || continuous) {
+            char status[160];
+            if (result[0] != '\0') {
+                snprintf(status, sizeof status, "%s", result);
+            } else {
+                snprintf(status, sizeof status, "%s",
+                         "A dialog  Y search  X password  LT RT page  White redraw  Back exit");
+            }
             Uint32 start = SDL_GetTicks();
             ui_sdl_begin(ui_col_bg);
-            draw(&d, pan, cur, top, stats);
+            /* The bar shows the percentage it's labelled with, so they change together. */
+            draw(&d, pan, &l, (uint32_t)pct * (PROGRESS_MS / 100), stats, status);
+            if (m == MODE_DIALOG) {
+                ui_dialog_draw(&d, &dialog);
+            } else if (m == MODE_KEYBOARD) {
+                ui_kbd_draw(&d, &kbd);
+            }
             draw_ms_sum += SDL_GetTicks() - start;
             ui_sdl_present();
             frames++;
@@ -184,7 +253,7 @@ int main(void)
         } else {
             Sleep(5);
         }
-        Uint32 now = SDL_GetTicks();
+        now = SDL_GetTicks();
         if (now - second_start >= 1000U) {
             unsigned long lookups = 0;
             unsigned long misses = 0;
