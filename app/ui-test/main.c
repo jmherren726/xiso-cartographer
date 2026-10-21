@@ -4,12 +4,14 @@
  *
  * One screen: the title-safe area outlined, the four fonts, Latin, Greek and Cyrillic text,
  * characters the font lacks (drawn as boxes), a cut line with an ellipsis, a wrapped
- * paragraph, and a list of 40 lines that the D-pad scrolls. The bottom line shows frames per
- * second, the time to draw a frame, and the text cache's hits. Back returns to the dashboard.
+ * paragraph, and a list of 40 lines that the D-pad scrolls. The bottom line shows the time to
+ * draw a frame and the text cache's hits; Y switches between drawing on change and drawing
+ * every frame (with frames per second). Back returns to the dashboard.
  */
 #include <SDL.h>
 #include <hal/debug.h>
 #include <hal/video.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <windows.h>
 #include <xboxkrnl/xboxkrnl.h>
@@ -106,9 +108,14 @@ int main(void)
     }
     int cur = 0;
     int top = 0;
+    /* A frame is drawn only when something changed, as the screens will. Y switches to
+       drawing every frame, to measure the frame rate. */
+    bool continuous = false;
+    bool dirty = true;
     char stats[160] = "measuring...";
     Uint32 second_start = SDL_GetTicks();
     Uint32 draw_ms_sum = 0;
+    Uint32 last_draw_ms = 0;
     int frames = 0;
     for (;;) {
         SDL_Event e;
@@ -116,6 +123,7 @@ int main(void)
             if (e.type == SDL_CONTROLLERDEVICEADDED) {
                 (void)SDL_GameControllerOpen(e.cdevice.which);
             } else if (e.type == SDL_CONTROLLERBUTTONDOWN) {
+                dirty = true;
                 if (e.cbutton.button == SDL_CONTROLLER_BUTTON_BACK) {
                     ui_sdl_close();
                     HalReturnToFirmware(HalQuickRebootRoutine);
@@ -124,6 +132,8 @@ int main(void)
                 } else if (e.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_DOWN &&
                            cur + 1 < LIST_LINES) {
                     cur++;
+                } else if (e.cbutton.button == SDL_CONTROLLER_BUTTON_Y) {
+                    continuous = !continuous;
                 }
             }
         }
@@ -132,24 +142,38 @@ int main(void)
         } else if (cur >= top + LIST_SHOWN) {
             top = cur - LIST_SHOWN + 1;
         }
-        Uint32 start = SDL_GetTicks();
-        ui_sdl_begin(bg);
-        draw(&d, cur, top, stats);
-        draw_ms_sum += SDL_GetTicks() - start;
-        ui_sdl_present();
-        frames++;
+        if (dirty || continuous) {
+            Uint32 start = SDL_GetTicks();
+            ui_sdl_begin(bg);
+            draw(&d, cur, top, stats);
+            last_draw_ms = SDL_GetTicks() - start;
+            draw_ms_sum += last_draw_ms;
+            ui_sdl_present();
+            frames++;
+            dirty = false;
+        } else {
+            Sleep(10);
+        }
         Uint32 now = SDL_GetTicks();
         if (now - second_start >= 1000U) {
             unsigned long lookups = 0;
             unsigned long misses = 0;
             ui_sdl_cache_stats(&lookups, &misses);
-            snprintf(stats, sizeof stats,
-                     "%d frames/s, %lu ms to draw a frame, text cache %lu lookups %lu misses. "
-                     "D-pad: list, Back: dashboard",
-                     frames, (unsigned long)(draw_ms_sum / (Uint32)frames), lookups, misses);
+            if (continuous) {
+                snprintf(stats, sizeof stats,
+                         "Every frame: %d frames/s, %lu ms to draw. Cache %lu lookups %lu "
+                         "misses. Y: on change",
+                         frames, (unsigned long)(draw_ms_sum / (Uint32)frames), lookups, misses);
+            } else {
+                snprintf(stats, sizeof stats,
+                         "On change: last frame %lu ms to draw. Cache %lu lookups %lu misses. "
+                         "D-pad: list, Y: every frame, Back: dashboard",
+                         (unsigned long)last_draw_ms, lookups, misses);
+            }
             frames = 0;
             draw_ms_sum = 0;
             second_start = now;
+            dirty = true; /* the stats line changed */
         }
     }
 }

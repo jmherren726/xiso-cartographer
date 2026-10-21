@@ -23,7 +23,9 @@ bool ui_sdl_open(ui_draw *d, const char *font_dir, const char **why);
 /* Starts a frame: clears the screen to `bg`. */
 void ui_sdl_begin(ui_color bg);
 
-/* Shows the frame drawn since ui_sdl_begin. */
+/* Shows the frame drawn since ui_sdl_begin, at the next vertical blank (so it waits up to a
+   refresh). Screens draw a frame only when something on them changed: every frame is a
+   full-screen copy by the CPU, which an install needs for itself. */
 void ui_sdl_present(void);
 
 /* Text cache statistics since ui_sdl_open, for the ui-test XBE: lookups and misses. */

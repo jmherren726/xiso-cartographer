@@ -3,6 +3,7 @@
 
 #include <SDL.h>
 #include <SDL_ttf.h>
+#include <hal/video.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -207,6 +208,9 @@ void ui_sdl_begin(ui_color bg)
 
 void ui_sdl_present(void)
 {
+    /* nxdk's SDL copies the frame straight into the one framebuffer on screen: copy it
+       during the vertical blank, so the TV never shows half of two frames. */
+    XVideoWaitForVBlank();
     SDL_RenderPresent(renderer);
 }
 
