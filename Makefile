@@ -2,8 +2,8 @@
 # see CONTRIBUTING.md.
 #
 #   make docker-xbe        Build the nxdk Docker image (cached) and the XBEs inside it
-#                          (the app, the FATX probe in app/fatx-probe and the
-#                          network test in app/net-test).
+#                          (the app, the FATX probe in app/fatx-probe, the
+#                          network test in app/net-test and the UI test in app/ui-test).
 #   make xbe               Build the XBE directly; needs an activated nxdk environment.
 #   make clean-xbe         Remove XBE build output.
 #   make fixtures          Generate the synthetic xiso fixtures (needs Python 3).
@@ -30,6 +30,7 @@ xbe:
 	$(MAKE) -C app
 	$(MAKE) -C app/fatx-probe
 	$(MAKE) -C app/net-test
+	$(MAKE) -C app/ui-test
 
 docker-image:
 	$(DOCKER) build -f docker/nxdk.Dockerfile -t $(NXDK_IMAGE) \
@@ -37,7 +38,7 @@ docker-image:
 
 docker-xbe: docker-image
 	$(DOCKER) run --rm $(DOCKER_USER) -v "$(CURDIR):/usr/src/app" $(NXDK_IMAGE) \
-		sh -c 'make -C app && make -C app/fatx-probe && make -C app/net-test'
+		sh -c 'make -C app && make -C app/fatx-probe && make -C app/net-test && make -C app/ui-test'
 
 clean-xbe:
 	$(MAKE) -C app clean
