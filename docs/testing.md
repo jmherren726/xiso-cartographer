@@ -225,6 +225,18 @@ A wrong size or hash, and a taken-down item, can't be produced on demand on arch
 
 Record in the results log: how many of the item's games the catalog named, and the "matches the catalog" line (without the game's name, [ADR 0006](adr/0006-no-links-no-bypass.md)).
 
+## M8: UI test (rendering)
+
+The UI test XBE (`app/ui-test`, [build-xbox.md](build-xbox.md)) draws through the same SDL backend and text helpers the M8 screens will use ([ADR 0015](adr/0015-ui-sdl2-own-widgets.md)). Run it before the screens are built, to check the font and the drawing speed.
+
+| Step | Where | How | Pass |
+|---|---|---|---|
+| 1 | xemu | Load `app/ui-test/xcat-ui-test.iso` | One screen, no debug text: a grey outline 5 % inside each edge; a green title; "Body: Café, naïve, Ærøskøbing" with the accents; a bold Greek and Cyrillic line; two boxes after "drawn as boxes:"; a line cut with "…" inside a 300 px frame; a three-line paragraph ending in "…"; a list of "Game number" lines. After a second the bottom line shows frames per second |
+| 2 | xemu | D-pad up and down | The highlighted (bold, blue) line moves and the list scrolls inside its frame; nothing is drawn outside it. Text cache misses stop growing once every line has been seen |
+| 3 | Hardware | Copy all of `app/ui-test/bin/` (with `fonts\`) to the console, launch it, repeat 1–2 on the TV | The same; the outline is fully visible on the TV (title-safe area). Back returns to the dashboard |
+
+Record the frames per second and the time to draw a frame, on xemu and on hardware, while scrolling.
+
 ## FATX probe (M2)
 
 No authoritative list of FATX naming rules exists, and a game's files can't be renamed on install, because the game opens them by name. So the rules in `core/src/fatx.c` ([fatx-names.md](formats/fatx-names.md)) come from the console's own kernel, measured by `app/fatx-probe`.

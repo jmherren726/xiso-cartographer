@@ -61,6 +61,10 @@ dkms.conf
 /out/
 *.xbe
 *.iso.part
+# The fonts an XBE build copies next to its XBE (app/ui/ui-fonts.mk), and the check's stamp
+/app/*/bin/fonts/
+/app/bin/fonts/
+*.stamp
 
 # Disc images, dumps and other content that must never be committed
 *.iso

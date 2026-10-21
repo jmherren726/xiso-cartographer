@@ -35,3 +35,5 @@ if(XCAT_BUILD_TESTS)
   enable_testing()
   add_subdirectory(core/tests)
 endif()
+# After core/tests, whose test helpers (xcat_test_target, xcat_test_env) it uses.
+add_subdirectory(app/ui)

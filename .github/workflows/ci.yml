@@ -51,8 +51,10 @@ jobs:
       - name: Run clang-tidy
         run: |
           clang-tidy --version
-          # Host-built code only; app/ needs nxdk headers and isn't in the host compile database.
-          git ls-files -z 'core/*.c' 'platform/host/*.c' 'tools/xcat-cli/*.c' |
+          # Host-built code only: app/ needs nxdk headers, except the portable UI in app/ui/
+          # (ADR 0015 decision 4), whose *_sdl.c files are the ones that don't build here.
+          git ls-files -z 'core/*.c' 'platform/host/*.c' 'tools/xcat-cli/*.c' 'app/ui/*.c' \
+              ':!:app/ui/*_sdl.c' |
             xargs -0 --no-run-if-empty clang-tidy -p build/host-debug --quiet
 
   linux:
@@ -121,10 +123,12 @@ jobs:
           ls -l app/bin/default.xbe app/xiso-cartographer.iso
           ls -l app/fatx-probe/bin/default.xbe app/fatx-probe/xcat-fatx-probe.iso
           ls -l app/net-test/bin/default.xbe app/net-test/xcat-net-test.iso
+          ls -l app/ui-test/bin/default.xbe app/ui-test/xcat-ui-test.iso app/ui-test/bin/fonts/*.ttf
           # Every XBE starts with the "XBEH" magic.
           test "$(head -c 4 app/bin/default.xbe)" = "XBEH"
           test "$(head -c 4 app/fatx-probe/bin/default.xbe)" = "XBEH"
           test "$(head -c 4 app/net-test/bin/default.xbe)" = "XBEH"
+          test "$(head -c 4 app/ui-test/bin/default.xbe)" = "XBEH"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: xiso-cartographer-xbe-${{ github.sha }}
@@ -135,6 +139,8 @@ jobs:
             app/fatx-probe/xcat-fatx-probe.iso
             app/net-test/bin/default.xbe
             app/net-test/xcat-net-test.iso
+            app/ui-test/bin/
+            app/ui-test/xcat-ui-test.iso
           if-no-files-found: error
           retention-days: 30
 

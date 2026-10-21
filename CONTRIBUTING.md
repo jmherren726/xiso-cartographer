@@ -47,7 +47,7 @@ ctest --preset host-debug
 | Job | What it checks |
 |---|---|
 | `format` | `clang-format --dry-run --Werror` on all tracked `.c`/`.h` files |
-| `clang-tidy` | `.clang-tidy` profile against the `host-debug` compile database |
+| `clang-tidy` | `.clang-tidy` profile against the `host-debug` compile database: `core/`, `platform/host/`, `tools/xcat-cli/`, and the portable UI in `app/ui/` (not its `*_sdl.c`) |
 | `linux (gcc\|clang, host-debug\|host-release)` | Build + unit tests on Ubuntu 24.04 (ASan + UBSan in debug) |
 | `windows (cl\|clang-cl, host-debug\|host-release)` | Build + unit tests on Windows Server 2025 with the runner's Visual Studio (VS 2026, MSVC 19.51, LLVM clang-cl 20.1 as of 2026-10; ASan in debug) |
 | `xbe` | Builds the nxdk Docker image and the XBE; uploads `default.xbe` + ISO as an artifact |

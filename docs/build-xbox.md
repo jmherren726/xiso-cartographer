@@ -52,6 +52,10 @@ The first image build compiles nxdk's tools and libraries. Docker caches it afte
 | `app/fatx-probe/bin/default.xbe`, `app/fatx-probe/xcat-fatx-probe.iso` | The FATX probe: a test tool that measures what file names and paths the console's FATX driver accepts. See [testing.md](testing.md#fatx-probe-m2). |
 | `app/net-test/bin/default.xbe`, `app/net-test/xcat-net-test.iso` | The network test: downloads a file over HTTP or HTTPS and reports MB/s, retries and the CRC-32; for HTTPS also the CPU's cipher speed and the negotiated TLS suite. See [testing.md](testing.md#m3-network-download-test) and [M5](testing.md#m5-tls-speed-on-the-console). |
 
+| `app/ui-test/bin/` (`default.xbe` and `fonts\`), `app/ui-test/xcat-ui-test.iso` | The UI test (M8): draws the bundled font and the UI's text helpers through SDL, and shows frames per second. Copy the whole `bin\` folder: the XBE needs `fonts\` next to it. See [testing.md](testing.md#m8-ui-test-rendering). |
+
+XBEs with a UI include [`app/ui/ui.mk`](../app/ui/ui.mk) and [`app/ui/ui-fonts.mk`](../app/ui/ui-fonts.mk) ([ADR 0015](adr/0015-ui-sdl2-own-widgets.md)): the UI sources, nxdk's SDL2 and SDL_ttf, and Noto Sans from [`third_party/fonts/`](../third_party/fonts/README.md), checked against its `SHA256SUMS` and copied to `bin/fonts/`. The build stops if a font file doesn't match.
+
 XBEs with HTTPS include [`app/tls.mk`](../app/tls.mk): BearSSL, `core/src/tls.c`, `core/src/sntp.c`, `core/src/hash.c`, the CA bundle (embedded at build time, so the build needs `python3`, which the image has) and `platform/nxdk/src/nx_tls.c`. nxdk compiles without optimisation by default; `tls.mk` builds BearSSL and `tls.c` with `-O2`, since unoptimised crypto would understate the TLS speed several times over. BearSSL's object files land in its submodule folder, which git is told to ignore (`ignore = untracked` in `.gitmodules`).
 
 Every CI run also uploads all of these files as the `xiso-cartographer-xbe-<sha>` artifact (`xbe` job).
