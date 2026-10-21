@@ -53,15 +53,16 @@ static void draw(const ui_draw *d, int pan, int cur, int top, const char *stats)
                       ui_col_accent, "UI TEST");
 
     ui_panel(d, nav, UI_CHAMFER, ui_col_panel, ui_col_border);
-    int bh = d->line_height(d->ctx, UI_FONT_BOLD);
+    int lbh = d->line_height(d->ctx, UI_FONT_LABEL);
     for (int i = 0; i < 4; i++) {
-        ui_rect item = {nav.x + 8, nav.y + PAD + i * (bh + 16), nav.w - 16, bh + 10};
+        ui_rect item = {nav.x + 8, nav.y + PAD + i * (lbh + 16), nav.w - 16, lbh + 10};
         if (i == 0) {
             ui_panel(d, item, 8, ui_col_highlight, ui_col_highlight_border);
         }
-        (void)ui_text_fit(d, UI_FONT_BOLD, item.x + 8, item.y + 5, item.w - 12,
+        (void)ui_text_fit(d, UI_FONT_LABEL, item.x + 10, item.y + 5, item.w - 14,
                           i == 0 ? ui_col_text : ui_col_dim, sections[i]);
     }
+    int bh = d->line_height(d->ctx, UI_FONT_BOLD);
 
     ui_panel(d, list, UI_CHAMFER, ui_col_panel, ui_col_border);
     int lh = d->line_height(d->ctx, UI_FONT_BODY);
