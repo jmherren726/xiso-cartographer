@@ -3,12 +3,19 @@
 
 #include <SDL.h>
 #include <SDL_ttf.h>
+#include <hal/debug.h>
 #include <hal/video.h>
 #include <stdio.h>
 #include <string.h>
+#include <windows.h>
+#include <xboxkrnl/xboxkrnl.h>
 
 #define CACHE_SLOTS 128    /* distinct strings kept as textures: a screen's worth, twice */
 #define CACHE_TEXT_MAX 256 /* longer strings are rendered every time, not cached */
+/* The NV2A register holding the physical address the screen shows (nxdk's hal/video.c keeps
+   it private). Not XVideoSetFB: it takes a physical address and makes XVideoGetFB return it,
+   which the CPU can't write through. */
+#define PCRTC_START 0x00600800
 
 /* Point sizes per font (ui_font); the line height comes from the font itself. */
 static const struct {
@@ -37,7 +44,9 @@ static slot cache[CACHE_SLOTS];
 static unsigned long frame;
 static unsigned long lookups;
 static unsigned long misses;
-static char scratch[1024]; /* the n bytes of a string, NUL-terminated for SDL_ttf */
+static char scratch[1024];   /* the n bytes of a string, NUL-terminated for SDL_ttf */
+static unsigned char *fb[2]; /* [0] XVideoSetMode's framebuffer, [1] ours (ui_sdl_present) */
+static int shown;            /* the one on screen */
 
 /* s[0, n) as a C string in `scratch`, cut at its size. */
 static const char *terminated(const char *s, size_t n)
@@ -151,20 +160,44 @@ static int sdl_line_height(void *ctx, ui_font f)
     return TTF_FontLineSkip(fonts[f]);
 }
 
+/* SDL_RenderSetClipRect, with the viewport queued first. nxdk's SDL (2.0.10's code) forgets
+   the queued viewport at every flush, and a batch that starts with a clip rect then fails
+   an SDL_assert in the software renderer, whose handler exits: a reboot. */
+static void set_clip(const SDL_Rect *rect)
+{
+    SDL_RenderSetViewport(renderer, NULL);
+    SDL_RenderSetClipRect(renderer, rect);
+}
+
 static void sdl_clip(void *ctx, const ui_rect *r)
 {
     (void)ctx;
     if (r == NULL) {
-        SDL_RenderSetClipRect(renderer, NULL);
+        set_clip(NULL);
         return;
     }
     SDL_Rect rect = {r->x, r->y, r->w, r->h};
-    SDL_RenderSetClipRect(renderer, &rect);
+    set_clip(&rect);
+}
+
+/* A failed SDL_assert: SDL's handler would exit, which reboots without a word. Show it on
+   the debug console instead, and stop. */
+static SDL_AssertState on_assert(const SDL_AssertData *a, void *userdata)
+{
+    (void)userdata;
+    XVideoWaitForVBlank();
+    VIDEOREG(PCRTC_START) = (unsigned int)XVideoGetFB() & 0x7FFFFFFF;
+    debugPrint("SDL assertion failed: %s\n%s:%d (%s)\n", a->condition, a->filename, a->linenum,
+               a->function);
+    for (;;) {
+        Sleep(1000);
+    }
 }
 
 bool ui_sdl_open(ui_draw *d, const char *font_dir, const char **why)
 {
     static char message[160];
+    SDL_SetAssertionHandler(on_assert, NULL);
     if (SDL_VideoInit(NULL) != 0 || TTF_Init() != 0) {
         snprintf(message, sizeof message, "SDL video or TTF init failed: %s", SDL_GetError());
         *why = message;
@@ -178,6 +211,13 @@ bool ui_sdl_open(ui_draw *d, const char *font_dir, const char **why)
         *why = message;
         return false;
     }
+    /* A second framebuffer, as XVideoSetMode allocates the first. Without it, frames are
+       presented into the shown one (ui_sdl_present). */
+    VIDEO_MODE vm = XVideoGetMode();
+    fb[0] = XVideoGetFB();
+    fb[1] = MmAllocateContiguousMemoryEx((SIZE_T)vm.width * vm.height * ((vm.bpp + 7) / 8), 0,
+                                         0x7FFFFFFF, 0x1000, PAGE_READWRITE | PAGE_WRITECOMBINE);
+    shown = 0;
     /* Only the bundled font is ever opened: nxdk's FreeType is old (ADR 0015). */
     for (int f = 0; f < UI_FONT_COUNT_; f++) {
         char path[260];
@@ -201,17 +241,33 @@ bool ui_sdl_open(ui_draw *d, const char *font_dir, const char **why)
 void ui_sdl_begin(ui_color bg)
 {
     frame++;
-    SDL_RenderSetClipRect(renderer, NULL);
+    set_clip(NULL);
     SDL_SetRenderDrawColor(renderer, bg.r, bg.g, bg.b, 255);
     SDL_RenderClear(renderer);
 }
 
 void ui_sdl_present(void)
 {
-    /* nxdk's SDL copies the frame straight into the one framebuffer on screen: copy it
-       during the vertical blank, so the TV never shows half of two frames. */
+    /* nxdk's SDL would copy the frame into the framebuffer on screen (SDL_RenderPresent),
+       and the TV could show half of two frames. So the frame goes into the buffer that isn't
+       shown, and the screen switches to it at the vertical blank. The software renderer draws into
+       the window surface, but batches its commands (nxdk's SDL is 2.0.10's code, though
+       SDL_version.h says 2.0.9): run them first. */
+    SDL_RenderFlush(renderer);
+    SDL_Surface *surface = SDL_GetWindowSurface(window);
+    unsigned char *back = fb[!shown];
+    if (surface == NULL || back == NULL) {
+        SDL_RenderPresent(renderer);
+        return;
+    }
+    VIDEO_MODE vm = XVideoGetMode();
+    SDL_ConvertPixels(surface->w, surface->h, surface->format->format, surface->pixels,
+                      surface->pitch, surface->format->format, back,
+                      vm.width * SDL_BYTESPERPIXEL(surface->format->format));
+    XVideoFlushFB();
     XVideoWaitForVBlank();
-    SDL_RenderPresent(renderer);
+    VIDEOREG(PCRTC_START) = (unsigned int)back & 0x7FFFFFFF;
+    shown = !shown;
 }
 
 void ui_sdl_cache_stats(unsigned long *l, unsigned long *m)
@@ -242,5 +298,14 @@ void ui_sdl_close(void)
     }
     renderer = NULL;
     window = NULL;
+    if (fb[1] != NULL) {
+        if (shown != 0) {
+            XVideoWaitForVBlank();
+            VIDEOREG(PCRTC_START) = (unsigned int)fb[0] & 0x7FFFFFFF;
+            shown = 0;
+        }
+        MmFreeContiguousMemory(fb[1]);
+        fb[1] = NULL;
+    }
     TTF_Quit();
 }
