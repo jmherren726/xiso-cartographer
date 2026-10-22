@@ -8,8 +8,10 @@
  * the D-pad scrolls and LT / RT page, and a detail panel with Latin, Greek and Cyrillic text,
  * characters the font lacks (drawn as boxes), a line cut with an ellipsis and a wrapped
  * paragraph. A opens a dialog on the highlighted line, Y the keyboard for a search and X for
- * a password; the footer shows what came back. The footer's first line shows the time to
- * draw a frame, the frames drawn per second and the text cache's hits. A frame is drawn only
+ * a password, over the screen darkened and standing still (ui_backdrop); the footer shows
+ * what came back. The footer's first line shows the frames drawn per second, the time a frame
+ * takes in its three stages (drawing, the SDL work ui_sdl_present finishes, the copy to the
+ * screen) and the text cache's hits. A frame is drawn only
  * when something changed: a button, the stats, the progress or the background moving a
  * pixel. White switches to drawing every frame. Back returns to the dashboard.
  */
@@ -163,7 +165,10 @@ int main(void)
     bool dirty = true;
     char stats[160] = "measuring...";
     Uint32 second_start = SDL_GetTicks();
-    Uint32 draw_ms_sum = 0;
+    bool backdrop_saved = false; /* for the dialog or keyboard open */
+    uint32_t draw_us_sum = 0;
+    uint32_t render_us_sum = 0;
+    uint32_t copy_us_sum = 0;
     int frames = 0;
     for (;;) {
         ui_button b;
@@ -237,17 +242,32 @@ int main(void)
                 snprintf(status, sizeof status, "%s",
                          "A dialog  Y search  X password  LT RT page  White redraw  Back exit");
             }
-            Uint32 start = SDL_GetTicks();
+            uint32_t start = ui_sdl_us();
             ui_sdl_begin(ui_col_bg);
-            /* The bar shows the percentage it's labelled with, so they change together. */
-            draw(&d, pan, &l, (uint32_t)pct * (PROGRESS_MS / 100), stats, status);
+            if (m == MODE_LIST || !backdrop_saved) {
+                /* The bar shows the percentage it's labelled with, so they change together. */
+                draw(&d, pan, &l, (uint32_t)pct * (PROGRESS_MS / 100), stats, status);
+            }
+            if (m == MODE_LIST) {
+                backdrop_saved = false;
+            } else if (!backdrop_saved) {
+                ui_backdrop_save(&d);
+                backdrop_saved = true;
+            } else {
+                ui_backdrop(&d);
+            }
             if (m == MODE_DIALOG) {
                 ui_dialog_draw(&d, &dialog);
             } else if (m == MODE_KEYBOARD) {
                 ui_kbd_draw(&d, &kbd);
             }
-            draw_ms_sum += SDL_GetTicks() - start;
+            draw_us_sum += ui_sdl_us() - start;
             ui_sdl_present();
+            uint32_t render_us = 0;
+            uint32_t copy_us = 0;
+            ui_sdl_present_us(&render_us, &copy_us);
+            render_us_sum += render_us;
+            copy_us_sum += copy_us;
             frames++;
             dirty = false;
         } else {
@@ -258,13 +278,19 @@ int main(void)
             unsigned long lookups = 0;
             unsigned long misses = 0;
             ui_sdl_cache_stats(&lookups, &misses);
+            /* Each stage's mean in tenths of a millisecond. */
+            unsigned n = frames > 0 ? (unsigned)frames * 100U : 1U;
+            unsigned dr = (unsigned)(draw_us_sum / n);
+            unsigned re = (unsigned)(render_us_sum / n);
+            unsigned co = (unsigned)(copy_us_sum / n);
             snprintf(stats, sizeof stats,
-                     "%s: %d frames/s, %lu ms to draw. Pan %d of %d. Cache %lu/%lu missed",
-                     continuous ? "Every frame" : "On change", frames,
-                     frames > 0 ? (unsigned long)(draw_ms_sum / (Uint32)frames) : 0UL, pan, range,
-                     misses, lookups);
+                     "%s %d/s. Draw %u.%u + finish %u.%u + copy %u.%u ms. Cache %lu/%lu missed",
+                     continuous ? "Every frame" : "On change", frames, dr / 10, dr % 10, re / 10,
+                     re % 10, co / 10, co % 10, misses, lookups);
             frames = 0;
-            draw_ms_sum = 0;
+            draw_us_sum = 0;
+            render_us_sum = 0;
+            copy_us_sum = 0;
             second_start = now;
             dirty = true; /* the stats line changed */
         }

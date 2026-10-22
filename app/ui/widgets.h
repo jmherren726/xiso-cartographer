@@ -56,7 +56,7 @@ int ui_percent(uint64_t done, uint64_t total);
    centred on it. */
 void ui_progress(const ui_draw *d, ui_rect r, uint64_t done, uint64_t total, const char *label);
 
-/* ---- Dialog: a title, a message and one to three choices, over the dimmed screen. */
+/* ---- Dialog: a title, a message and one to three choices. */
 
 #define UI_DIALOG_CHOICES 3
 #define UI_DIALOG_OPEN (-1)
@@ -73,7 +73,8 @@ typedef struct ui_dialog {
    Anything else, or B without a cancel, returns UI_DIALOG_OPEN. */
 int ui_dialog_input(ui_dialog *dg, ui_button b);
 
-/* Dims the screen, then draws the dialog in a panel centred on it. */
+/* Draws the dialog in a panel centred on the screen. Draw it over ui_backdrop (theme.h): the
+   screen behind it, darkened and standing still. */
 void ui_dialog_draw(const ui_draw *d, const ui_dialog *dg);
 
 #ifdef __cplusplus

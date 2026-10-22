@@ -18,7 +18,6 @@
 #define MAX_DOTS 64 /* a password field shows at most this many, its end */
 
 static const char dot[] = "\xE2\x80\xA2"; /* U+2022, in Noto Sans */
-static const ui_color dim_screen = {0, 0, 0, 150};
 
 /* Small letters, capitals, symbols. Between them every printable ASCII character but the
    space, which is the SPACE key and Y. */
@@ -194,8 +193,6 @@ static void draw_key(const ui_draw *d, ui_rect r, bool sel, ui_font f, ui_color 
 
 void ui_kbd_draw(const ui_draw *d, const ui_kbd *k)
 {
-    d->fill(d->ctx, (ui_rect){0, 0, UI_SCREEN_W, UI_SCREEN_H}, dim_screen);
-
     int inner_w = KBD_W - 2 * KBD_PAD;
     int key_w = (inner_w - (UI_KBD_COLS - 1) * KEY_GAP) / UI_KBD_COLS;
     int grid_h = UI_KBD_ROWS * KEY_H + (UI_KBD_ROWS - 1) * KEY_GAP;

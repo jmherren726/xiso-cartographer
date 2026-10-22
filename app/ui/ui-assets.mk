@@ -1,5 +1,5 @@
-# The UI's files next to the XBE (ADR 0015, docs/ui-style.md). Include after nxdk's Makefile,
-# which sets OUTPUT_DIR.
+# The UI's files next to the XBE (ADR 0015, docs/ui-style.md), and the optimisation of its
+# code. Include after nxdk's Makefile, which sets OUTPUT_DIR.
 #
 # fonts\: the bundled fonts (third_party/fonts, ADR 0015 decision 7), after checking them against
 #   third_party/fonts/SHA256SUMS. The check's stamp stays outside the XBE's folder, so it
@@ -32,3 +32,10 @@ $(OUTPUT_DIR)/ui/%.bmp: $(UI_ASSET_SRC)/%.png $(ROOT_DIR)/tools/ui/png2bmp.py
 
 all: $(FONT_OUT) $(UI_IMAGE_OUT)
 $(GEN_XISO): $(FONT_OUT) $(UI_IMAGE_OUT)
+
+# Speed. nxdk compiles everything without optimisation (as app/tls.mk and app/zip.mk note).
+# The UI's own code touches every pixel of every frame, so it gets -O2. SDL, SDL_ttf and
+# FreeType come prebuilt with the build image, which builds them at -O2 too
+# (docker/nxdk.Dockerfile).
+UI_OBJS := $(addsuffix .obj,$(basename $(filter $(UI_DIR)/%,$(SRCS))))
+$(UI_OBJS): CFLAGS += -O2

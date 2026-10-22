@@ -5,10 +5,13 @@
 #include <SDL_ttf.h>
 #include <hal/debug.h>
 #include <hal/video.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <windows.h>
 #include <xboxkrnl/xboxkrnl.h>
+
+#include "theme.h"
 
 #define CACHE_SLOTS 128    /* distinct strings kept as textures: a screen's worth, twice */
 #define CACHE_TEXT_MAX 256 /* longer strings are rendered every time, not cached */
@@ -40,6 +43,7 @@ typedef struct slot {
 
 static SDL_Window *window;
 static SDL_Renderer *renderer;
+static SDL_Surface *screen; /* the window's surface, which the software renderer draws into */
 static TTF_Font *fonts[UI_FONT_COUNT_];
 static slot cache[CACHE_SLOTS];
 static unsigned long frame;
@@ -48,16 +52,87 @@ static unsigned long misses;
 static char scratch[1024];   /* the n bytes of a string, NUL-terminated for SDL_ttf */
 static unsigned char *fb[2]; /* [0] XVideoSetMode's framebuffer, [1] ours (ui_sdl_present) */
 static int shown;            /* the one on screen */
+static SDL_Rect clip;        /* what sdl_clip limits drawing to: the screen if nothing */
+static SDL_Surface *saved;   /* save_backdrop's copy, NULL until the first */
+static uint32_t render_us;   /* the last ui_sdl_present's, for ui_sdl_present_us */
+static uint32_t copy_us;
 
-/* The files of ui_image, in the XBE's ui\ folder (app/ui/ui-assets.mk). */
+/* The files of ui_image, in the XBE's ui\ folder (app/ui/ui-assets.mk); NULL: made here. */
 static const char *const image_file[UI_IMAGE_COUNT_] = {
     [UI_IMAGE_BACKGROUND] = "background.bmp",
+    [UI_IMAGE_BACKGROUND_PANEL] = NULL,
 };
 
-static struct {
-    SDL_Texture *tex; /* NULL: not loaded */
-    int w, h;
-} images[UI_IMAGE_COUNT_];
+/* In the screen's pixel format, so drawing one is a copy. NULL: not loaded. */
+static SDL_Surface *images[UI_IMAGE_COUNT_];
+
+/*
+ * The pixel work is done here rather than by SDL wherever it costs: nxdk builds SDL and its
+ * C library at -O0 unless told otherwise (app/ui/ui-assets.mk), and its memcpy copies a byte
+ * at a time. Everything below works on the screen's 32-bit XRGB pixels.
+ */
+
+static uint32_t now_us(void)
+{
+    static ULONGLONG per_us;
+    if (per_us == 0) {
+        per_us = KeQueryPerformanceFrequency() / 1000000U;
+    }
+    return (uint32_t)(KeQueryPerformanceCounter() / per_us);
+}
+
+/* Copies n 32-bit words with the CPU's string copy, fast into write-combined memory too. */
+static void copy32(void *dst, const void *src, size_t n)
+{
+    int d0;
+    int d1;
+    int d2;
+    __asm__ __volatile__("cld\n\trep movsl"
+                         : "=&D"(d0), "=&S"(d1), "=&c"(d2)
+                         : "0"(dst), "1"(src), "2"(n)
+                         : "memory");
+}
+
+static uint32_t *pixel(SDL_Surface *s, int x, int y)
+{
+    return (uint32_t *)((uint8_t *)s->pixels + (ptrdiff_t)y * s->pitch) + x;
+}
+
+/* Blends c over r of s (r inside s), red and blue in one multiply, green in another. */
+static void blend(SDL_Surface *s, SDL_Rect r, ui_color c)
+{
+    uint32_t a = c.a + (c.a >> 7U); /* 0..256 */
+    uint32_t na = 256U - a;
+    uint32_t rb = (((uint32_t)c.r << 16U) | c.b) * a;
+    uint32_t g = ((uint32_t)c.g << 8U) * a;
+    for (int y = 0; y < r.h; y++) {
+        uint32_t *p = pixel(s, r.x, r.y + y);
+        for (int x = 0; x < r.w; x++) {
+            uint32_t d = p[x];
+            uint32_t drb = (((d & 0xFF00FFU) * na + rb) >> 8U) & 0xFF00FFU;
+            uint32_t dg = (((d & 0x00FF00U) * na + g) >> 8U) & 0x00FF00U;
+            p[x] = 0xFF000000U | drb | dg;
+        }
+    }
+}
+
+/* r within the clip and the screen; false if nothing is left. */
+static bool clipped(SDL_Rect *r)
+{
+    SDL_Rect out;
+    if (!SDL_IntersectRect(r, &clip, &out)) {
+        return false;
+    }
+    *r = out;
+    return true;
+}
+
+/* The screen with every queued SDL command drawn, for drawing into it directly. */
+static SDL_Surface *drawn(void)
+{
+    SDL_RenderFlush(renderer);
+    return screen;
+}
 
 /* s[0, n) as a C string in `scratch`, cut at its size. */
 static const char *terminated(const char *s, size_t n)
@@ -74,9 +149,16 @@ static void sdl_fill(void *ctx, ui_rect r, ui_color c)
 {
     (void)ctx;
     SDL_Rect rect = {r.x, r.y, r.w, r.h};
-    SDL_SetRenderDrawBlendMode(renderer, c.a == 255 ? SDL_BLENDMODE_NONE : SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(renderer, c.r, c.g, c.b, c.a);
-    SDL_RenderFillRect(renderer, &rect);
+    if (c.a == 255) {
+        /* SDL fills with the CPU's string store: fast at any optimisation. */
+        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+        SDL_SetRenderDrawColor(renderer, c.r, c.g, c.b, c.a);
+        SDL_RenderFillRect(renderer, &rect);
+        return;
+    }
+    if (clipped(&rect)) {
+        blend(drawn(), rect, c);
+    }
 }
 
 /* The cached texture of `s` in font f and color c, rendering it on a miss (into the least
@@ -171,11 +253,16 @@ static int sdl_line_height(void *ctx, ui_font f)
     return TTF_FontLineSkip(fonts[f]);
 }
 
-/* SDL_RenderSetClipRect, with the viewport queued first. nxdk's SDL (2.0.10's code) forgets
-   the queued viewport at every flush, and a batch that starts with a clip rect then fails
-   an SDL_assert in the software renderer, whose handler exits: a reboot. */
+/* Limits drawing to rect (NULL: the screen), for SDL and for the drawing done here.
+   SDL_RenderSetClipRect goes with the viewport queued first: nxdk's SDL (2.0.10's code)
+   forgets the queued viewport at every flush, and a batch that starts with a clip rect then
+   fails an SDL_assert in the software renderer, whose handler exits: a reboot. */
 static void set_clip(const SDL_Rect *rect)
 {
+    SDL_Rect all = {0, 0, UI_SCREEN_W, UI_SCREEN_H};
+    if (rect == NULL || !SDL_IntersectRect(rect, &all, &clip)) {
+        clip = rect == NULL ? all : (SDL_Rect){0, 0, 0, 0};
+    }
     SDL_RenderSetViewport(renderer, NULL);
     SDL_RenderSetClipRect(renderer, rect);
 }
@@ -194,39 +281,89 @@ static void sdl_clip(void *ctx, const ui_rect *r)
 static void sdl_image(void *ctx, ui_image img, ui_rect src, int x, int y)
 {
     (void)ctx;
-    if (images[img].tex == NULL) {
+    SDL_Surface *from = images[img];
+    if (from == NULL) {
         return;
     }
-    SDL_Rect from = {src.x, src.y, src.w, src.h};
-    SDL_Rect to = {x, y, src.w, src.h};
-    SDL_RenderCopy(renderer, images[img].tex, &from, &to);
+    /* Keep src inside the image, then the destination inside the clip, moving src along. */
+    SDL_Rect s = {src.x, src.y, src.w, src.h};
+    SDL_Rect whole = {0, 0, from->w, from->h};
+    SDL_Rect in;
+    if (!SDL_IntersectRect(&s, &whole, &in)) {
+        return;
+    }
+    SDL_Rect to = {x + in.x - s.x, y + in.y - s.y, in.w, in.h};
+    SDL_Rect dst = to;
+    if (!clipped(&dst)) {
+        return;
+    }
+    in.x += dst.x - to.x;
+    in.y += dst.y - to.y;
+    SDL_Surface *out = drawn();
+    for (int row = 0; row < dst.h; row++) {
+        copy32(pixel(out, dst.x, dst.y + row), pixel(from, in.x, in.y + row), (size_t)dst.w);
+    }
 }
 
 static void sdl_image_size(void *ctx, ui_image img, int *w, int *h)
 {
     (void)ctx;
-    *w = images[img].tex != NULL ? images[img].w : 0;
-    *h = images[img].tex != NULL ? images[img].h : 0;
+    *w = images[img] != NULL ? images[img]->w : 0;
+    *h = images[img] != NULL ? images[img]->h : 0;
 }
 
-/* Loads the images that exist; a missing one is drawn without (theme.c falls back). */
+static void sdl_save_backdrop(void *ctx, ui_color shade)
+{
+    (void)ctx;
+    SDL_Surface *s = drawn();
+    if (saved == NULL) {
+        saved = SDL_CreateRGBSurfaceWithFormat(0, s->w, s->h, 32, s->format->format);
+        if (saved == NULL) {
+            return;
+        }
+    }
+    for (int row = 0; row < s->h; row++) {
+        copy32(pixel(saved, 0, row), pixel(s, 0, row), (size_t)s->w);
+    }
+    blend(saved, (SDL_Rect){0, 0, saved->w, saved->h}, shade);
+}
+
+static void sdl_backdrop(void *ctx)
+{
+    (void)ctx;
+    if (saved == NULL) {
+        return;
+    }
+    SDL_Surface *s = drawn();
+    for (int row = 0; row < s->h; row++) {
+        copy32(pixel(s, 0, row), pixel(saved, 0, row), (size_t)s->w);
+    }
+}
+
+/* Loads the images that exist, in the screen's format, and makes the panel-tinted
+   background; a missing one is drawn without (theme.c falls back). */
 static void load_images(const char *asset_dir)
 {
     for (int i = 0; i < UI_IMAGE_COUNT_; i++) {
+        if (image_file[i] == NULL) {
+            continue;
+        }
         char path[260];
         snprintf(path, sizeof path, "%s\\ui\\%s", asset_dir, image_file[i]);
         SDL_Surface *surface = SDL_LoadBMP(path);
         if (surface == NULL) {
             continue;
         }
-        images[i].tex = SDL_CreateTextureFromSurface(renderer, surface);
-        images[i].w = surface->w;
-        images[i].h = surface->h;
+        images[i] = SDL_ConvertSurface(surface, screen->format, 0);
         SDL_FreeSurface(surface);
-        if (images[i].tex != NULL) {
-            /* Opaque: a plain copy, much cheaper than blending in software. */
-            SDL_SetTextureBlendMode(images[i].tex, SDL_BLENDMODE_NONE);
+    }
+    SDL_Surface *bg = images[UI_IMAGE_BACKGROUND];
+    if (bg != NULL) {
+        SDL_Surface *tinted = SDL_ConvertSurface(bg, screen->format, 0);
+        if (tinted != NULL) {
+            blend(tinted, (SDL_Rect){0, 0, tinted->w, tinted->h}, ui_col_panel);
         }
+        images[UI_IMAGE_BACKGROUND_PANEL] = tinted;
     }
 }
 
@@ -256,8 +393,18 @@ bool ui_sdl_open(ui_draw *d, const char *asset_dir, const char **why)
     window = SDL_CreateWindow("xiso-cartographer", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
                               UI_SCREEN_W, UI_SCREEN_H, SDL_WINDOW_SHOWN);
     renderer = window != NULL ? SDL_CreateRenderer(window, -1, 0) : NULL;
-    if (renderer == NULL) {
+    screen = window != NULL ? SDL_GetWindowSurface(window) : NULL;
+    if (renderer == NULL || screen == NULL) {
         snprintf(message, sizeof message, "SDL window or renderer failed: %s", SDL_GetError());
+        *why = message;
+        return false;
+    }
+    /* The drawing done here assumes 32-bit pixels with red, green and blue in that order. */
+    const SDL_PixelFormat *pf = screen->format;
+    if (pf->BytesPerPixel != 4 || pf->Rmask != 0xFF0000U || pf->Gmask != 0x00FF00U ||
+        pf->Bmask != 0x0000FFU || screen->w != UI_SCREEN_W || screen->h != UI_SCREEN_H) {
+        snprintf(message, sizeof message, "Unexpected screen format %s, %dx%d",
+                 SDL_GetPixelFormatName(pf->format), screen->w, screen->h);
         *why = message;
         return false;
     }
@@ -280,6 +427,7 @@ bool ui_sdl_open(ui_draw *d, const char *asset_dir, const char **why)
         }
     }
     load_images(asset_dir);
+    set_clip(NULL);
     d->ctx = NULL;
     d->fill = sdl_fill;
     d->text = sdl_text;
@@ -288,6 +436,8 @@ bool ui_sdl_open(ui_draw *d, const char *asset_dir, const char **why)
     d->clip = sdl_clip;
     d->image = sdl_image;
     d->image_size = sdl_image_size;
+    d->save_backdrop = sdl_save_backdrop;
+    d->backdrop = sdl_backdrop;
     return true;
 }
 
@@ -303,24 +453,39 @@ void ui_sdl_present(void)
 {
     /* nxdk's SDL would copy the frame into the framebuffer on screen (SDL_RenderPresent),
        and the TV could show half of two frames. So the frame goes into the buffer that isn't
-       shown, and the screen switches to it at the vertical blank. The software renderer draws into
-       the window surface, but batches its commands (nxdk's SDL is 2.0.10's code, though
+       shown, and the screen switches to it at the vertical blank. The software renderer draws
+       into the window surface, but batches its commands (nxdk's SDL is 2.0.10's code, though
        SDL_version.h says 2.0.9): run them first. */
-    SDL_RenderFlush(renderer);
-    SDL_Surface *surface = SDL_GetWindowSurface(window);
+    uint32_t start = now_us();
+    SDL_Surface *s = drawn();
+    uint32_t rendered = now_us();
+    render_us = rendered - start;
     unsigned char *back = fb[!shown];
-    if (surface == NULL || back == NULL) {
+    if (back == NULL) {
         SDL_RenderPresent(renderer);
+        copy_us = now_us() - rendered;
         return;
     }
     VIDEO_MODE vm = XVideoGetMode();
-    SDL_ConvertPixels(surface->w, surface->h, surface->format->format, surface->pixels,
-                      surface->pitch, surface->format->format, back,
-                      vm.width * SDL_BYTESPERPIXEL(surface->format->format));
+    for (int row = 0; row < s->h; row++) {
+        copy32(back + (size_t)row * vm.width * 4U, pixel(s, 0, row), (size_t)s->w);
+    }
     XVideoFlushFB();
+    copy_us = now_us() - rendered;
     XVideoWaitForVBlank();
     VIDEOREG(PCRTC_START) = (unsigned int)back & 0x7FFFFFFF;
     shown = !shown;
+}
+
+void ui_sdl_present_us(uint32_t *render, uint32_t *copy)
+{
+    *render = render_us;
+    *copy = copy_us;
+}
+
+uint32_t ui_sdl_us(void)
+{
+    return now_us();
 }
 
 void ui_sdl_cache_stats(unsigned long *l, unsigned long *m)
@@ -338,11 +503,11 @@ void ui_sdl_close(void)
         }
     }
     for (int i = 0; i < UI_IMAGE_COUNT_; i++) {
-        if (images[i].tex != NULL) {
-            SDL_DestroyTexture(images[i].tex);
-            images[i].tex = NULL;
-        }
+        SDL_FreeSurface(images[i]);
+        images[i] = NULL;
     }
+    SDL_FreeSurface(saved);
+    saved = NULL;
     for (int f = 0; f < UI_FONT_COUNT_; f++) {
         if (fonts[f] != NULL) {
             TTF_CloseFont(fonts[f]);
@@ -357,6 +522,7 @@ void ui_sdl_close(void)
     }
     renderer = NULL;
     window = NULL;
+    screen = NULL;
     if (fb[1] != NULL) {
         if (shown != 0) {
             XVideoWaitForVBlank();

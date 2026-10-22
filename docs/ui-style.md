@@ -24,6 +24,7 @@ Owner decisions of 2026-10-21:
 | `border` | 80, 190, 40 | Panel borders |
 | `highlight` | 40, 110, 20, alpha 235 | The selected line or section |
 | `highlight_border` | 160, 255, 70 | Its border |
+| `shade` | 0, 0, 0, alpha 150 | Over the screen behind a dialog or the keyboard |
 
 ## Fonts
 
@@ -67,9 +68,9 @@ The widgets of ADR 0015 decisions 2 and 3, in [`app/ui/widgets.h`](../app/ui/wid
 
 **Progress bar.** A small panel (chamfer 6) filled in `highlight` from the left, with its label (say "48 %") centred on it in `UI_FONT_BOLD`. `ui_percent` rounds down, so it shows 100 % only once the last byte is in.
 
-**Dialog.** The screen dimmed (black at alpha 150), then a 520-pixel panel centred on it: the title in `UI_FONT_LABEL` and `accent`, the message wrapped in `UI_FONT_BODY` (at most six lines), and one to three buttons side by side in `UI_FONT_LABEL`, the highlighted one in `highlight`. Left and Right move between them; A chooses; B gives the choice marked as cancel, if any. Error dialogs (ADR 0015 decision 5) will use it with RETRY, LOG IN AGAIN and BACK, which fit.
+**Dialog.** Over the backdrop (the screen behind, darkened by `shade` and standing still, [below](#cost)), a 520-pixel panel centred on the screen: the title in `UI_FONT_LABEL` and `accent`, the message wrapped in `UI_FONT_BODY` (at most six lines), and one to three buttons side by side in `UI_FONT_LABEL`, the highlighted one in `highlight`. Left and Right move between them; A chooses; B gives the choice marked as cancel, if any. Error dialogs (ADR 0015 decision 5) will use it with RETRY, LOG IN AGAIN and BACK, which fit.
 
-**On-screen keyboard.** The dimmed screen, then a 520-pixel panel: the field's name in `UI_FONT_LABEL`, the field, 10 × 5 keys and a line of hints.
+**On-screen keyboard.** Over the backdrop, like the dialog, a 520-pixel panel: the field's name in `UI_FONT_LABEL`, the field, 10 × 5 keys and a line of hints.
 
 | Row | Small letters | Capitals | Symbols |
 |---|---|---|---|
@@ -89,4 +90,15 @@ The field shows the end of its text when it's wider, with an `accent` caret afte
 
 `ui_pan_x(t)` gives the offset: 60 seconds (`UI_PAN_LEG_MS`) from the left end to the right, and as long back, easing in and out at the ends (smoothstep), so it never jumps or stops abruptly. At its fastest it moves 20 pixels a second.
 
-**Cost.** Every frame is drawn by the CPU, and copied into the framebuffer that isn't shown (ADR 0015, `draw_sdl.c`). So a screen draws a new frame only when something changed: a button, new text, or the background moving a whole pixel. With the pan that's up to 20 frames a second, slower near the ends. In xemu a frame of the ui-test screen takes 2–3 ms to draw, about 5 % of the CPU at 20 frames a second. The install screens keep the same rule; if the pan costs installs speed, they can stop it while a download runs (to be measured on hardware in the M8 install screen).
+## Cost
+
+Every frame is drawn by the console's CPU, 640 × 480 pixels, and copied into the framebuffer that isn't shown (ADR 0015, `draw_sdl.c`). So a screen draws a new frame only when something changed: a button, new text, or the background moving a whole pixel. With the pan that's up to 20 frames a second, slower near the ends. The install screens keep the same rule; if the pan costs installs speed, they can stop it while a download runs (to be measured on hardware in the M8 install screen).
+
+What keeps a frame inside one refresh (16.7 ms) on the console's 733 MHz CPU:
+
+- **Optimised code.** nxdk compiles without optimisation, and its `memcpy` copies a byte at a time. The build image builds SDL, SDL_ttf and FreeType again at `-O2` ([`docker/nxdk.Dockerfile`](../docker/nxdk.Dockerfile)), and `app/ui/ui-assets.mk` builds the UI's own code at `-O2`. The rest of nxdk is left as it was tested.
+- **No blending of large areas.** A translucent panel blended pixel by pixel costs about 200,000 blends a frame for one screen. The backend makes `UI_IMAGE_BACKGROUND_PANEL` at start, the panorama with `panel` blended over it once, and `ui_panel` copies the part behind each panel from it, at the background's pan: the same pixels for the price of a copy. Highlights and small panels are still blended, by the backend's own loop.
+- **A still backdrop for dialogs and the keyboard.** `ui_backdrop_save` keeps the screen behind, darkened by `shade` (black at alpha 150), in the frame a dialog opens; `ui_backdrop` copies it back in the frames after, so the screen behind isn't drawn or darkened again. It stands still while the dialog is open.
+- **Copies by the CPU's string copy** (`rep movsd`) for images, the backdrop and the frame to the screen.
+
+The first build without these ran at 9 frames a second on the console, 4 with the keyboard open (testing.md, 2026-10-22). ui-test's footer shows a frame's three stages: the screen's drawing, the SDL work left when it's presented, and the copy to the screen.

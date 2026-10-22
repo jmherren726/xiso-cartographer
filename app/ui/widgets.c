@@ -13,8 +13,6 @@
 #define DIALOG_PAD 18
 #define DIALOG_LINES 6 /* at most, of the message */
 
-static const ui_color dim_screen = {0, 0, 0, 150};
-
 /* w * done / total for done <= total, without overflowing 64 bits. */
 static int part(uint64_t done, uint64_t total, int w)
 {
@@ -206,8 +204,6 @@ static int wrapped_lines(const ui_draw *d, ui_font f, const char *s, int w, int 
 
 void ui_dialog_draw(const ui_draw *d, const ui_dialog *dg)
 {
-    d->fill(d->ctx, (ui_rect){0, 0, UI_SCREEN_W, UI_SCREEN_H}, dim_screen);
-
     int inner_w = DIALOG_W - 2 * DIALOG_PAD;
     int title_h = d->line_height(d->ctx, UI_FONT_LABEL);
     int lh = d->line_height(d->ctx, UI_FONT_BODY);

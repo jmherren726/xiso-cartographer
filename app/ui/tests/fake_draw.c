@@ -88,7 +88,20 @@ static void image_size(void *ctx, ui_image img, int *w, int *h)
     *h = 0;
 }
 
-const ui_draw fake_draw = {NULL, fill, text, width, line_height, clip, image, image_size};
+static void save_backdrop(void *ctx, ui_color shade)
+{
+    (void)ctx;
+    next_call('s')->c = shade;
+}
+
+static void backdrop(void *ctx)
+{
+    (void)ctx;
+    (void)next_call('b');
+}
+
+const ui_draw fake_draw = {NULL, fill,  text,       width,         line_height,
+                           clip, image, image_size, save_backdrop, backdrop};
 
 void fake_reset(void)
 {

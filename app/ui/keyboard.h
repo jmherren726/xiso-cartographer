@@ -52,8 +52,8 @@ void ui_kbd_open(ui_kbd *k, const char *label, char *buf, size_t cap, bool passw
 /* Handles a press. */
 ui_kbd_result ui_kbd_input(ui_kbd *k, ui_button b);
 
-/* Dims the screen, then draws the keyboard in a panel centred on it: the label, the field
-   (its end, if the text is wider), the keys and a line of hints. */
+/* Draws the keyboard in a panel centred on the screen: the label, the field (its end, if the
+   text is wider), the keys and a line of hints. Draw it over ui_backdrop (theme.h). */
 void ui_kbd_draw(const ui_draw *d, const ui_kbd *k);
 
 #ifdef __cplusplus

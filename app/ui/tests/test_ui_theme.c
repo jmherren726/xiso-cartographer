@@ -15,8 +15,11 @@ void tearDown(void) {}
 static char grid[GH][GW];
 static int fill_count[GH][GW]; /* how often the panel's fill colour painted each pixel */
 static int image_w, image_h;   /* the fake background's size; 0 x 0: not loaded */
-static ui_rect image_src;
+static int tinted_w;           /* UI_IMAGE_BACKGROUND_PANEL's width (image_h high); 0: none */
+static ui_rect image_src;      /* of the last image drawn */
 static int image_calls;
+static int saves, backdrops;
+static ui_color saved_shade;
 
 static const ui_color fill_c = {1, 2, 3, 100};
 static const ui_color border_c = {9, 9, 9, 255};
@@ -42,25 +45,55 @@ static void fake_fill(void *ctx, ui_rect r, ui_color c)
     }
 }
 
+/* Images are logged; the tinted background paints 'T' where it's drawn. */
 static void fake_image(void *ctx, ui_image img, ui_rect src, int x, int y)
 {
     (void)ctx;
-    (void)img;
-    (void)x;
-    (void)y;
     image_src = src;
     image_calls++;
+    if (img != UI_IMAGE_BACKGROUND_PANEL) {
+        return;
+    }
+    for (int gy = y; gy < y + src.h; gy++) {
+        for (int gx = x; gx < x + src.w; gx++) {
+            if (gx >= 0 && gy >= 0 && gx < GW && gy < GH) {
+                grid[gy][gx] = 'T';
+                fill_count[gy][gx]++;
+            }
+        }
+    }
 }
 
 static void fake_image_size(void *ctx, ui_image img, int *w, int *h)
 {
     (void)ctx;
-    (void)img;
-    *w = image_w;
-    *h = image_h;
+    *w = img == UI_IMAGE_BACKGROUND_PANEL ? tinted_w : image_w;
+    *h = img == UI_IMAGE_BACKGROUND_PANEL && tinted_w == 0 ? 0 : image_h;
 }
 
-static const ui_draw fake = {NULL, fake_fill, NULL, NULL, NULL, NULL, fake_image, fake_image_size};
+static void fake_save_backdrop(void *ctx, ui_color shade)
+{
+    (void)ctx;
+    saves++;
+    saved_shade = shade;
+}
+
+static void fake_backdrop(void *ctx)
+{
+    (void)ctx;
+    backdrops++;
+}
+
+static const ui_draw fake = {NULL,
+                             fake_fill,
+                             NULL,
+                             NULL,
+                             NULL,
+                             NULL,
+                             fake_image,
+                             fake_image_size,
+                             fake_save_backdrop,
+                             fake_backdrop};
 
 static void clear(void)
 {
@@ -186,6 +219,52 @@ static void test_panel_square_and_tiny(void)
     }
 }
 
+/* After the background, panels in ui_col_panel are copied from the tinted background at the
+   same pan, in the same shape; other fills, and panels over a backdrop, are blended. */
+static void test_panel_tinted(void)
+{
+    image_w = 1440;
+    image_h = 480;
+    tinted_w = 1440;
+    ui_background(&fake, 100);
+    clear();
+    ui_panel(&fake, (ui_rect){2, 3, 30, 20}, 6, ui_col_panel, border_c);
+    TEST_ASSERT_EQUAL_CHAR('T', grid[3 + 10][2 + 15]);
+    TEST_ASSERT_EQUAL_CHAR('.', grid[3][2]);      /* still cut */
+    TEST_ASSERT_EQUAL_CHAR('B', grid[3][2 + 29]); /* border drawn over it */
+    TEST_ASSERT_EQUAL_INT(2 + 100, image_src.x);  /* the same pan as the background */
+    for (int y = 0; y < GH; y++) {
+        for (int x = 0; x < GW; x++) {
+            TEST_ASSERT_TRUE(fill_count[y][x] <= 1);
+        }
+    }
+    clear();
+    ui_panel(&fake, (ui_rect){2, 3, 30, 20}, 6, fill_c, border_c); /* another fill: blended */
+    TEST_ASSERT_EQUAL_CHAR('f', grid[3 + 10][2 + 15]);
+
+    saves = 0;
+    ui_backdrop_save(&fake);
+    TEST_ASSERT_EQUAL_INT(1, saves);
+    TEST_ASSERT_EQUAL_INT(0, memcmp(&saved_shade, &ui_col_shade, sizeof saved_shade));
+    clear();
+    ui_panel(&fake, (ui_rect){2, 3, 30, 20}, 6, ui_col_panel, border_c);
+    TEST_ASSERT_EQUAL_CHAR('o', grid[3 + 10][2 + 15]); /* blended over the backdrop */
+
+    ui_background(&fake, 0);
+    backdrops = 0;
+    ui_backdrop(&fake);
+    TEST_ASSERT_EQUAL_INT(1, backdrops);
+    clear();
+    ui_panel(&fake, (ui_rect){2, 3, 30, 20}, 6, ui_col_panel, border_c);
+    TEST_ASSERT_EQUAL_CHAR('o', grid[3 + 10][2 + 15]);
+
+    tinted_w = 0; /* no tinted background: blended */
+    ui_background(&fake, 0);
+    clear();
+    ui_panel(&fake, (ui_rect){2, 3, 30, 20}, 6, ui_col_panel, border_c);
+    TEST_ASSERT_EQUAL_CHAR('o', grid[3 + 10][2 + 15]);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -194,5 +273,6 @@ int main(void)
     RUN_TEST(test_background);
     RUN_TEST(test_panel_shape);
     RUN_TEST(test_panel_square_and_tiny);
+    RUN_TEST(test_panel_tinted);
     return UNITY_END();
 }

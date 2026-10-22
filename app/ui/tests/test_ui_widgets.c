@@ -207,10 +207,11 @@ static void test_dialog_draw(void)
                     1,
                     2};
     ui_dialog_draw(&fake_draw, &dg);
-    /* The screen is dimmed first. */
-    TEST_ASSERT_EQUAL_CHAR('f', fake_log[0].kind);
-    TEST_ASSERT_EQUAL_INT(UI_SCREEN_W, fake_log[0].r.w);
-    TEST_ASSERT_EQUAL_INT(UI_SCREEN_H, fake_log[0].r.h);
+    /* The screen behind is the caller's (ui_backdrop): nothing covers it whole. */
+    for (int i = 0; i < fake_log_n; i++) {
+        TEST_ASSERT_FALSE(fake_log[i].kind == 'f' && fake_log[i].r.w == UI_SCREEN_W &&
+                          fake_log[i].r.h == UI_SCREEN_H);
+    }
 
     int title = fake_find_text("DOWNLOAD FAILED");
     TEST_ASSERT_TRUE(title >= 0);

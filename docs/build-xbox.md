@@ -38,7 +38,7 @@ docker run --rm -v "$PWD:/usr/src/app" xcat-nxdk make -C app
 
 On Git Bash, prefix the `docker run` command with `MSYS_NO_PATHCONV=1`, so the container path isn't rewritten.
 
-The first image build compiles nxdk's tools and libraries. Docker caches it after that, until the nxdk submodule or our lwIP options change.
+The first image build compiles nxdk's tools and libraries. Docker caches it after that, until the nxdk submodule, our lwIP options or the Dockerfile change. nxdk compiles without optimisation; the image builds SDL, SDL_ttf and FreeType a second time at `-O2`, since the UI draws every pixel of every frame through them ([ui-style.md](ui-style.md#cost)).
 
 **Network (lwIP) options:** nxdk's network library is built into the image with our [`platform/nxdk/lwip/lwipopts.h`](../platform/nxdk/lwip/lwipopts.h) ahead of nxdk's own: a larger TCP receive window with window scaling, more receive buffers in the network driver, and SACK. Without them one connection to archive.org ran at 0.3 MB/s (testing.md, M5). `app/lwip.mk` puts the same folder first for our own sources, so both sides agree. The file reaches the image build as the named context `xcat-lwip` (the `--build-context` above); after changing it, rebuild the image (`make docker-xbe` does).
 
