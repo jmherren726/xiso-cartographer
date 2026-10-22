@@ -29,9 +29,13 @@ typedef enum ui_font {
     UI_FONT_COUNT_
 } ui_font;
 
-/* Images the backend loads from the XBE's ui\ folder (app/ui/assets, docs/ui-style.md). */
+/* Images the backend loads from the XBE's ui\ folder (app/ui/assets, docs/ui-style.md), and
+   one it makes from them. */
 typedef enum ui_image {
     UI_IMAGE_BACKGROUND, /* background.bmp: the panorama behind every screen */
+    /* The panorama as seen through a panel: ui_col_panel blended over it once, at start, so a
+       panel is drawn as a copy of it rather than blended pixel by pixel (theme.c). */
+    UI_IMAGE_BACKGROUND_PANEL,
     UI_IMAGE_COUNT_
 } ui_image;
 
@@ -60,6 +64,10 @@ typedef struct ui_draw {
     void (*image)(void *ctx, ui_image img, ui_rect src, int x, int y);
     /* The image's size, or 0 x 0 if it isn't loaded. */
     void (*image_size)(void *ctx, ui_image img, int *w, int *h);
+    /* Keeps a copy of the frame drawn so far, with `shade` blended over it, for backdrop. */
+    void (*save_backdrop)(void *ctx, ui_color shade);
+    /* Draws the copy save_backdrop kept over the whole screen; nothing if there's none. */
+    void (*backdrop)(void *ctx);
 } ui_draw;
 
 /* The title-safe area: the screen less 5 % on each side, which TVs may hide (ADR 0015). */
