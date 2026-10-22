@@ -49,13 +49,16 @@ static slot cache[CACHE_SLOTS];
 static unsigned long frame;
 static unsigned long lookups;
 static unsigned long misses;
-static char scratch[1024];   /* the n bytes of a string, NUL-terminated for SDL_ttf */
-static unsigned char *fb[2]; /* [0] XVideoSetMode's framebuffer, [1] ours (ui_sdl_present) */
+static char scratch[1024]; /* the n bytes of a string, NUL-terminated for SDL_ttf */
+/* [0] XVideoSetMode's framebuffer (write-combined), [1] and [2] ours, cached, which frames
+   are drawn into directly (ui_sdl_begin); NULL if they couldn't be had. */
+static unsigned char *fb[3];
 static int shown;            /* the one on screen */
+static void *window_pixels;  /* the window surface's own pixels, put back at close */
 static SDL_Rect clip;        /* what sdl_clip limits drawing to: the screen if nothing */
 static SDL_Surface *saved;   /* save_backdrop's copy, NULL until the first */
-static uint32_t render_us;   /* the last ui_sdl_present's, for ui_sdl_present_us */
-static uint32_t copy_us;
+static ui_sdl_times drawing; /* the frame being drawn's */
+static ui_sdl_times last;    /* the last presented frame's, for ui_sdl_last_times */
 
 /* The files of ui_image, in the XBE's ui\ folder (app/ui/ui-assets.mk); NULL: made here. */
 static const char *const image_file[UI_IMAGE_COUNT_] = {
@@ -67,9 +70,10 @@ static const char *const image_file[UI_IMAGE_COUNT_] = {
 static SDL_Surface *images[UI_IMAGE_COUNT_];
 
 /*
- * The pixel work is done here rather than by SDL wherever it costs: nxdk builds SDL and its
- * C library at -O0 unless told otherwise (app/ui/ui-assets.mk), and its memcpy copies a byte
- * at a time. Everything below works on the screen's 32-bit XRGB pixels.
+ * The pixel work is done here rather than by SDL wherever it costs: nxdk builds its C library
+ * at -O0, and its memcpy copies a byte at a time. On the console a pass over the whole screen
+ * costs milliseconds, bound by memory rather than the CPU (docs/ui-style.md#cost), so the
+ * large copies go around the cache. Everything below works on the screen's 32-bit XRGB pixels.
  */
 
 static uint32_t now_us(void)
@@ -91,6 +95,47 @@ static void copy32(void *dst, const void *src, size_t n)
                          : "=&D"(d0), "=&S"(d1), "=&c"(d2)
                          : "0"(dst), "1"(src), "2"(n)
                          : "memory");
+}
+
+/* Copies n pixels for the large copies: 64 bytes at a time through the MMX registers, reading
+   ahead with prefetchnta and writing with movntq, which goes straight to memory instead of
+   reading each destination line into the cache first. The Pentium III has both (SSE). Not
+   inlined: the caller's x87 stack is empty at a call, so the MMX registers are free. */
+__attribute__((noinline)) static void copy_px(uint32_t *dst, const uint32_t *src, size_t n)
+{
+    size_t blocks = n / 16U;
+    if (blocks > 0) {
+        __asm__ __volatile__("1:\n\t"
+                             "prefetchnta 320(%1)\n\t"
+                             "movq (%1), %%mm0\n\t"
+                             "movq 8(%1), %%mm1\n\t"
+                             "movq 16(%1), %%mm2\n\t"
+                             "movq 24(%1), %%mm3\n\t"
+                             "movq 32(%1), %%mm4\n\t"
+                             "movq 40(%1), %%mm5\n\t"
+                             "movq 48(%1), %%mm6\n\t"
+                             "movq 56(%1), %%mm7\n\t"
+                             "movntq %%mm0, (%0)\n\t"
+                             "movntq %%mm1, 8(%0)\n\t"
+                             "movntq %%mm2, 16(%0)\n\t"
+                             "movntq %%mm3, 24(%0)\n\t"
+                             "movntq %%mm4, 32(%0)\n\t"
+                             "movntq %%mm5, 40(%0)\n\t"
+                             "movntq %%mm6, 48(%0)\n\t"
+                             "movntq %%mm7, 56(%0)\n\t"
+                             "addl $64, %1\n\t"
+                             "addl $64, %0\n\t"
+                             "decl %2\n\t"
+                             "jnz 1b\n\t"
+                             "sfence\n\t"
+                             "emms"
+                             : "+r"(dst), "+r"(src), "+r"(blocks)
+                             :
+                             : "memory", "cc");
+    }
+    if (n % 16U != 0) {
+        copy32(dst, src, n % 16U);
+    }
 }
 
 static uint32_t *pixel(SDL_Surface *s, int x, int y)
@@ -157,7 +202,10 @@ static void sdl_fill(void *ctx, ui_rect r, ui_color c)
         return;
     }
     if (clipped(&rect)) {
-        blend(drawn(), rect, c);
+        SDL_Surface *s = drawn();
+        uint32_t start = now_us();
+        blend(s, rect, c);
+        drawing.blend_us += now_us() - start;
     }
 }
 
@@ -300,9 +348,11 @@ static void sdl_image(void *ctx, ui_image img, ui_rect src, int x, int y)
     in.x += dst.x - to.x;
     in.y += dst.y - to.y;
     SDL_Surface *out = drawn();
+    uint32_t start = now_us();
     for (int row = 0; row < dst.h; row++) {
-        copy32(pixel(out, dst.x, dst.y + row), pixel(from, in.x, in.y + row), (size_t)dst.w);
+        copy_px(pixel(out, dst.x, dst.y + row), pixel(from, in.x, in.y + row), (size_t)dst.w);
     }
+    drawing.copy_us += now_us() - start;
 }
 
 static void sdl_image_size(void *ctx, ui_image img, int *w, int *h)
@@ -322,10 +372,12 @@ static void sdl_save_backdrop(void *ctx, ui_color shade)
             return;
         }
     }
+    uint32_t start = now_us();
     for (int row = 0; row < s->h; row++) {
-        copy32(pixel(saved, 0, row), pixel(s, 0, row), (size_t)s->w);
+        copy_px(pixel(saved, 0, row), pixel(s, 0, row), (size_t)s->w);
     }
     blend(saved, (SDL_Rect){0, 0, saved->w, saved->h}, shade);
+    drawing.copy_us += now_us() - start;
 }
 
 static void sdl_backdrop(void *ctx)
@@ -335,9 +387,11 @@ static void sdl_backdrop(void *ctx)
         return;
     }
     SDL_Surface *s = drawn();
+    uint32_t start = now_us();
     for (int row = 0; row < s->h; row++) {
-        copy32(pixel(s, 0, row), pixel(saved, 0, row), (size_t)s->w);
+        copy_px(pixel(s, 0, row), pixel(saved, 0, row), (size_t)s->w);
     }
+    drawing.copy_us += now_us() - start;
 }
 
 /* Loads the images that exist, in the screen's format, and makes the panel-tinted
@@ -408,12 +462,25 @@ bool ui_sdl_open(ui_draw *d, const char *asset_dir, const char **why)
         *why = message;
         return false;
     }
-    /* A second framebuffer, as XVideoSetMode allocates the first. Without it, frames are
-       presented into the shown one (ui_sdl_present). */
+    /* Two framebuffers of our own, cached, that frames are drawn into directly: the screen
+       shows one while the next is drawn into the other (ui_sdl_present). XVideoSetMode's is
+       write-combined, which is fast to write but very slow to read, and blending reads. Without
+       them, frames are drawn into the window surface and SDL copies them to the screen. */
     VIDEO_MODE vm = XVideoGetMode();
     fb[0] = XVideoGetFB();
-    fb[1] = MmAllocateContiguousMemoryEx((SIZE_T)vm.width * vm.height * ((vm.bpp + 7) / 8), 0,
-                                         0x7FFFFFFF, 0x1000, PAGE_READWRITE | PAGE_WRITECOMBINE);
+    window_pixels = screen->pixels;
+    if (screen->pitch == vm.width * 4) {
+        for (int i = 1; i <= 2; i++) {
+            fb[i] = MmAllocateContiguousMemoryEx((SIZE_T)screen->pitch * vm.height, 0, 0x7FFFFFFF,
+                                                 0x1000, PAGE_READWRITE);
+        }
+        for (int i = 1; i <= 2 && (fb[1] == NULL || fb[2] == NULL); i++) {
+            if (fb[i] != NULL) {
+                MmFreeContiguousMemory(fb[i]);
+                fb[i] = NULL;
+            }
+        }
+    }
     shown = 0;
     /* Only the bundled font is ever opened: nxdk's FreeType is old (ADR 0015). */
     for (int f = 0; f < UI_FONT_COUNT_; f++) {
@@ -441,46 +508,58 @@ bool ui_sdl_open(ui_draw *d, const char *asset_dir, const char **why)
     return true;
 }
 
+/* Our framebuffer that isn't on screen, or NULL without them. */
+static unsigned char *back_buffer(void)
+{
+    return fb[1] == NULL ? NULL : fb[shown == 1 ? 2 : 1];
+}
+
 void ui_sdl_begin(ui_color bg)
 {
     frame++;
+    drawing = (ui_sdl_times){0};
+    /* The software renderer draws into the window surface, wherever its pixels are. */
+    unsigned char *back = back_buffer();
+    if (back != NULL) {
+        screen->pixels = back;
+    }
     set_clip(NULL);
-    SDL_SetRenderDrawColor(renderer, bg.r, bg.g, bg.b, 255);
-    SDL_RenderClear(renderer);
+    if (images[UI_IMAGE_BACKGROUND] == NULL) {
+        SDL_SetRenderDrawColor(renderer, bg.r, bg.g, bg.b, 255);
+        SDL_RenderClear(renderer);
+    }
 }
 
 void ui_sdl_present(void)
 {
     /* nxdk's SDL would copy the frame into the framebuffer on screen (SDL_RenderPresent),
-       and the TV could show half of two frames. So the frame goes into the buffer that isn't
-       shown, and the screen switches to it at the vertical blank. The software renderer draws
-       into the window surface, but batches its commands (nxdk's SDL is 2.0.10's code, though
-       SDL_version.h says 2.0.9): run them first. */
+       and the TV could show half of two frames. So the frame is drawn into the buffer that
+       isn't shown, and the screen switches to it at the vertical blank. The software renderer
+       batches its commands (nxdk's SDL is 2.0.10's code, though SDL_version.h says 2.0.9):
+       run them first. */
     uint32_t start = now_us();
-    SDL_Surface *s = drawn();
+    (void)drawn();
     uint32_t rendered = now_us();
-    render_us = rendered - start;
-    unsigned char *back = fb[!shown];
+    drawing.finish_us = rendered - start;
+    unsigned char *back = back_buffer();
     if (back == NULL) {
         SDL_RenderPresent(renderer);
-        copy_us = now_us() - rendered;
+        drawing.flip_us = now_us() - rendered;
+        last = drawing;
         return;
     }
-    VIDEO_MODE vm = XVideoGetMode();
-    for (int row = 0; row < s->h; row++) {
-        copy32(back + (size_t)row * vm.width * 4U, pixel(s, 0, row), (size_t)s->w);
-    }
-    XVideoFlushFB();
-    copy_us = now_us() - rendered;
+    /* The GPU reads memory, not the CPU's cache: write the frame's lines still in it back. */
+    __asm__ __volatile__("sfence\n\twbinvd" ::: "memory");
+    drawing.flip_us = now_us() - rendered;
+    last = drawing;
     XVideoWaitForVBlank();
-    VIDEOREG(PCRTC_START) = (unsigned int)back & 0x7FFFFFFF;
-    shown = !shown;
+    VIDEOREG(PCRTC_START) = (unsigned int)MmGetPhysicalAddress(back);
+    shown = back == fb[1] ? 1 : 2;
 }
 
-void ui_sdl_present_us(uint32_t *render, uint32_t *copy)
+void ui_sdl_last_times(ui_sdl_times *t)
 {
-    *render = render_us;
-    *copy = copy_us;
+    *t = last;
 }
 
 uint32_t ui_sdl_us(void)
@@ -517,20 +596,25 @@ void ui_sdl_close(void)
     if (renderer != NULL) {
         SDL_DestroyRenderer(renderer);
     }
+    if (screen != NULL) {
+        screen->pixels = window_pixels; /* SDL frees its own */
+    }
     if (window != NULL) {
         SDL_DestroyWindow(window);
     }
     renderer = NULL;
     window = NULL;
     screen = NULL;
-    if (fb[1] != NULL) {
-        if (shown != 0) {
-            XVideoWaitForVBlank();
-            VIDEOREG(PCRTC_START) = (unsigned int)fb[0] & 0x7FFFFFFF;
-            shown = 0;
+    if (shown != 0) {
+        XVideoWaitForVBlank();
+        VIDEOREG(PCRTC_START) = (unsigned int)MmGetPhysicalAddress(fb[0]);
+        shown = 0;
+    }
+    for (int i = 1; i <= 2; i++) {
+        if (fb[i] != NULL) {
+            MmFreeContiguousMemory(fb[i]);
+            fb[i] = NULL;
         }
-        MmFreeContiguousMemory(fb[1]);
-        fb[1] = NULL;
     }
     TTF_Quit();
 }
