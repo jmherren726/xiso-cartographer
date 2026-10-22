@@ -40,16 +40,17 @@ void ui_sdl_present(void);
 typedef struct ui_sdl_times {
     uint32_t copy_us;   /* while drawing: copying images and the backdrop */
     uint32_t blend_us;  /* while drawing: translucent fills */
-    uint32_t finish_us; /* in ui_sdl_present: SDL's commands still queued (text, opaque fills) */
+    uint32_t sdl_us;    /* while drawing: SDL's queued commands (text, opaque fills), run
+                           before the backend draws over them */
+    uint32_t size_us;   /* while drawing: measuring text */
+    uint32_t text_us;   /* while drawing: rendering text not in the cache */
+    uint32_t finish_us; /* in ui_sdl_present: SDL's commands still queued */
     uint32_t flip_us;   /* in ui_sdl_present: getting the frame to memory for the screen */
 } ui_sdl_times;
 
 /* The last presented frame's times; and a microsecond clock. */
 void ui_sdl_last_times(ui_sdl_times *t);
 uint32_t ui_sdl_us(void);
-
-/* Text cache statistics since ui_sdl_open, for the ui-test XBE: lookups and misses. */
-void ui_sdl_cache_stats(unsigned long *lookups, unsigned long *misses);
 
 void ui_sdl_close(void);
 

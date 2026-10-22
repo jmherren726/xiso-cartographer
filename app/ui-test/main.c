@@ -9,11 +9,11 @@
  * characters the font lacks (drawn as boxes), a line cut with an ellipsis and a wrapped
  * paragraph. A opens a dialog on the highlighted line, Y the keyboard for a search and X for
  * a password, over the screen darkened and standing still (ui_backdrop); the footer shows
- * what came back. The footer's first line shows the frames drawn per second, the time a frame
- * takes (drawing, of which copying images and blending; the SDL work ui_sdl_present finishes;
- * getting the frame to memory for the screen) and the text cache's misses. A frame is drawn
- * only when something changed: a button, the stats, the progress or the background moving a
- * pixel. White switches to drawing every frame. Back returns to the dashboard.
+ * what came back. The footer's first line shows the frames drawn per second and where a
+ * frame's time goes (ui_sdl_times): drawing + SDL's work left at present + the flip, then the
+ * parts of the drawing. A frame is drawn only when something changed: a button, the stats, the
+ * progress or the background moving a pixel. White switches to drawing every frame. Back returns to
+ * the dashboard.
  */
 #include <SDL.h>
 #include <hal/debug.h>
@@ -100,7 +100,9 @@ static void draw_detail(const ui_draw *d, int cur)
 static void draw(const ui_draw *d, int pan, const ui_list *l, uint32_t done, const char *stats,
                  const char *status)
 {
-    ui_background(d, pan);
+    /* The panels cover their part of the background: it isn't copied twice. */
+    const ui_rect panels[] = {tab, nav, progress, list, detail, footer};
+    ui_background_under(d, pan, panels, (int)(sizeof panels / sizeof panels[0]));
 
     ui_panel(d, tab, UI_CHAMFER, ui_col_panel, ui_col_border);
     int th = d->line_height(d->ctx, UI_FONT_TITLE);
@@ -266,6 +268,9 @@ int main(void)
             ui_sdl_last_times(&t);
             sum.copy_us += t.copy_us;
             sum.blend_us += t.blend_us;
+            sum.sdl_us += t.sdl_us;
+            sum.size_us += t.size_us;
+            sum.text_us += t.text_us;
             sum.finish_us += t.finish_us;
             sum.flip_us += t.flip_us;
             frames++;
@@ -275,21 +280,16 @@ int main(void)
         }
         now = SDL_GetTicks();
         if (now - second_start >= 1000U) {
-            unsigned long lookups = 0;
-            unsigned long misses = 0;
-            ui_sdl_cache_stats(&lookups, &misses);
             /* Means in tenths of a millisecond. */
             unsigned n = frames > 0 ? (unsigned)frames * 100U : 1U;
-            unsigned dr = (unsigned)(draw_us_sum / n);
-            unsigned co = (unsigned)(sum.copy_us / n);
-            unsigned bl = (unsigned)(sum.blend_us / n);
-            unsigned fi = (unsigned)(sum.finish_us / n);
-            unsigned fl = (unsigned)(sum.flip_us / n);
+            unsigned v[] = {draw_us_sum / n,  sum.finish_us / n, sum.flip_us / n, sum.copy_us / n,
+                            sum.blend_us / n, sum.sdl_us / n,    sum.size_us / n, sum.text_us / n};
             snprintf(stats, sizeof stats,
-                     "%s %d/s. Draw %u.%u (copy %u.%u blend %u.%u) finish %u.%u flip %u.%u. "
-                     "Miss %lu",
-                     continuous ? "Every frame" : "On change", frames, dr / 10, dr % 10, co / 10,
-                     co % 10, bl / 10, bl % 10, fi / 10, fi % 10, fl / 10, fl % 10, misses);
+                     "%s %d/s %u.%u+%u.%u+%u.%u ms: copy %u.%u blend %u.%u sdl %u.%u size %u.%u "
+                     "text %u.%u",
+                     continuous ? "Every" : "Change", frames, v[0] / 10, v[0] % 10, v[1] / 10,
+                     v[1] % 10, v[2] / 10, v[2] % 10, v[3] / 10, v[3] % 10, v[4] / 10, v[4] % 10,
+                     v[5] / 10, v[5] % 10, v[6] / 10, v[6] % 10, v[7] / 10, v[7] % 10);
             frames = 0;
             draw_us_sum = 0;
             sum = (ui_sdl_times){0};

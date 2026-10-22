@@ -41,14 +41,23 @@ typedef struct slot {
     char text[CACHE_TEXT_MAX + 1];
 } slot;
 
+#define WIDTH_SLOTS 512    /* measured widths kept */
+#define WIDTH_TEXT_MAX 128 /* longer strings are measured every time */
+
+typedef struct width_slot {
+    ui_font font;
+    size_t n;
+    int w; /* zeroed: the empty string in font 0, which is 0 wide */
+    char text[WIDTH_TEXT_MAX];
+} width_slot;
+
 static SDL_Window *window;
+static width_slot widths[WIDTH_SLOTS];
 static SDL_Renderer *renderer;
 static SDL_Surface *screen; /* the window's surface, which the software renderer draws into */
 static TTF_Font *fonts[UI_FONT_COUNT_];
 static slot cache[CACHE_SLOTS];
 static unsigned long frame;
-static unsigned long lookups;
-static unsigned long misses;
 static char scratch[1024]; /* the n bytes of a string, NUL-terminated for SDL_ttf */
 /* [0] XVideoSetMode's framebuffer (write-combined), [1] and [2] ours, cached, which frames
    are drawn into directly (ui_sdl_begin); NULL if they couldn't be had. */
@@ -175,7 +184,9 @@ static bool clipped(SDL_Rect *r)
 /* The screen with every queued SDL command drawn, for drawing into it directly. */
 static SDL_Surface *drawn(void)
 {
+    uint32_t start = now_us();
     SDL_RenderFlush(renderer);
+    drawing.sdl_us += now_us() - start;
     return screen;
 }
 
@@ -213,7 +224,6 @@ static void sdl_fill(void *ctx, ui_rect r, ui_color c)
    recently drawn slot). NULL if it can't be rendered, or for an empty string. */
 static slot *texture_for(ui_font f, ui_color c, const char *s)
 {
-    lookups++;
     slot *victim = &cache[0];
     for (int i = 0; i < CACHE_SLOTS; i++) {
         slot *e = &cache[i];
@@ -226,16 +236,18 @@ static slot *texture_for(ui_font f, ui_color c, const char *s)
             victim = e;
         }
     }
-    misses++;
+    uint32_t start = now_us();
     SDL_Color color = {c.r, c.g, c.b, c.a};
     SDL_Surface *surface = TTF_RenderUTF8_Blended(fonts[f], s, color);
     if (surface == NULL) {
+        drawing.text_us += now_us() - start;
         return NULL;
     }
     SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, surface);
     int w = surface->w;
     int h = surface->h;
     SDL_FreeSurface(surface);
+    drawing.text_us += now_us() - start;
     if (tex == NULL) {
         return NULL;
     }
@@ -288,10 +300,29 @@ static int sdl_text(void *ctx, ui_font f, int x, int y, ui_color c, const char *
 static int sdl_text_width(void *ctx, ui_font f, const char *s, size_t n)
 {
     (void)ctx;
+    uint32_t start = now_us();
+    /* Fitting and wrapping measure the same prefixes every frame: FNV-1a over the font and
+       the bytes picks the one slot a string can be in. */
+    uint32_t hash = 2166136261U ^ (uint32_t)f;
+    for (size_t i = 0; i < n; i++) {
+        hash = (hash ^ (unsigned char)s[i]) * 16777619U;
+    }
+    width_slot *e = &widths[hash % WIDTH_SLOTS];
+    if (n <= WIDTH_TEXT_MAX && e->n == n && e->font == f && memcmp(e->text, s, n) == 0) {
+        drawing.size_us += now_us() - start;
+        return e->w;
+    }
     int w = 0;
     if (n > 0 && TTF_SizeUTF8(fonts[f], terminated(s, n), &w, NULL) != 0) {
         w = 0;
     }
+    if (n <= WIDTH_TEXT_MAX) {
+        e->font = f;
+        e->n = n;
+        e->w = w;
+        memcpy(e->text, s, n);
+    }
+    drawing.size_us += now_us() - start;
     return w;
 }
 
@@ -538,7 +569,7 @@ void ui_sdl_present(void)
        batches its commands (nxdk's SDL is 2.0.10's code, though SDL_version.h says 2.0.9):
        run them first. */
     uint32_t start = now_us();
-    (void)drawn();
+    SDL_RenderFlush(renderer);
     uint32_t rendered = now_us();
     drawing.finish_us = rendered - start;
     unsigned char *back = back_buffer();
@@ -565,12 +596,6 @@ void ui_sdl_last_times(ui_sdl_times *t)
 uint32_t ui_sdl_us(void)
 {
     return now_us();
-}
-
-void ui_sdl_cache_stats(unsigned long *l, unsigned long *m)
-{
-    *l = lookups;
-    *m = misses;
 }
 
 void ui_sdl_close(void)
