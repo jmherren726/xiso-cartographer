@@ -25,6 +25,7 @@ SRCS = $(CURDIR)/main.c \
        $(CORE_DIR)/src/http.c \
        $(CORE_DIR)/src/http_client.c \
        $(CORE_DIR)/src/install.c \
+       $(CORE_DIR)/src/installed.c \
        $(CORE_DIR)/src/journal.c \
        $(CORE_DIR)/src/json.c \
        $(CORE_DIR)/src/map.c \

@@ -153,6 +153,63 @@ static void test_stopped(void)
     TEST_ASSERT_TRUE(fake_find_text("1 unfinished") >= 0);
 }
 
+/* Started in an earlier run: UNFINISHED, and counted as unfinished. */
+static void test_unfinished(void)
+{
+    const ui_lib_item half[1] = {{"Game", "", NULL, UI_LIB_UNFINISHED, "In E:/Games/Game"}};
+    ui_library lib;
+    ui_library_open(&lib, half, 1);
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_TRUE(fake_find_text("UNFINISHED") >= 0);
+    TEST_ASSERT_TRUE(fake_find_text("1 unfinished") >= 0);
+    TEST_ASSERT_TRUE(fake_find_text("0 installed") >= 0);
+}
+
+static const ui_lib_item found[2] = {
+    {"Alpha folder", "1.00 GB  |  12 files", "Title 4D53000A.", UI_LIB_INSTALLED, "E:/Games/A"},
+    {"Beta folder", "", "Not finished.", UI_LIB_UNFINISHED, "E:/Games/B"},
+};
+
+/* INSTALLED: its own list and place; A installs nothing there. */
+static void test_installed_section(void)
+{
+    ui_library lib;
+    ui_library_open(&lib, items, 3);
+    ui_library_set_installed(&lib, found, 2);
+    (void)ui_library_input(&lib, UI_BTN_LEFT, 5);
+    (void)ui_library_input(&lib, UI_BTN_DOWN, 5);
+    (void)ui_library_input(&lib, UI_BTN_DOWN, 5);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_INSTALLED_GAMES, lib.section);
+    (void)ui_library_input(&lib, UI_BTN_RIGHT, 5);
+    TEST_ASSERT_FALSE(lib.in_sections);
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_TRUE(fake_saw("Alpha folder"));
+    TEST_ASSERT_TRUE(fake_saw("Beta folder"));
+    TEST_ASSERT_TRUE(fake_saw("12 files"));
+    TEST_ASSERT_FALSE(fake_saw("First game"));
+    TEST_ASSERT_FALSE(fake_saw("A install"));
+
+    (void)ui_library_input(&lib, UI_BTN_DOWN, 5);
+    TEST_ASSERT_EQUAL_INT(1, lib.installed_list.cur);
+    TEST_ASSERT_EQUAL_INT(0, lib.list.cur); /* GAMES keeps its place */
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, lib.asking);
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_TRUE(fake_find_text("UNFINISHED") >= 0);
+    TEST_ASSERT_TRUE(fake_saw("Not finished."));
+
+    /* A shorter list after an install: the place stays inside it. */
+    ui_library_set_installed(&lib, found, 1);
+    TEST_ASSERT_EQUAL_INT(0, lib.installed_list.cur);
+    TEST_ASSERT_EQUAL_INT(1, lib.installed_list.count);
+    ui_library_set_installed(&lib, found, 0);
+    TEST_ASSERT_EQUAL_INT(0, lib.installed_list.cur);
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_TRUE(fake_saw("Nothing installed yet"));
+}
+
 /* A dialog draws over the screen behind, saved in its first frame and copied after. */
 static void test_dialog_over_backdrop(void)
 {
@@ -191,6 +248,8 @@ int main(void)
     RUN_TEST(test_empty);
     RUN_TEST(test_draw);
     RUN_TEST(test_stopped);
+    RUN_TEST(test_unfinished);
+    RUN_TEST(test_installed_section);
     RUN_TEST(test_dialog_over_backdrop);
     return UNITY_END();
 }
