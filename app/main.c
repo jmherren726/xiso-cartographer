@@ -169,51 +169,116 @@ static void tenths(char *buf, size_t size, uint64_t t)
                    (unsigned long long)(t % 10U));
 }
 
-/* --- the install screen, drawn from the install's callbacks ------------------------------ */
+/* --- the install screen, on a thread of its own ------------------------------------------ */
+
+/*
+ * The install reports progress once a MiB: in the spooled part of a zip that's every half
+ * second or so, and never while it waits on the network or a disk flush. nxdk's SDL sees a
+ * button only if it's still down when the pads are read, so a press between two reports was
+ * lost. The screen's thread reads the pads every PAD_POLL_MS instead, and while it runs it
+ * alone calls SDL. The install's callbacks change `view` under view_lock and read the flags.
+ */
 
 #define INSTALL_DRAW_MS 250U /* a frame costs the install CPU time: four a second */
 
 static ui_install_view view;
-static bool installing;      /* the install screen is up */
-static bool stop_asked;      /* the user confirmed STOP */
-static int pan_now;          /* the background's pan, which stands still during an install */
-static uint32_t next_poll;   /* SDL_GetTicks() of the next look at the buttons */
-static uint32_t next_redraw; /* and of the next frame, if nothing else asks for one */
+static CRITICAL_SECTION view_lock;
+static bool view_dirty;           /* a callback changed `view`: draw it at the next look */
+static volatile bool stop_asked;  /* the user confirmed STOP */
+static volatile bool combo_held;  /* the dashboard shortcut was held */
+static volatile bool screen_quit; /* the install is over: the thread ends */
+static HANDLE screen_thread;      /* NULL: the callbacks look at the buttons themselves */
+static int pan_now;               /* the background's pan, which stands still during an install */
+static uint32_t next_redraw;      /* SDL_GetTicks() of the next frame, if nothing asks sooner */
 
 static bool due(uint32_t at)
 {
     return (int32_t)(SDL_GetTicks() - at) >= 0;
 }
 
-/* Reads the buttons and redraws the install screen, at most every PAD_POLL_MS and
-   INSTALL_DRAW_MS, or now if `now`. Cheap to call often. */
-static void install_frame(bool now)
+/* One look at the buttons, and a frame if something changed or INSTALL_DRAW_MS passed. */
+static void install_look(void)
 {
-    if (!installing || (!now && !due(next_poll))) {
-        return;
-    }
-    next_poll = SDL_GetTicks() + PAD_POLL_MS;
+    EnterCriticalSection(&view_lock);
     ui_button b;
     while ((b = ui_sdl_button()) != UI_BTN_NONE) {
-        now = true;
+        view_dirty = true;
         if (ui_install_input(&view, b) == UI_INST_STOP) {
             stop_asked = true;
             ui_install_status(&view, "Stopping...");
         }
     }
-    if (now || due(next_redraw)) {
+    if (exit_combo()) {
+        combo_held = true;
+    }
+    bool draw = view_dirty || due(next_redraw);
+    if (draw) {
+        view_dirty = false;
         next_redraw = SDL_GetTicks() + INSTALL_DRAW_MS;
         ui_sdl_begin(ui_col_bg);
         ui_install_draw(&screen, &view, pan_now);
+    }
+    LeaveCriticalSection(&view_lock); /* the frame is drawn: showing it needs no `view` */
+    if (draw) {
         ui_sdl_present();
     }
+}
+
+static DWORD WINAPI install_screen(LPVOID arg)
+{
+    (void)arg;
+    while (!screen_quit) {
+        install_look();
+        Sleep(PAD_POLL_MS);
+    }
+    return 0;
+}
+
+/* Puts the install screen up for `name`, drawn and read by its thread until install_done. */
+static void install_start(const char *name)
+{
+    ui_install_open(&view, name);
+    stop_asked = false;
+    combo_held = false;
+    screen_quit = false;
+    view_dirty = true;
+    next_redraw = SDL_GetTicks();
+    screen_thread = CreateThread(NULL, 256U * 1024U, install_screen, NULL, 0, NULL);
+    if (screen_thread == NULL) {
+        out("No thread for the install screen: it updates as the install reports progress\n");
+        install_look();
+    }
+}
+
+static void install_done(void)
+{
+    screen_quit = true;
+    if (screen_thread != NULL) {
+        (void)WaitForSingleObject(screen_thread, INFINITE);
+        CloseHandle(screen_thread);
+        screen_thread = NULL;
+    }
+}
+
+/* Sets the screen's status line from a callback. */
+static void install_say(const char *fmt, ...)
+{
+    EnterCriticalSection(&view_lock);
+    va_list ap;
+    va_start(ap, fmt);
+    (void)vsnprintf(view.status, sizeof view.status, fmt, ap);
+    va_end(ap);
+    view_dirty = true;
+    LeaveCriticalSection(&view_lock);
 }
 
 /* Whether the install should go on: not stopped, nor the dashboard shortcut held. */
 static bool carry_on(void)
 {
-    install_frame(false);
-    return !stop_asked && !exit_combo();
+    if (screen_thread == NULL) {
+        install_look();
+    }
+    return !stop_asked && !combo_held;
 }
 
 /* --- network, on first use ------------------------------------------------------------ */
@@ -257,13 +322,12 @@ static bool on_retry(void *ctx, const xc_http_retry *r)
     out("           last connect: lookup %lu ms, handshake %lu ms, %s\n", (unsigned long)st.dns_ms,
         (unsigned long)st.connect_ms, xc_err_str(st.result));
     if (r->status != 0) {
-        ui_install_status(&view, "The server said HTTP %d. Trying again in %s s (%u of %u).",
-                          r->status, delay, r->failures, r->max_attempts);
+        install_say("The server said HTTP %d. Trying again in %s s (%u of %u).", r->status, delay,
+                    r->failures, r->max_attempts);
     } else {
-        ui_install_status(&view, "%s. Trying again in %s s (%u of %u).", xc_err_str(r->err), delay,
-                          r->failures, r->max_attempts);
+        install_say("%s. Trying again in %s s (%u of %u).", xc_err_str(r->err), delay, r->failures,
+                    r->max_attempts);
     }
-    install_frame(true);
     return carry_on(); /* stopping also works while waiting out an outage */
 }
 
@@ -315,8 +379,7 @@ static void say(const char *line)
     while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == ' ')) {
         n--;
     }
-    ui_install_status(&view, "%.*s", (int)n, line);
-    install_frame(true);
+    install_say("%.*s", (int)n, line);
 }
 
 static bool is_https(const char *url)
@@ -638,6 +701,9 @@ static bool on_progress(void *ctx, const xc_install_progress *p)
             (unsigned long long)(p->bytes_done >> 20U), (unsigned long long)(p->bytes_total >> 20U),
             (unsigned)current, (unsigned)p->file_count, speed);
     }
+    /* This phase's speed, once it has run a few seconds. */
+    uint64_t ran = now - u->phase_ms;
+    EnterCriticalSection(&view_lock);
     view.phase = p->phase == XC_INSTALL_WRITING     ? UI_INST_WRITING
                  : p->phase == XC_INSTALL_VERIFYING ? UI_INST_VERIFYING
                                                     : UI_INST_CHECKING;
@@ -645,12 +711,11 @@ static bool on_progress(void *ctx, const xc_install_progress *p)
     view.total = p->bytes_total;
     view.files = (uint32_t)p->file_count;
     view.file = (uint32_t)(p->files_done < p->file_count ? p->files_done + 1 : p->file_count);
-    /* This phase's speed, once it has run a few seconds. */
-    uint64_t ran = now - u->phase_ms;
     view.speed = ran > 3000U ? (uint32_t)mbps_tenths(p->bytes_done - u->phase_bytes, ran) : 0;
     if (!stop_asked && moved) {
-        ui_install_status(&view, "%s", ""); /* data flows: the retries and steps are over */
+        view.status[0] = '\0'; /* data flows: the retries and steps are over */
     }
+    LeaveCriticalSection(&view_lock);
     return carry_on();
 }
 
@@ -1129,12 +1194,10 @@ static void run_install(game *g, ui_lib_item *item)
 {
     for (;;) {
         out("\nPicked: %s%s%s\n", g->name, g->key[0] != '\0' ? " " : "", g->key);
-        ui_install_open(&view, g->name);
-        installing = true;
-        stop_asked = false;
-        install_frame(true);
+        install_start(g->name);
         bool ok = g->entry != NULL ? install_url(g->entry, g->release)
                                    : install_file(g->path, g->release);
+        install_done();
         out("%s\n", ok ? "Installed and verified." : "Not installed.");
         snprintf(g->note, sizeof g->note, "%s", why);
         item->state = ok                            ? UI_LIB_INSTALLED
@@ -1146,7 +1209,7 @@ static void run_install(game *g, ui_lib_item *item)
         ui_inst_action a = UI_INST_NONE;
         bool dirty = true;
         while (a == UI_INST_NONE) {
-            if (exit_combo()) {
+            if (combo_held || exit_combo()) { /* held during the install: it stopped for it */
                 to_dashboard();
             }
             ui_button b;
@@ -1163,7 +1226,6 @@ static void run_install(game *g, ui_lib_item *item)
                 Sleep(5);
             }
         }
-        installing = false;
         if (a != UI_INST_RETRY) {
             return;
         }
@@ -1219,6 +1281,7 @@ static void library(game *games, ui_lib_item *items, int count)
 
 int main(void)
 {
+    InitializeCriticalSection(&view_lock);
     XVideoSetMode(640, 480, 32, REFRESH_DEFAULT);
     debugPrint("xiso-cartographer %s\n", xc_version_string());
     xc_nx_clock(&clk);

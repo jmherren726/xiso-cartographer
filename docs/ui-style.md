@@ -108,7 +108,7 @@ Each screen is a plain struct with `*_input` and `*_draw` like the widgets, test
 
 B opens STOP / CONTINUE, CONTINUE highlighted. At the end a dialog: INSTALLED with the folder and OK, or NOT INSTALLED with the error and its details and RETRY / BACK.
 
-During an install the background stands still, and the screen is drawn at most four times a second and when a button is pressed, so drawing takes little from the install ([below](#cost)). The buttons are read when the install reports progress (about every MiB and after each file), at most every 50 ms, and at each network retry: on a slow download B can take a second to answer.
+During an install the background stands still, and the screen is drawn at most four times a second and when a button is pressed, so drawing takes little from the install ([below](#cost)). The screen has a thread of its own (`install_look` in `app/main.c`) that reads the buttons every 50 ms, whatever the install is doing. The install reports progress only once a MiB, which is every half second on a slow download and never while it waits on the network or a disk flush; nxdk's SDL sees a button only if it's still down when the pads are read, so a short press between two reports was lost. While the thread runs it alone calls SDL; the install's callbacks change the screen's state under a lock.
 
 ## The background
 
