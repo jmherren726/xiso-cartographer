@@ -3,7 +3,8 @@
 # so `include $(ROOT_DIR)/app/ui/ui-assets.mk` after nxdk's Makefile too.
 
 UI_DIR := $(ROOT_DIR)/app/ui
-SRCS += $(UI_DIR)/text.c $(UI_DIR)/theme.c $(UI_DIR)/draw_sdl.c
+SRCS += $(UI_DIR)/input.c $(UI_DIR)/keyboard.c $(UI_DIR)/text.c $(UI_DIR)/theme.c \
+        $(UI_DIR)/widgets.c $(UI_DIR)/draw_sdl.c $(UI_DIR)/input_sdl.c
 CFLAGS += -I$(UI_DIR)
 
 # nxdk's SDL2 port; SDL_ttf and FreeType come with it.

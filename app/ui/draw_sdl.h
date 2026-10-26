@@ -3,11 +3,15 @@
 
 /*
  * The ui_draw backend on the Xbox (ADR 0015 decision 1): one 640x480 SDL window and
- * renderer, text with SDL_ttf in the bundled Noto Sans, and rendered strings cached as
- * textures so a frame doesn't rasterise its text again. Only *_sdl.c files include SDL.
+ * renderer, text with SDL_ttf in the bundled fonts, and rendered strings cached as textures
+ * so a frame doesn't rasterise its text again. Frames are drawn straight into two cached
+ * framebuffers, one shown while the other is drawn. Translucent fills, images and the backdrop
+ * are done by the backend's own pixel loops rather than SDL's (docs/ui-style.md#cost). Only
+ * *_sdl.c files include SDL.
  */
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "ui.h"
 
@@ -22,16 +26,31 @@ extern "C" {
    for the debug console. Call after XVideoSetMode. */
 bool ui_sdl_open(ui_draw *d, const char *asset_dir, const char **why);
 
-/* Starts a frame: clears the screen to `bg`. */
+/* Starts a frame. Without the background image it clears the screen to `bg`; with it, the
+   frame must start with ui_background or ui_backdrop, which cover the whole screen, and the
+   clear would only cost another pass over it. */
 void ui_sdl_begin(ui_color bg);
 
 /* Shows the frame drawn since ui_sdl_begin, at the next vertical blank (so it waits up to a
-   refresh). Screens draw a frame only when something on them changed: every frame is a
-   full-screen copy by the CPU, which an install needs for itself. */
+   refresh). Screens draw a frame only when something on them changed: every frame is drawn
+   whole by the CPU, which an install needs for itself. */
 void ui_sdl_present(void);
 
-/* Text cache statistics since ui_sdl_open, for the ui-test XBE: lookups and misses. */
-void ui_sdl_cache_stats(unsigned long *lookups, unsigned long *misses);
+/* Where a frame's time went, in microseconds, for the ui-test XBE. */
+typedef struct ui_sdl_times {
+    uint32_t copy_us;   /* while drawing: copying images and the backdrop */
+    uint32_t blend_us;  /* while drawing: translucent fills */
+    uint32_t sdl_us;    /* while drawing: SDL's queued commands (text, opaque fills), run
+                           before the backend draws over them */
+    uint32_t size_us;   /* while drawing: measuring text */
+    uint32_t text_us;   /* while drawing: rendering text not in the cache */
+    uint32_t finish_us; /* in ui_sdl_present: SDL's commands still queued */
+    uint32_t flip_us;   /* in ui_sdl_present: getting the frame to memory for the screen */
+} ui_sdl_times;
+
+/* The last presented frame's times; and a microsecond clock. */
+void ui_sdl_last_times(ui_sdl_times *t);
+uint32_t ui_sdl_us(void);
 
 void ui_sdl_close(void);
 

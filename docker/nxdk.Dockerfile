@@ -22,6 +22,15 @@ RUN cd /usr/src/nxdk && make tools -j"$(nproc)"
 COPY --from=xcat-lwip lwipopts.h /usr/src/xcat-lwip/lwipopts.h
 RUN eval "$(/usr/src/nxdk/bin/activate -s)" && cd /usr/src/nxdk && \
     NXDK_CFLAGS="-I/usr/src/xcat-lwip" make NXDK_ONLY=y -j"$(nproc)"
+# nxdk compiles without optimisation. SDL's software renderer and blitters, SDL_ttf and
+# FreeType touch every pixel of every frame of the UI, so they're built again at -O2 (the UI
+# ran at 9 frames/s on the console without; docs/ui-style.md#cost). The rest of nxdk (libc,
+# lwIP, ...) is left as it was tested.
+RUN eval "$(/usr/src/nxdk/bin/activate -s)" && cd /usr/src/nxdk && \
+    find lib/sdl -name '*.obj' -delete && \
+    rm -f lib/libSDL2.lib lib/SDL2_test.lib lib/libSDL2_image.lib lib/libSDL_ttf.lib \
+          lib/libfreetype.lib && \
+    NXDK_CFLAGS="-I/usr/src/xcat-lwip" CFLAGS="-O2" make NXDK_ONLY=y -j"$(nproc)"
 
 # ghcr.io/xboxdev/nxdk-runbase:git-3a71ed5f
 FROM ghcr.io/xboxdev/nxdk-runbase@sha256:cfe819e9eddb8372c896977782a6b776a435af8597693fccf601ad9649b2ecbb

@@ -24,6 +24,7 @@ Owner decisions of 2026-10-21:
 | `border` | 80, 190, 40 | Panel borders |
 | `highlight` | 40, 110, 20, alpha 235 | The selected line or section |
 | `highlight_border` | 160, 255, 70 | Its border |
+| `shade` | 0, 0, 0, alpha 150 | Over the screen behind a dialog or the keyboard |
 
 ## Fonts
 
@@ -57,10 +58,51 @@ All inside the title-safe area (32, 24, 576 × 432), as in ui-test and the libra
 | Detail | 430, 80, 178 × 320 | The selected game: name, details, description |
 | Footer | 32, 408, 576 × 48 | Status and the buttons' meanings |
 
+## Widgets
+
+The widgets of ADR 0015 decisions 2 and 3, in [`app/ui/widgets.h`](../app/ui/widgets.h) and [`keyboard.h`](../app/ui/keyboard.h). Each is a plain struct the screen owns: `*_input` changes it for one button press, `*_draw` draws it, and both are tested on the PC. ui-test shows them all ([testing.md](testing.md#m8-ui-test-rendering)).
+
+**Buttons** ([`input.h`](../app/ui/input.h)). A chooses, B goes back, Y opens search and Back leaves the app, on every screen. A held D-pad direction presses again after 400 ms, then every 80 ms; no other button repeats, so holding A never chooses twice. The triggers count as pressed past half way and are ready again below a quarter. `input_sdl.c` reads every plugged-in controller.
+
+**List.** One line per item in `UI_FONT_BODY`, 6 pixels apart, cut with "…" when too wide; the highlighted line is a small panel (`highlight`, chamfer 6) in `UI_FONT_BOLD`. Up and Down move a line, LT and RT a page, and the highlight stops at the ends. When not all lines fit, a 4-pixel scroll bar runs down the right edge: the track in `highlight`, the thumb in `highlight_border`.
+
+**Progress bar.** A small panel (chamfer 6) filled in `highlight` from the left, with its label (say "48 %") centred on it in `UI_FONT_BOLD`. `ui_percent` rounds down, so it shows 100 % only once the last byte is in.
+
+**Dialog.** Over the backdrop (the screen behind, darkened by `shade` and standing still, [below](#cost)), a 520-pixel panel centred on the screen: the title in `UI_FONT_LABEL` and `accent`, the message wrapped in `UI_FONT_BODY` (at most six lines), and one to three buttons side by side in `UI_FONT_LABEL`, the highlighted one in `highlight`. Left and Right move between them; A chooses; B gives the choice marked as cancel, if any. Error dialogs (ADR 0015 decision 5) will use it with RETRY, LOG IN AGAIN and BACK, which fit.
+
+**On-screen keyboard.** Over the backdrop, like the dialog, a 520-pixel panel: the field's name in `UI_FONT_LABEL`, the field, 10 × 5 keys and a line of hints.
+
+| Row | Small letters | Capitals | Symbols |
+|---|---|---|---|
+| 1 | `1234567890` | the same | the same |
+| 2 | `qwertyuiop` | `QWERTYUIOP` | `!?#$%^&*()` |
+| 3 | `asdfghjkl-` | `ASDFGHJKL-` | `` ~`+=[]{}<> `` |
+| 4 | `zxcvbnm.@_` | `ZXCVBNM.@_` | backslash, pipe, then `/;:'",-_` |
+| 5 | SHIFT, #+= (ABC on the symbols), SPACE, DELETE, DONE: two columns each | | |
+
+Between them the three layers type every printable ASCII character, so any password can be typed. The D-pad moves and wraps around the edges; on the bottom row it goes key by key. A types the highlighted key, X deletes the last character, Y adds a space, LT switches capitals on and off and RT the symbols (the SHIFT and #+= keys do the same), Start or DONE finishes, B cancels. SHIFT is drawn in `accent` while capitals are on.
+
+The field shows the end of its text when it's wider, with an `accent` caret after it. The keyboard edits the caller's buffer in place, up to its size, and keeps no copy. **A password field shows one dot (U+2022) per character, and its text never reaches the drawing backend**, not even to be measured, so it never sits in a texture or the text cache; the caller wipes the buffer once it's used (ADR 0010 decision 2). A test checks that the backend never sees it.
+
 ## The background
 
 `app/ui/assets/background.png` is 1440 × 480: the screen's height, and 800 pixels wider than the screen. The XBE build converts it to `ui\background.bmp` next to the XBE (`tools/ui/png2bmp.py`, since nxdk's SDL loads BMP without SDL2_image), and the backend loads it at start. Without it, the screens draw on `ui_col_bg`.
 
-`ui_pan_x(t)` gives the offset: 60 seconds (`UI_PAN_LEG_MS`) from the left end to the right, and as long back, easing in and out at the ends (smoothstep), so it never jumps or stops abruptly. At its fastest it moves 20 pixels a second.
+`ui_pan_x(t)` gives the offset: 20 pixels a second (`UI_PAN_SPEED`) from the left end to the right and back, 41 seconds each way. At each end it slows evenly to a stop over one second (`UI_PAN_EASE_MS`) and speeds up again as long, so it never jumps. Owner decision of 2026-10-22: the first version eased over the whole minute-long leg, so near the ends it moved a pixel every half second or so, which looked like dropped frames, and took ages to stop and turn.
 
-**Cost.** Every frame is drawn by the CPU, and copied into the framebuffer that isn't shown (ADR 0015, `draw_sdl.c`). So a screen draws a new frame only when something changed: a button, new text, or the background moving a whole pixel. With the pan that's up to 20 frames a second, slower near the ends. In xemu a frame of the ui-test screen takes 2–3 ms to draw, about 5 % of the CPU at 20 frames a second. The install screens keep the same rule; if the pan costs installs speed, they can stop it while a download runs (to be measured on hardware in the M8 install screen).
+## Cost
+
+Every frame is drawn by the console's CPU, 640 × 480 pixels, into the framebuffer that isn't shown (ADR 0015, `draw_sdl.c`). So a screen draws a new frame only when something changed: a button, new text, or the background moving a whole pixel. With the pan that's up to 20 frames a second, slower near the ends. The install screens keep the same rule; if the pan costs installs speed, they can stop it while a download runs (to be measured on hardware in the M8 install screen).
+
+What keeps a frame inside one refresh (16.7 ms) on the console's 733 MHz CPU. The limit is memory more than the CPU: one pass over the screen's 1.2 MB took 8.7 ms on hardware, so the frame makes as few passes as it can.
+
+- **Drawn where it's shown.** The backend has two framebuffers of its own, in cached memory, and draws each frame straight into the one not on screen, then switches at the vertical blank: no copy to the screen. The CPU's cache is written back (`wbinvd`) before the switch, since the GPU reads memory. XVideoSetMode's framebuffer is write-combined, fast to write but very slow to read, and blending reads.
+- **No clear.** With the panorama loaded, `ui_sdl_begin` doesn't clear the screen: the frame's `ui_background` or `ui_backdrop` covers all of it.
+- **Nothing copied twice.** A screen names its panels to `ui_background_under`, which leaves the background out inside them (clear of their cut corners), since the panels copy the tinted background there anyway. On the library layout that's about 40 % of the screen.
+- **Text measured once.** Cutting text to fit and wrapping it measure the same strings every frame; the backend keeps their widths (512 strings up to 128 bytes).
+- **Copies around the cache.** Images and the backdrop are copied 64 bytes at a time through the MMX registers, reading ahead with `prefetchnta` and writing with `movntq`, which stores straight to memory instead of first reading each destination line into the cache. Small copies use the CPU's string copy (`rep movsd`).
+- **Optimised code.** nxdk compiles without optimisation, and its `memcpy` copies a byte at a time. The build image builds SDL, SDL_ttf and FreeType again at `-O2` ([`docker/nxdk.Dockerfile`](../docker/nxdk.Dockerfile)), and `app/ui/ui-assets.mk` builds the UI's own code at `-O2`. The rest of nxdk is left as it was tested.
+- **No blending of large areas.** A translucent panel blended pixel by pixel costs about 200,000 blends a frame for one screen. The backend makes `UI_IMAGE_BACKGROUND_PANEL` at start, the panorama with `panel` blended over it once, and `ui_panel` copies the part behind each panel from it, at the background's pan: the same pixels for the price of a copy. Highlights and small panels are still blended, by the backend's own loop.
+- **A still backdrop for dialogs and the keyboard.** `ui_backdrop_save` keeps the screen behind, darkened by `shade` (black at alpha 150), in the frame a dialog opens; `ui_backdrop` copies it back in the frames after, so the screen behind isn't drawn or darkened again. It stands still while the dialog is open.
+
+The first build without these ran at 9 frames a second on the console, 4 with the keyboard open; with optimised code, the tinted panels and the backdrop but still a copy to the screen, at 22–29; drawn in place, at 30–40, the drawing still taking 17–19 ms (testing.md, 2026-10-22); with all of these, at 60, a frame taking 15.6 ms, 6.7 of it copying (2026-10-25). ui-test's footer shows where a frame's time goes: "Change 21/s 1.9+0.0+0.0 ms" is the drawing, the SDL work left when it's presented, and the flip (writing the cache back); then the parts of the drawing: copying images ("copy"), blending, SDL's queued text and borders ("sdl"), measuring text ("size") and rendering text not yet cached ("text").
