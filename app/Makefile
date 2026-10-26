@@ -1,8 +1,9 @@
 # XBE build (nxdk). Run through the top-level Makefile: `make xbe` inside the
 # nxdk environment, or `make docker-xbe` from any machine with Docker.
 #
-# Output: app/bin/default.xbe, app/bin/samples/small.iso (bundled test image) and
-# app/xiso-cartographer.iso (bootable in xemu; contains both).
+# Output: app/bin/default.xbe, its fonts\ and ui\ folders (app/ui/ui-assets.mk),
+# app/bin/samples/small.iso (bundled test image) and app/xiso-cartographer.iso (bootable in
+# xemu; contains them all).
 
 XBE_TITLE = xiso-cartographer
 GEN_XISO = $(XBE_TITLE).iso
@@ -45,8 +46,8 @@ include $(CURDIR)/tls.mk
 # Zip archives (ADR 0009): core/src/install.c installs their images.
 include $(CURDIR)/zip.mk
 
-# SDL2 (prebuilt in the nxdk image) only for reading the controllers: the dashboard shortcut.
-NXDK_SDL = y
+# The screens (M8, ADR 0015): app/ui's sources, SDL2 and SDL_ttf.
+include $(ROOT_DIR)/app/ui/ui.mk
 
 NXDK_DIR ?= $(ROOT_DIR)/third_party/nxdk
 
@@ -54,6 +55,9 @@ NXDK_DIR ?= $(ROOT_DIR)/third_party/nxdk
 include $(ROOT_DIR)/app/lwip.mk
 
 include $(NXDK_DIR)/Makefile
+
+# The fonts and images next to the XBE, and -O2 for app/ui.
+include $(ROOT_DIR)/app/ui/ui-assets.mk
 
 # Bundled synthetic test image (the tools/fixtures "small" fixture: dummy data, never a
 # game), so the M2 install can be tried without copying anything to the console first.
