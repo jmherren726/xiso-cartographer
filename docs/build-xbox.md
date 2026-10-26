@@ -46,9 +46,9 @@ The first image build compiles nxdk's tools and libraries. Docker caches it afte
 
 | File | Use |
 |---|---|
-| `app/bin/default.xbe` | The program. Copy it to the console. |
+| `app/bin/default.xbe` | The program. Copy all of `app/bin/` to the console: the XBE needs `fonts\` and `ui\` next to it. |
 | `app/bin/samples/small.iso` | Bundled synthetic test image (the `small` fixture: dummy data, never a game). The app installs it when `E:\xcat\isos\` is empty. |
-| `app/xiso-cartographer.iso` | Disc image containing `app/bin/` (the XBE and `samples/`). Boots directly in xemu. |
+| `app/xiso-cartographer.iso` | Disc image containing `app/bin/` (the XBE, `fonts\`, `ui\` and `samples\`). Boots directly in xemu. |
 | `app/fatx-probe/bin/default.xbe`, `app/fatx-probe/xcat-fatx-probe.iso` | The FATX probe: a test tool that measures what file names and paths the console's FATX driver accepts. See [testing.md](testing.md#fatx-probe-m2). |
 | `app/net-test/bin/default.xbe`, `app/net-test/xcat-net-test.iso` | The network test: downloads a file over HTTP or HTTPS and reports MB/s, retries and the CRC-32; for HTTPS also the CPU's cipher speed and the negotiated TLS suite. See [testing.md](testing.md#m3-network-download-test) and [M5](testing.md#m5-tls-speed-on-the-console). |
 | `app/ui-test/bin/` (`default.xbe`, `fonts\` and `ui\`), `app/ui-test/xcat-ui-test.iso` | The UI test (M8): one screen in the UI's look ([ui-style.md](ui-style.md)), with the panning background, the bundled fonts, the text helpers and the widgets (list, progress bar, a dialog on A, the on-screen keyboard on Y and, as a password field, on X), drawn through SDL; shows the time to draw a frame and frames per second. Copy the whole `bin\` folder: the XBE needs `fonts\` and `ui\` next to it. See [testing.md](testing.md#m8-ui-test-rendering). |
@@ -64,9 +64,15 @@ Every CI run also uploads all of these files as the `xiso-cartographer-xbe-<sha>
 1. Set up xemu with your own BIOS, MCPX boot ROM and HDD image. These are never part of this repo; see the [xemu docs](https://xemu.app/docs/required-files/).
 2. **Machine → Load Disc…** and choose `app/xiso-cartographer.iso`. Then reset the machine (**Machine → Reset**) if it doesn't boot on its own.
 
-## What the app does (M6)
+## What the app does
 
-The map is a **catalog to pick from**: nothing installs until you choose it. At start the app loads the map, then shows a text list of everything it can install. **D-pad up/down** moves, **left/right** pages, **A** installs the highlighted game and comes back to the list afterwards, and **Back** returns to the dashboard (so does holding LT + RT + Back + Black, at any time). Each line is marked `ok` once installed and `!!` if it failed in this run. The real UI replaces this list in M8. The list holds:
+The map is a **catalog to pick from**: nothing installs until you choose it. At start the app loads the credentials, the catalog and the map on the debug console, then the screens take over (M8, [ui-style.md](ui-style.md#library)):
+
+- **The library** lists everything it can install, with the highlighted game's details beside the list: its year, region and size, who made it, the release's Redump name and title ID, and where it comes from. **D-pad up/down** moves, **LT/RT** page, **Left** goes to the sections (only GAMES works so far), **A** asks "Install …?" and installs on INSTALL, and **Back** asks before returning to the dashboard.
+- **The install screen** shows what the install is doing (connecting, checking the image, writing, verifying), a progress bar, how much is done, the file, the speed and the time left, and each step and retry of the network. **B** asks before stopping; a stopped install keeps what's written and carries on from there when it's started again. At the end a dialog says INSTALLED, with the folder, or why not (the error and its details, like the space needed and free), with RETRY and BACK. Back in the library, the game is marked INSTALLED, FAILED or STOPPED, with that message.
+- Holding **LT + RT + Back + Black** returns to the dashboard at any time.
+
+The list holds:
 
 1. **Every entry of the map `E:\xcat\map.txt`** ([map.md](formats/map.md)), including the games an `@archiveorg <item>` line lists (by name and size, [archiveorg.md](formats/archiveorg.md)). They download over HTTP and install while they stream in. Nothing is stored except the game's files ([ADR 0004](adr/0004-streaming-install.md)), so images of 4 GiB and more, such as full-disc dumps, install too. Entries that need a login use `E:\Apps\xcat\credentials` ([credentials.md](formats/credentials.md)). Entries can be `http://` or `https://` (see [HTTPS](#https) below). An entry whose URL ends in `.zip` installs the zip's one image (see [Zips](#zips) below).
 2. **Every image or zip in `E:\xcat\isos\`** (`*.iso`, `*.zip`), as in M2. These must be under 4 GiB, since FATX can't store a larger file.
@@ -80,9 +86,9 @@ Each install, network or local, follows the same steps ([ARCHITECTURE.md §5](AR
 
 ### The catalog (M7)
 
-If `E:\Apps\xcat\catalog.bin` exists ([catalog.md](formats/catalog.md), built by [`tools/catalog/`](../tools/catalog/README.md#shipping-it)), the log says "Catalog: N games, M releases (<snapshot>)" and the list shows each game by its catalog title. An archive.org game is found by its name (its Redump name), an entry keyed by title ID by its title ID and variant, and a file in `E:\xcat\isos\` by its file name. The line's tag becomes the release's map key, `[4D530004@US]`, and under the list the highlighted game's Redump name is shown. A game the catalog doesn't know is shown by its file name and tagged `not in catalog`; it still installs. After an install, the title ID read from `default.xbe` is compared with the catalog's: "matches the catalog: 4D530004@US, …", or "the catalog expected … : please report it", which means the catalog needs a fix (`[title_id]` in `overrides.toml`). Without the file, or with a damaged one (the log says why), the list works as before.
+If `E:\Apps\xcat\catalog.bin` exists ([catalog.md](formats/catalog.md), built by [`tools/catalog/`](../tools/catalog/README.md#shipping-it)), the log says "Catalog: N games, M releases (<snapshot>)" and the list shows each game by its catalog title. An archive.org game is found by its name (its Redump name), an entry keyed by title ID by its title ID and variant, and a file in `E:\xcat\isos\` by its file name. The details show the year, region, developer, genres, and the release's Redump name and map key (`4D530004@US`). A game the catalog doesn't know is shown by its file name and its details say "Not in the catalog"; it still installs. After an install, the title ID read from `default.xbe` is compared with the catalog's: "matches the catalog: 4D530004@US, …", or "the catalog expected … : please report it", which means the catalog needs a fix (`[title_id]` in `overrides.toml`). Without the file, or with a damaged one (the log says why), the list works as before.
 
-A title that's already installed gets a numbered folder (`small (2)`). An unfinished install of the same image is resumed in its own folder (pick the same game again after a power cut); one of a different image is left alone. Each install ends with "Installed and verified." or "Not installed.", and A goes back to the list. Everything on screen except the list itself is also appended to `E:\xcat\install.log`, starting with "Picked: <game>".
+A title that's already installed gets a numbered folder (`small (2)`). An unfinished install of the same image is resumed in its own folder (pick the same game again after a power cut); one of a different image is left alone. The log `E:\xcat\install.log` has every detail of each install, starting with "Picked: <game>" and ending with "Installed and verified." or "Not installed.": the speeds, the hashes, the title ID, TLS, each retry.
 
 ### Zips
 
@@ -109,7 +115,7 @@ After each HTTPS install the log shows the TLS version and suite the server chos
 
 1. Start the console's FTP server from your dashboard. On XBMC4Gamers and UnleashX it's normally enabled; the default login is `xbox` / `xbox`.
 2. Connect with an FTP client (e.g. FileZilla) to the console's IP on port 21.
-3. Create `E:\Apps\xiso-cartographer\` and upload the contents of `app/bin/` into it: `default.xbe` and the `samples` folder. Use **binary** transfer mode.
+3. Create `E:\Apps\xiso-cartographer\` and upload the contents of `app/bin/` into it: `default.xbe` and the `fonts`, `ui` and `samples` folders. Use **binary** transfer mode.
 4. Optionally, upload your own images (xiso, under 4 GiB) to `E:\xcat\isos\`.
 5. Launch it from the dashboard's Applications list, or browse to the folder in the file manager.
 

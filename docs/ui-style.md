@@ -84,6 +84,32 @@ Between them the three layers type every printable ASCII character, so any passw
 
 The field shows the end of its text when it's wider, with an `accent` caret after it. The keyboard edits the caller's buffer in place, up to its size, and keeps no copy. **A password field shows one dot (U+2022) per character, and its text never reaches the drawing backend**, not even to be measured, so it never sits in a texture or the text cache; the caller wipes the buffer once it's used (ADR 0010 decision 2). A test checks that the backend never sees it.
 
+## Screens
+
+Each screen is a plain struct with `*_input` and `*_draw` like the widgets, tested on the PC; `app/main.c` fills it from core. A dialog on a screen draws over the backdrop, saved in the frame it opens.
+
+### Library
+
+[`library.h`](../app/ui/library.h), in the [layout](#layout) above: the title tab says LIBRARY; the sections; under them THIS VISIT, with the number of games listed, installed and unfinished in this run; the list of games; the highlighted game's details; and the footer, with a status line (what the last install came to) and the buttons.
+
+- **The details:** the name in `UI_FONT_BOLD` and `accent` (two lines at most), then in `UI_FONT_SMALL`: the year, region and size in `dim`; INSTALLED, FAILED or STOPPED in `UI_FONT_LABEL` once tried in this run, with what happened; and a wrapped paragraph in `dim`: who made it, the genres, the release's Redump name and map key, and where it comes from (a server's name, or `E:\xcat\isos`).
+- **Buttons:** the D-pad, LT and RT move in the list. Left goes to the sections, where Up and Down choose one and Right or A come back; the section highlighted while choosing has the bright border. Only GAMES works so far: the others say "Not here yet". A asks "Install <name> to E:\Games?" (INSTALL / CANCEL, B cancels), since the map is a catalog and nothing installs unasked. Back asks "Return to the dashboard?" (LEAVE / STAY).
+
+### Install
+
+[`install_view.h`](../app/ui/install_view.h): the title tab says INSTALL, one panel fills the middle, and the footer says "B stop". In the panel:
+- the game's name, as in the details;
+- the phase in `UI_FONT_LABEL` (CONNECTING, CHECKING THE IMAGE, WRITING FILES, VERIFYING) with a line on what it means;
+- a progress bar the panel's width with the percentage;
+- "1.50 GB of 4.38 GB" (`ui_format_size`: decimal units, three digits, rounded down, like the dashboard);
+- "File 3 of 120";
+- "8.1 MB/s, about 6 minutes left" (`ui_format_left`), once the phase has run three seconds;
+- a status line in `dim` for the network's steps and retries ("The network connection failed. Trying again in 4.0 s (2 of 40)."), cleared as soon as data flows.
+
+B opens STOP / CONTINUE, CONTINUE highlighted. At the end a dialog: INSTALLED with the folder and OK, or NOT INSTALLED with the error and its details and RETRY / BACK.
+
+During an install the background stands still, and the screen is drawn at most four times a second and when a button is pressed, so drawing takes little from the install ([below](#cost)). The buttons are read when the install reports progress (about every MiB and after each file), at most every 50 ms, and at each network retry: on a slow download B can take a second to answer.
+
 ## The background
 
 `app/ui/assets/background.png` is 1440 × 480: the screen's height, and 800 pixels wider than the screen. The XBE build converts it to `ui\background.bmp` next to the XBE (`tools/ui/png2bmp.py`, since nxdk's SDL loads BMP without SDL2_image), and the backend loads it at start. Without it, the screens draw on `ui_col_bg`.

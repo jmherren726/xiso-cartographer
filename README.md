@@ -14,7 +14,7 @@ Homebrew game catalog and installer for the modded original Xbox. Browse the ful
 - **archive.org items:** `@archiveorg <item>` in the map lists every game the item holds, with the size and hashes it publishes.
 - **You choose:** the map is a catalog. The app lists it, and installs only the game you pick with A.
 
-The game catalog (M7) is built: about 1,070 games and 2,200 releases from Wikidata and Redump, text only, which the app uses to name the games it lists. Not there yet: the real UI and logging in on the console (M8). See the [roadmap](docs/HANDOFF.md#41-roadmap) for the milestones, [docs/testing.md](docs/testing.md#results-log) for what was tested on hardware, and [CHANGELOG.md](CHANGELOG.md) for what has landed. To try it, see [What the app does](docs/build-xbox.md#what-the-app-does-m6).
+The game catalog (M7) is built: about 1,070 games and 2,200 releases from Wikidata and Redump, text only, which the app uses to name the games it lists. The first screens (M8) are in: a library to pick games from and an install screen with progress. Not there yet: search, settings and logging in on the console (M8). See the [roadmap](docs/HANDOFF.md#41-roadmap) for the milestones, [docs/testing.md](docs/testing.md#results-log) for what was tested on hardware, and [CHANGELOG.md](CHANGELOG.md) for what has landed. To try it, see [What the app does](docs/build-xbox.md#what-the-app-does).
 
 ## What it will do
 

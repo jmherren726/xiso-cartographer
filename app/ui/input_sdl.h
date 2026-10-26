@@ -7,6 +7,8 @@
  * SDL, so this header doesn't.
  */
 
+#include <stdbool.h>
+
 #include "input.h"
 
 #ifdef __cplusplus
@@ -17,6 +19,10 @@ extern "C" {
    UI_BTN_NONE when nothing is waiting. Opens controllers as they're plugged in. Call after
    SDL_Init(SDL_INIT_GAMECONTROLLER), and often: it reads SDL's events. */
 ui_button ui_sdl_button(void);
+
+/* Whether LT + RT + Back + Black (the dashboard shortcut of other homebrew) are held together
+   on any controller opened by ui_sdl_button. */
+bool ui_sdl_exit_combo(void);
 
 #ifdef __cplusplus
 }

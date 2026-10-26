@@ -110,3 +110,18 @@ ui_button ui_sdl_button(void)
     }
     return ui_repeat_due(&repeat, SDL_GetTicks());
 }
+
+bool ui_sdl_exit_combo(void)
+{
+    for (int i = 0; i < MAX_PADS; i++) {
+        SDL_GameController *c = pads[i];
+        if (c != NULL &&
+            SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_TRIGGERLEFT) > TRIGGER_DOWN &&
+            SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_TRIGGERRIGHT) > TRIGGER_DOWN &&
+            SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_BACK) &&
+            SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER)) { /* Black */
+            return true;
+        }
+    }
+    return false;
+}

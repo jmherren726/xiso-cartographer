@@ -14,8 +14,12 @@
  * file, and the .xcat-installed marker. Logins come from E:\Apps\xcat\credentials
  * (docs/formats/credentials.md). Everything shown is also appended to E:\xcat\install.log.
  * The game catalog E:\Apps\xcat\catalog.bin (docs/formats/catalog.md, M7), if present,
- * names the listed games and marks those it doesn't know; after an install, the title ID
- * from default.xbe is compared with the catalog's. The real UI replaces this in M8.
+ * names the listed games and describes them; after an install, the title ID from default.xbe
+ * is compared with the catalog's.
+ *
+ * Startup is shown on nxdk's debug console. Then the screens take over (M8, ADR 0015,
+ * docs/ui-style.md): the library lists the games, A asks before installing one, and the
+ * install screen shows the progress; B asks before stopping it. Every message is in the log.
  */
 #include <SDL.h>
 #include <hal/debug.h>
@@ -27,6 +31,11 @@
 #include <windows.h>
 #include <xboxkrnl/xboxkrnl.h>
 
+#include "draw_sdl.h"
+#include "input_sdl.h"
+#include "install_view.h"
+#include "library.h"
+#include "theme.h"
 #include "xcat/catalog.h"
 #include "xcat/credentials.h"
 #include "xcat/http_client.h"
@@ -55,8 +64,10 @@
 static uint8_t *io_buf;
 static uint8_t *recv_buf;
 static HANDLE log_file = INVALID_HANDLE_VALUE;
+static ui_draw screen;
+static bool screen_up; /* the screens are drawn: out() goes to the log only */
 
-/* --- screen and log ---------------------------------------------------------------- */
+/* --- debug console and log ----------------------------------------------------------- */
 
 __attribute__((format(printf, 1, 2))) static void out(const char *fmt, ...)
 {
@@ -71,7 +82,9 @@ __attribute__((format(printf, 1, 2))) static void out(const char *fmt, ...)
     if ((size_t)n >= sizeof line) {
         n = (int)sizeof line - 1;
     }
-    debugPrint("%s", line);
+    if (!screen_up) {
+        debugPrint("%s", line);
+    }
     if (log_file != INVALID_HANDLE_VALUE) {
         DWORD put = 0;
         (void)WriteFile(log_file, line, (DWORD)n, &put, NULL);
@@ -99,78 +112,20 @@ static void open_log(void)
 
 /* --- controllers: LT + RT + Back + Black returns to the dashboard ------------------- */
 
-#define MAX_PADS 4
-#define PAD_POLL_MS 100U
-#define TRIGGER_DOWN 16384 /* of 32767 */
-
-#define PAD_QUEUE 16
+#define PAD_POLL_MS 50U
 
 static bool pads_ok;
-static SDL_GameController *pads[MAX_PADS];
-static DWORD next_pad_poll;
-static bool exit_requested;
-static uint8_t pressed[PAD_QUEUE]; /* buttons pressed since the picker last looked */
-static int pressed_count;
 
 static void pads_init(void)
 {
     pads_ok = SDL_Init(SDL_INIT_GAMECONTROLLER) == 0;
 }
 
-/* The oldest button press not yet taken (SDL_CONTROLLER_BUTTON_*), or -1. */
-static int next_press(void)
-{
-    if (pressed_count == 0) {
-        return -1;
-    }
-    int b = pressed[0];
-    pressed_count--;
-    memmove(pressed, pressed + 1, (size_t)pressed_count);
-    return b;
-}
-
-/* True once LT + RT + Back + Black (the rocky5 shortcut) is held on any controller. Cheap to
-   call often: it looks at the controllers at most every 100 ms, and queues the buttons
-   pressed meanwhile for next_press. */
+/* True while LT + RT + Back + Black (the rocky5 shortcut) is held on any controller. The
+   screens read the buttons (ui_sdl_button), which keeps the controllers' state current. */
 static bool exit_combo(void)
 {
-    if (!pads_ok || exit_requested || GetTickCount() - next_pad_poll > 0x80000000U) {
-        return exit_requested;
-    }
-    next_pad_poll = GetTickCount() + PAD_POLL_MS;
-    SDL_Event e;
-    while (SDL_PollEvent(&e)) {
-        if (e.type == SDL_CONTROLLERBUTTONDOWN && pressed_count < PAD_QUEUE) {
-            pressed[pressed_count++] = e.cbutton.button;
-        } else if (e.type == SDL_CONTROLLERDEVICEADDED) {
-            for (int i = 0; i < MAX_PADS; i++) {
-                if (pads[i] == NULL) {
-                    pads[i] = SDL_GameControllerOpen(e.cdevice.which);
-                    break;
-                }
-            }
-        } else if (e.type == SDL_CONTROLLERDEVICEREMOVED) {
-            SDL_GameController *gone = SDL_GameControllerFromInstanceID(e.cdevice.which);
-            for (int i = 0; i < MAX_PADS; i++) {
-                if (pads[i] != NULL && pads[i] == gone) {
-                    SDL_GameControllerClose(pads[i]);
-                    pads[i] = NULL;
-                }
-            }
-        }
-    }
-    SDL_GameControllerUpdate();
-    for (int i = 0; i < MAX_PADS; i++) {
-        SDL_GameController *c = pads[i];
-        if (c != NULL &&
-            SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_TRIGGERLEFT) > TRIGGER_DOWN &&
-            SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_TRIGGERRIGHT) > TRIGGER_DOWN &&
-            SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_BACK) &&
-            SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER)) { /* Black */
-            exit_requested = true;
-        }
-    }
-    return exit_requested;
+    return pads_ok && ui_sdl_exit_combo();
 }
 
 static void close_log(void)
@@ -187,13 +142,19 @@ static void to_dashboard(void)
 {
     out("\nReturning to the dashboard...\n");
     close_log();
+    if (screen_up) {
+        ui_sdl_close();
+    }
     HalReturnToFirmware(HalQuickRebootRoutine);
 }
 
+/* After a startup error on the debug console: waits for the dashboard shortcut. */
 static void halt(void)
 {
     close_log();
     for (;;) {
+        while (pads_ok && ui_sdl_button() != UI_BTN_NONE) {
+        }
         if (exit_combo()) {
             to_dashboard();
         }
@@ -206,6 +167,53 @@ static void tenths(char *buf, size_t size, uint64_t t)
 {
     (void)snprintf(buf, size, "%llu.%llu", (unsigned long long)(t / 10U),
                    (unsigned long long)(t % 10U));
+}
+
+/* --- the install screen, drawn from the install's callbacks ------------------------------ */
+
+#define INSTALL_DRAW_MS 250U /* a frame costs the install CPU time: four a second */
+
+static ui_install_view view;
+static bool installing;      /* the install screen is up */
+static bool stop_asked;      /* the user confirmed STOP */
+static int pan_now;          /* the background's pan, which stands still during an install */
+static uint32_t next_poll;   /* SDL_GetTicks() of the next look at the buttons */
+static uint32_t next_redraw; /* and of the next frame, if nothing else asks for one */
+
+static bool due(uint32_t at)
+{
+    return (int32_t)(SDL_GetTicks() - at) >= 0;
+}
+
+/* Reads the buttons and redraws the install screen, at most every PAD_POLL_MS and
+   INSTALL_DRAW_MS, or now if `now`. Cheap to call often. */
+static void install_frame(bool now)
+{
+    if (!installing || (!now && !due(next_poll))) {
+        return;
+    }
+    next_poll = SDL_GetTicks() + PAD_POLL_MS;
+    ui_button b;
+    while ((b = ui_sdl_button()) != UI_BTN_NONE) {
+        now = true;
+        if (ui_install_input(&view, b) == UI_INST_STOP) {
+            stop_asked = true;
+            ui_install_status(&view, "Stopping...");
+        }
+    }
+    if (now || due(next_redraw)) {
+        next_redraw = SDL_GetTicks() + INSTALL_DRAW_MS;
+        ui_sdl_begin(ui_col_bg);
+        ui_install_draw(&screen, &view, pan_now);
+        ui_sdl_present();
+    }
+}
+
+/* Whether the install should go on: not stopped, nor the dashboard shortcut held. */
+static bool carry_on(void)
+{
+    install_frame(false);
+    return !stop_asked && !exit_combo();
 }
 
 /* --- network, on first use ------------------------------------------------------------ */
@@ -248,7 +256,15 @@ static bool on_retry(void *ctx, const xc_http_retry *r)
     /* Which step was slow (diagnosis for the first-request timeout seen in M3). */
     out("           last connect: lookup %lu ms, handshake %lu ms, %s\n", (unsigned long)st.dns_ms,
         (unsigned long)st.connect_ms, xc_err_str(st.result));
-    return !exit_combo(); /* the shortcut also works while waiting out an outage */
+    if (r->status != 0) {
+        ui_install_status(&view, "The server said HTTP %d. Trying again in %s s (%u of %u).",
+                          r->status, delay, r->failures, r->max_attempts);
+    } else {
+        ui_install_status(&view, "%s. Trying again in %s s (%u of %u).", xc_err_str(r->err), delay,
+                          r->failures, r->max_attempts);
+    }
+    install_frame(true);
+    return carry_on(); /* stopping also works while waiting out an outage */
 }
 
 static void load_credentials(void)
@@ -294,6 +310,13 @@ static void load_credentials(void)
 static void say(const char *line)
 {
     out("%s", line);
+    line += strspn(line, " ");
+    size_t n = strlen(line);
+    while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == ' ')) {
+        n--;
+    }
+    ui_install_status(&view, "%.*s", (int)n, line);
+    install_frame(true);
 }
 
 static bool is_https(const char *url)
@@ -308,7 +331,7 @@ static bool network(void)
     }
     net_tried = true;
     char ip[32] = "";
-    out("Starting the network (dashboard settings)...\n");
+    say("Starting the network (dashboard settings)...\n");
     if (xc_nx_net_startup(ip, sizeof ip) != XC_OK) {
         out("No network: check the cable and the dashboard's network settings.\n");
         return false;
@@ -587,6 +610,7 @@ static bool on_progress(void *ctx, const xc_install_progress *p)
 {
     ui *u = ctx;
     uint64_t now = now_ms();
+    bool moved = p->bytes_done != last_bytes_done;
     if ((int)p->phase != u->phase) {
         end_phase(u, now, last_bytes_done);
         u->phase = (int)p->phase;
@@ -614,7 +638,20 @@ static bool on_progress(void *ctx, const xc_install_progress *p)
             (unsigned long long)(p->bytes_done >> 20U), (unsigned long long)(p->bytes_total >> 20U),
             (unsigned)current, (unsigned)p->file_count, speed);
     }
-    return !exit_combo();
+    view.phase = p->phase == XC_INSTALL_WRITING     ? UI_INST_WRITING
+                 : p->phase == XC_INSTALL_VERIFYING ? UI_INST_VERIFYING
+                                                    : UI_INST_CHECKING;
+    view.done = p->bytes_done;
+    view.total = p->bytes_total;
+    view.files = (uint32_t)p->file_count;
+    view.file = (uint32_t)(p->files_done < p->file_count ? p->files_done + 1 : p->file_count);
+    /* This phase's speed, once it has run a few seconds. */
+    uint64_t ran = now - u->phase_ms;
+    view.speed = ran > 3000U ? (uint32_t)mbps_tenths(p->bytes_done - u->phase_bytes, ran) : 0;
+    if (!stop_asked && moved) {
+        ui_install_status(&view, "%s", ""); /* data flows: the retries and steps are over */
+    }
+    return carry_on();
 }
 
 static const char *problem_text(const xc_fatx_problem *p)
@@ -682,6 +719,50 @@ static void check_catalog_title(size_t release, uint32_t title_id)
     }
 }
 
+/* What the last install attempt came to, for the install screen's closing dialog. */
+static char why[400];
+static xc_err why_err; /* XC_OK if it installed */
+
+/* Adds a sentence to `why`. */
+__attribute__((format(printf, 1, 2))) static void explain(const char *fmt, ...)
+{
+    size_t n = strlen(why);
+    if (n > 0 && n + 1 < sizeof why) {
+        why[n++] = ' ';
+        why[n] = '\0';
+    }
+    va_list ap;
+    va_start(ap, fmt);
+    (void)vsnprintf(why + n, sizeof why - n, fmt, ap);
+    va_end(ap);
+}
+
+/* The install failed with err: logged, and the start of `why`. */
+static void fail(xc_err err)
+{
+    out("  NOT INSTALLED: %s\n", xc_err_str(err));
+    why_err = err;
+    why[0] = '\0';
+    if (err == XC_ERR_CANCELLED) {
+        explain("Stopped. What's written is kept: install the game again to carry on from "
+                "there.");
+    } else {
+        explain("%s.", xc_err_str(err));
+    }
+}
+
+/* A detail of a failure: logged, and added to `why`. */
+__attribute__((format(printf, 1, 2))) static void detail(const char *fmt, ...)
+{
+    char line[256];
+    va_list ap;
+    va_start(ap, fmt);
+    (void)vsnprintf(line, sizeof line, fmt, ap);
+    va_end(ap);
+    out("   %s\n", line);
+    explain("%s.", line);
+}
+
 /* Installs one image; true if it ended installed and verified. `listing` is the map entry
    when an archive.org listing describes the file (archiveorg.md §8), else NULL. `release`
    is the catalog's release for it, or XC_CATALOG_NONE. */
@@ -690,7 +771,6 @@ static bool install(const xc_source *src, const char *name, const char *etag,
 {
     char title[128];
     title_from(name, title, sizeof title);
-    out("\n%s\n", name);
     xc_install_io io;
     xc_nx_install_io(&io);
     ui u;
@@ -755,51 +835,60 @@ static bool install(const xc_source *src, const char *name, const char *etag,
         } else {
             out("  no title ID: %s\n", result.title_note != NULL ? result.title_note : "?");
         }
+        why_err = XC_OK;
+        why[0] = '\0';
+        explain("In %s, every file read back and checked.", result.folder);
+        if (result.resumed) {
+            explain("It carried on from where an earlier attempt stopped.");
+        }
         return true;
     }
+    fail(err);
     if (err == XC_ERR_SOURCE_SIZE) {
-        out("  archive.org's listing says %llu bytes; the server's file has %llu\n",
-            (unsigned long long)req.expect_size, (unsigned long long)src->size);
+        detail("archive.org's listing says %llu bytes; the server's file has %llu",
+               (unsigned long long)req.expect_size, (unsigned long long)src->size);
     }
-    out("  NOT INSTALLED: %s\n", xc_err_str(err));
     if (err == XC_ERR_ZIP_UNSUPPORTED && result.zip_method != 0 && result.zip_method != 8) {
         const char *method = xc_zip_method_name(result.zip_method);
-        out("   %s in the zip uses %s (method %u); only stored and Deflate can be read\n",
-            result.zip_member[0] != '\0' ? result.zip_member : "the image",
-            method != NULL ? method : "an unknown method", (unsigned)result.zip_method);
+        detail("%s in the zip uses %s (method %u); only stored and Deflate can be read",
+               result.zip_member[0] != '\0' ? result.zip_member : "the image",
+               method != NULL ? method : "an unknown method", (unsigned)result.zip_method);
     }
     if (err == XC_ERR_IMAGE_HASH) {
         log_image_hash(&result);
     }
     if (result.current_file[0] != '\0') {
-        out("   at %s\n", result.current_file);
+        detail("At %s", result.current_file);
     }
     const char *op = NULL;
     unsigned long code = 0;
     xc_nx_last_io_error(&op, &code);
     if (err == XC_ERR_IO && op != NULL) {
-        out("   the disk %s failed (error 0x%08lX)\n", op, code);
+        detail("The disk %s failed (error 0x%08lX)", op, code);
     }
     if (err == XC_ERR_NOT_INSTALLABLE) {
         for (size_t i = 0; i < result.problem_count && i < XC_INSTALL_MAX_PROBLEMS; i++) {
-            out("   %.48s: %s\n", result.problems[i].path, problem_text(&result.problems[i]));
+            detail("%.48s: %s", result.problems[i].path, problem_text(&result.problems[i]));
         }
     } else if (err == XC_ERR_NO_SPACE) {
-        out("   needs %llu MiB, %llu MiB free\n", (unsigned long long)(result.space_needed >> 20U),
-            (unsigned long long)(result.space_free >> 20U));
+        char need[24];
+        char free_now[24];
+        ui_format_size(need, sizeof need, result.space_needed);
+        ui_format_size(free_now, sizeof free_now, result.space_free);
+        detail("It needs %s; %s is free", need, free_now);
     } else if (err == XC_ERR_VERIFY) {
-        out("   %s was removed; start again to rewrite it\n", result.bad_file);
+        detail("%s was removed; install again to rewrite it", result.bad_file);
     } else if (err == XC_ERR_HTTP_DENIED && client.last_section != NULL) {
-        out("   login missing or expired for [%s]\n", client.last_section);
+        detail("The login for [%s] is missing or expired", client.last_section);
     } else if (err == XC_ERR_HTTP_DENIED && !have_creds) {
-        out("   no login was sent: no credentials were loaded from %s\n", CRED_FILE);
+        detail("No login was sent: no credentials were loaded from %s", CRED_FILE);
     } else if (client.last_status != 0 && (err == XC_ERR_HTTP_STATUS || err == XC_ERR_HTTP_DENIED ||
                                            err == XC_ERR_HTTP_NOT_FOUND)) {
-        out("   HTTP %d\n", client.last_status);
+        detail("HTTP %d", client.last_status);
     }
     if (result.files_written + result.files_skipped > 0) {
-        out("   %u files are done in %s; start again to resume\n",
-            (unsigned)(result.files_written + result.files_skipped), result.folder);
+        detail("%u files are done in %s; install again to carry on",
+               (unsigned)(result.files_written + result.files_skipped), result.folder);
     }
     return false;
 }
@@ -807,14 +896,19 @@ static bool install(const xc_source *src, const char *name, const char *etag,
 static bool install_url(const xc_map_entry *e, size_t release)
 {
     const char *url = e->url;
+    out("\n%s\n", url);
     if (!network()) {
-        out("\n%s\n  NOT INSTALLED: no network\n", url);
+        fail(XC_ERR_NET_CONNECT);
+        why[0] = '\0';
+        explain("No network: check the cable and the dashboard's network settings.");
         return false;
     }
     if (is_https(url) && !https_ready()) {
-        out("\n%s\n  NOT INSTALLED: HTTPS isn't available: %s\n", url, xc_err_str(https_err));
+        fail(https_err);
+        explain("HTTPS can't be used, so this https:// entry can't be installed.");
         return false;
     }
+    say("Opening the file on the server...\n");
     static xc_http_source hs;
     xc_source src;
     xc_err err = xc_http_resource_init(&res, url, strlen(url));
@@ -826,7 +920,10 @@ static bool install_url(const xc_map_entry *e, size_t release)
         err = https_ready() ? xc_http_source_open(&src, &hs, &client, &res) : https_err;
     }
     if (err != XC_OK) {
-        out("\n%s\n  NOT INSTALLED: %s\n", url, xc_err_str(err));
+        fail(err);
+        if (client.last_status != 0) {
+            detail("HTTP %d", client.last_status);
+        }
         return false;
     }
     bool ok = install(&src, url, res.etag[0] != '\0' ? res.etag : NULL,
@@ -848,9 +945,11 @@ static bool install_file(const char *path, size_t release)
 {
     xc_nx_file f = {NULL};
     xc_source src;
+    out("\n%s\n", path);
     xc_err err = xc_nx_file_open(&src, &f, path);
     if (err != XC_OK) {
-        out("\n%s\n  can't read it: %s\n", path, xc_err_str(err));
+        fail(err);
+        detail("Can't read %s", path);
         return false;
     }
     bool ok = install(&src, path, NULL, NULL, NULL, release);
@@ -901,26 +1000,20 @@ static int list_local(char names[MAX_LOCAL][XC_NX_PATH_MAX])
     return count;
 }
 
-/* --- picking what to install: the map is a catalog, nothing installs unasked ---------- */
+/* --- the library: the map is a catalog, nothing installs unasked ------------------------ */
 
-/*
- * nxdk's debug console has 24 rows of 63 characters (9 x 17 px cells in 590 x 405 px). A
- * longer line wraps to a second row, and text past the last row clears the whole screen and
- * carries on at the top, so a page that overflows shows only its tail. Every line of the list
- * screen is therefore cut to SCREEN_COLS, and the screen has 2 + LIST_ROWS + 3 = 23 lines.
- */
-#define SCREEN_COLS 62
-#define LIST_ROWS 18
 #define LABEL_MAX 128
 
 typedef struct game {
     char name[LABEL_MAX];      /* the catalog's title, else the file or listing name */
-    char tag[40];              /* after the name: the title ID, where it is, or "not in catalog" */
+    char key[40];              /* the title ID and variant, from the map or the catalog */
+    char facts[96];            /* year, region, size */
+    char about[512];           /* who made it, the release, where it comes from */
+    char note[400];            /* what the last install attempt in this run came to */
     uint64_t size;             /* from the listing; 0 if unknown */
     const xc_map_entry *entry; /* a map entry, or */
     const char *path;          /* a file in E:\xcat\isos */
     size_t release;            /* the catalog's release, or XC_CATALOG_NONE */
-    int result;                /* 0 not tried this run, 1 installed, -1 failed */
 } game;
 
 /* The catalog's release for a map entry or local file (map.md §4.1, §5.2): by title ID and
@@ -936,40 +1029,69 @@ static size_t find_release(const xc_map_entry *e, const char *name)
     return xc_catalog_find_name(&cat, name);
 }
 
-/* Names a list line from the catalog: the game's title, and the release's key as its tag. */
-static void label(game *g)
+/* Appends `part` to s (of `size`), after " | " if s isn't empty; nothing if part is empty. */
+static void join(char *s, size_t size, const char *part)
+{
+    size_t n = strlen(s);
+    if (part[0] != '\0' && n < size) {
+        (void)snprintf(s + n, size - n, "%s%s", n > 0 ? "  |  " : "", part);
+    }
+}
+
+/* Where a game comes from, for its details: the server's name, or the folder. */
+static void source_text(const game *g, char *out_text, size_t size)
+{
+    if (g->entry == NULL) {
+        (void)snprintf(out_text, size, "From " ISO_DIR " on this console.");
+        return;
+    }
+    const char *host = strstr(g->entry->url, "://");
+    host = host != NULL ? host + 3 : g->entry->url;
+    (void)snprintf(out_text, size, "From %.*s%s.", (int)strcspn(host, "/:?#"), host,
+                   g->entry->name != NULL ? ", an archive.org listing" : "");
+}
+
+/* Names and describes a game from the catalog, if it knows it. */
+static void describe(game *g)
 {
     g->release = find_release(g->entry, g->name);
+    char size[24] = "";
+    char year[8] = "";
     xc_catalog_release r;
     xc_catalog_game cg;
+    char from[160];
+    source_text(g, from, sizeof from);
     if (xc_catalog_release_at(&cat, g->release, &r) && xc_catalog_game_at(&cat, r.game, &cg)) {
         snprintf(g->name, sizeof g->name, "%s", cg.title);
-        if (g->path == NULL) {
-            snprintf(g->tag, sizeof g->tag, "[%08lX@%s]", (unsigned long)r.title_id, r.variant);
+        snprintf(g->key, sizeof g->key, "%08lX@%s", (unsigned long)r.title_id, r.variant);
+        if (cg.year != 0) {
+            snprintf(year, sizeof year, "%u", (unsigned)cg.year);
         }
-    } else if (cat.release_count > 0) {
-        size_t n = strlen(g->tag);
-        snprintf(g->tag + n, sizeof g->tag - n, "%snot in catalog", n > 0 ? " " : "");
+        ui_format_size(size, sizeof size, g->size > 0 ? g->size : r.size);
+        join(g->facts, sizeof g->facts, year);
+        join(g->facts, sizeof g->facts, r.region);
+        join(g->facts, sizeof g->facts, size);
+        const char *by =
+            cg.developer != NULL && cg.developer[0] != '\0' ? cg.developer : cg.publisher;
+        snprintf(g->about, sizeof g->about, "%s%s%s%s%sRelease: %s (%s). %s",
+                 by != NULL && by[0] != '\0' ? "By " : "", by != NULL ? by : "",
+                 by != NULL && by[0] != '\0' ? ". " : "", cg.genres != NULL ? cg.genres : "",
+                 cg.genres != NULL && cg.genres[0] != '\0' ? ". " : "", r.name, g->key, from);
+        return;
     }
+    if (g->size > 0) {
+        ui_format_size(size, sizeof size, g->size);
+        join(g->facts, sizeof g->facts, size);
+    }
+    snprintf(g->about, sizeof g->about, "%s%s%s%s",
+             cat.release_count > 0 ? "Not in the catalog. " : "No catalog loaded. ",
+             g->key[0] != '\0' ? "Title " : "", g->key, g->key[0] != '\0' ? ". " : "");
+    size_t n = strlen(g->about);
+    snprintf(g->about + n, sizeof g->about - n, "%s", from);
 }
 
-/* One screen line of at most SCREEN_COLS characters; a cut one ends in '~'. */
-__attribute__((format(printf, 1, 2))) static void screen_line(const char *fmt, ...)
-{
-    char line[256];
-    va_list ap;
-    va_start(ap, fmt);
-    int n = vsnprintf(line, sizeof line, fmt, ap);
-    va_end(ap);
-    if (n > SCREEN_COLS) {
-        line[SCREEN_COLS - 1] = '~';
-        line[SCREEN_COLS] = '\0';
-    }
-    debugPrint("%s\n", line);
-}
-
-/* One line per map entry and local file, in that order. */
-static game *catalog(const xc_map *map, char local[][XC_NX_PATH_MAX], int nlocal, int *count)
+/* One game per map entry and local file, in that order. */
+static game *list_games(const xc_map *map, char local[][XC_NX_PATH_MAX], int nlocal, int *count)
 {
     size_t n = map->entry_count + (size_t)nlocal;
     game *games = calloc(n > 0 ? n : 1, sizeof *games);
@@ -986,105 +1108,111 @@ static game *catalog(const xc_map *map, char local[][XC_NX_PATH_MAX], int nlocal
             g->size = e->size;
         } else {
             title_from(e->url, g->name, sizeof g->name);
-            snprintf(g->tag, sizeof g->tag, "[%08lX%s%s]", (unsigned long)e->title_id,
+            snprintf(g->key, sizeof g->key, "%08lX%s%s", (unsigned long)e->title_id,
                      e->variant[0] != '\0' ? "@" : "", e->variant);
         }
-        label(g);
+        describe(g);
     }
     for (int i = 0; i < nlocal; i++) {
         game *g = &games[map->entry_count + (size_t)i];
         title_from(local[i], g->name, sizeof g->name);
         g->path = local[i];
-        snprintf(g->tag, sizeof g->tag, "(on the HDD)");
-        label(g);
+        describe(g);
     }
     *count = (int)n;
     return games;
 }
 
-static void draw_list(const game *games, int count, int cur, int top)
+/* Installs g on the install screen until it's installed, or the user goes back: RETRY tries
+   again. Leaves what the last attempt came to in `item`. */
+static void run_install(game *g, ui_lib_item *item)
 {
-    debugClearScreen();
-    screen_line("Pick a game (%d of %d)   ok: installed  !!: failed", cur + 1, count);
-    screen_line("D-pad: move  Left/Right: page  A: install  Back: quit");
-    for (int row = 0; row < LIST_ROWS; row++) {
-        if (top + row >= count) {
-            screen_line(" ");
-            continue;
+    for (;;) {
+        out("\nPicked: %s%s%s\n", g->name, g->key[0] != '\0' ? " " : "", g->key);
+        ui_install_open(&view, g->name);
+        installing = true;
+        stop_asked = false;
+        install_frame(true);
+        bool ok = g->entry != NULL ? install_url(g->entry, g->release)
+                                   : install_file(g->path, g->release);
+        out("%s\n", ok ? "Installed and verified." : "Not installed.");
+        snprintf(g->note, sizeof g->note, "%s", why);
+        item->state = ok                            ? UI_LIB_INSTALLED
+                      : why_err == XC_ERR_CANCELLED ? UI_LIB_STOPPED
+                                                    : UI_LIB_FAILED;
+        item->note = g->note;
+        ui_install_status(&view, "%s", "");
+        ui_install_end(&view, ok, why);
+        ui_inst_action a = UI_INST_NONE;
+        bool dirty = true;
+        while (a == UI_INST_NONE) {
+            if (exit_combo()) {
+                to_dashboard();
+            }
+            ui_button b;
+            while (a == UI_INST_NONE && (b = ui_sdl_button()) != UI_BTN_NONE) {
+                a = ui_install_input(&view, b);
+                dirty = true;
+            }
+            if (dirty && a == UI_INST_NONE) {
+                ui_sdl_begin(ui_col_bg);
+                ui_install_draw(&screen, &view, pan_now);
+                ui_sdl_present();
+                dirty = false;
+            } else {
+                Sleep(5);
+            }
         }
-        const game *g = &games[top + row];
-        const char *mark = g->result > 0 ? "ok" : g->result < 0 ? "!!" : "  ";
-        char size[16] = "";
-        if (g->size > 0) {
-            snprintf(size, sizeof size, "%u MiB", (unsigned)(g->size >> 20U));
+        installing = false;
+        if (a != UI_INST_RETRY) {
+            return;
         }
-        screen_line("%s%s %8s  %s%s%s", top + row == cur ? ">" : " ", mark, size, g->name,
-                    g->tag[0] != '\0' ? "  " : "", g->tag);
-    }
-    /* The highlighted name in full, as the list may have cut it; for a catalog game, its
-       release's Redump name below it. */
-    const game *g = &games[cur];
-    size_t len = strlen(g->name);
-    xc_catalog_release r;
-    screen_line(" ");
-    screen_line("%.*s", SCREEN_COLS, g->name);
-    if (xc_catalog_release_at(&cat, g->release, &r)) {
-        screen_line("%s", r.name);
-    } else {
-        screen_line("%s", len > SCREEN_COLS ? g->name + SCREEN_COLS : " ");
     }
 }
 
-/* Waits for a button press (the exit shortcut still works). */
-static int wait_press(void)
+/* The library screen, until the user leaves for the dashboard. */
+static void library(game *games, ui_lib_item *items, int count)
 {
+    static ui_library lib;
+    ui_library_open(&lib, items, count);
+    int rows = ui_library_rows(&screen);
+    int range = ui_pan_range(&screen);
+    char status[160];
+    snprintf(status, sizeof status, "%s",
+             "Pick a game and press A. Nothing installs until you say so.");
+    bool dirty = true;
     for (;;) {
         if (exit_combo()) {
             to_dashboard();
         }
-        int b = next_press();
-        if (b >= 0) {
-            return b;
-        }
-        Sleep(20);
-    }
-}
-
-/* Shows the catalog until the user picks a game with A, installs it, and comes back. */
-static void pick_and_install(game *games, int count)
-{
-    int cur = 0;
-    int top = 0;
-    for (;;) {
-        if (cur < top) {
-            top = cur;
-        } else if (cur >= top + LIST_ROWS) {
-            top = cur - LIST_ROWS + 1;
-        }
-        draw_list(games, count, cur, top);
-        int b = wait_press();
-        if (b == SDL_CONTROLLER_BUTTON_DPAD_UP) {
-            cur = cur > 0 ? cur - 1 : count - 1;
-        } else if (b == SDL_CONTROLLER_BUTTON_DPAD_DOWN) {
-            cur = cur + 1 < count ? cur + 1 : 0;
-        } else if (b == SDL_CONTROLLER_BUTTON_DPAD_LEFT) {
-            cur = cur >= LIST_ROWS ? cur - LIST_ROWS : 0;
-        } else if (b == SDL_CONTROLLER_BUTTON_DPAD_RIGHT) {
-            cur = cur + LIST_ROWS < count ? cur + LIST_ROWS : count - 1;
-        } else if (b == SDL_CONTROLLER_BUTTON_BACK) {
-            to_dashboard();
-        } else if (b == SDL_CONTROLLER_BUTTON_A) {
-            game *g = &games[cur];
-            debugClearScreen();
-            out("\nPicked: %s%s%s\n", g->name, g->tag[0] != '\0' ? " " : "", g->tag);
-            bool ok = g->entry != NULL ? install_url(g->entry, g->release)
-                                       : install_file(g->path, g->release);
-            g->result = ok ? 1 : -1;
-            out("%s\n", ok ? "Installed and verified." : "Not installed.");
-            debugPrint("\nPress A to go back to the list.\n");
-            pressed_count = 0; /* presses made during the install don't count */
-            while (wait_press() != SDL_CONTROLLER_BUTTON_A) {
+        ui_button b;
+        while ((b = ui_sdl_button()) != UI_BTN_NONE) {
+            dirty = true;
+            ui_lib_action a = ui_library_input(&lib, b, rows);
+            if (a == UI_LIB_EXIT) {
+                to_dashboard();
+            } else if (a == UI_LIB_INSTALL) {
+                game *g = &games[lib.list.cur];
+                run_install(g, &items[lib.list.cur]);
+                ui_lib_state st = items[lib.list.cur].state;
+                snprintf(status, sizeof status, "%s: %s", g->name,
+                         st == UI_LIB_INSTALLED ? "installed"
+                         : st == UI_LIB_STOPPED ? "stopped; install it again to carry on"
+                                                : "not installed");
             }
+        }
+        int pan = ui_pan_x(SDL_GetTicks(), range);
+        if (pan != pan_now) {
+            pan_now = pan;
+            dirty = true;
+        }
+        if (dirty) {
+            ui_sdl_begin(ui_col_bg);
+            ui_library_draw(&screen, &lib, pan_now, status);
+            ui_sdl_present();
+            dirty = false;
+        } else {
+            Sleep(5);
         }
     }
 }
@@ -1092,7 +1220,7 @@ static void pick_and_install(game *games, int count)
 int main(void)
 {
     XVideoSetMode(640, 480, 32, REFRESH_DEFAULT);
-    debugPrint("xiso-cartographer %s - install (M6)\n", xc_version_string());
+    debugPrint("xiso-cartographer %s\n", xc_version_string());
     xc_nx_clock(&clk);
     run_start_ms = now_ms();
     pads_init();
@@ -1108,7 +1236,7 @@ int main(void)
         halt();
     }
     open_log();
-    out("==== xiso-cartographer %s install ====\n", xc_version_string());
+    out("==== xiso-cartographer %s ====\n", xc_version_string());
     load_credentials();
     load_catalog();
 
@@ -1122,18 +1250,26 @@ int main(void)
     }
 
     int count = 0;
-    game *games = catalog(&map, local, nlocal, &count);
-    if (games == NULL || count == 0) {
-        out("Nothing to install: no map entries and nothing in " ISO_DIR "\n");
+    game *games = list_games(&map, local, nlocal, &count);
+    ui_lib_item *items = calloc(count > 0 ? (size_t)count : 1, sizeof *items);
+    if (games == NULL || items == NULL) {
+        out("Out of memory for the list of games\n");
         halt();
+    }
+    for (int i = 0; i < count; i++) {
+        items[i] =
+            (ui_lib_item){games[i].name, games[i].facts, games[i].about, UI_LIB_NOT_TRIED, NULL};
     }
     if (!pads_ok) {
         out("No controller support (SDL), so nothing can be picked\n");
         halt();
     }
-    out("List: %d game(s). Pick one on the screen; nothing installs until you do.\n", count);
-    debugPrint("\nPress A to see the list.\n");
-    while (wait_press() != SDL_CONTROLLER_BUTTON_A) {
+    const char *why_not = NULL;
+    if (!ui_sdl_open(&screen, "D:", &why_not)) {
+        out("The screens can't start: %s\n", why_not);
+        halt();
     }
-    pick_and_install(games, count); /* returns to the dashboard from there */
+    out("List: %d game(s). Pick one on the screen; nothing installs until you do.\n", count);
+    screen_up = true;
+    library(games, items, count); /* returns to the dashboard from there */
 }
