@@ -14,6 +14,7 @@ add_library(xcat
   src/http.c
   src/http_client.c
   src/install.c
+  src/installed.c
   src/journal.c
   src/json.c
   src/map.c

@@ -19,7 +19,9 @@
  *
  * Startup is shown on nxdk's debug console. Then the screens take over (M8, ADR 0015,
  * docs/ui-style.md): the library lists the games, A asks before installing one, and the
- * install screen shows the progress; B asks before stopping it. Every message is in the log.
+ * install screen shows the progress; B asks before stopping it. The games already in
+ * E:\Games (a marker, or a journal for an unfinished one: xcat/installed.h) are marked in the
+ * list and listed under INSTALLED. Every message is in the log.
  */
 #include <SDL.h>
 #include <hal/debug.h>
@@ -40,6 +42,7 @@
 #include "xcat/credentials.h"
 #include "xcat/http_client.h"
 #include "xcat/install.h"
+#include "xcat/installed.h"
 #include "xcat/map.h"
 #include "xcat/nxdk.h"
 #include "xcat/version.h"
@@ -1188,6 +1191,162 @@ static game *list_games(const xc_map *map, char local[][XC_NX_PATH_MAX], int nlo
     return games;
 }
 
+/* --- what's already in E:\Games (xcat/installed.h) ------------------------------------- */
+
+#define MAX_FOUND 256
+
+typedef struct found {
+    char folder[XC_FATX_MAX_NAME + 1];
+    xc_installed in;
+    char facts[64];  /* size, files */
+    char note[96];   /* where */
+    char about[400]; /* the title, the checks, where it came from */
+} found;
+
+static found *founds; /* MAX_FOUND of them, sorted by folder */
+static int found_count;
+static ui_lib_item found_items[MAX_FOUND];
+
+static int by_folder(const void *a, const void *b)
+{
+    const char *x = ((const found *)a)->folder;
+    const char *y = ((const found *)b)->folder;
+    for (;; x++, y++) {
+        int cx = *x >= 'A' && *x <= 'Z' ? *x - 'A' + 'a' : (unsigned char)*x;
+        int cy = *y >= 'A' && *y <= 'Z' ? *y - 'A' + 'a' : (unsigned char)*y;
+        if (cx != cy || cx == 0) {
+            return cx - cy;
+        }
+    }
+}
+
+/* Where an image came from, for the details: a server's name, or the file's path. */
+static void origin_text(const char *image, char *out_text, size_t size)
+{
+    const char *host = strstr(image, "://");
+    if (host != NULL) {
+        host += 3;
+        (void)snprintf(out_text, size, "From %.*s.", (int)strcspn(host, "/:?#@"), host);
+    } else if (image[0] != '\0') {
+        (void)snprintf(out_text, size, "From %s.", image);
+    } else {
+        out_text[0] = '\0';
+    }
+}
+
+static void describe_found(found *f, ui_lib_item *item)
+{
+    const xc_marker *m = &f->in.marker;
+    snprintf(f->note, sizeof f->note, GAMES_DIR "\\%s", f->folder);
+    f->facts[0] = '\0';
+    if (f->in.state == XC_FOLDER_UNFINISHED) {
+        snprintf(f->about, sizeof f->about, "%s",
+                 "Not finished: install the game again from GAMES to carry on where it "
+                 "stopped.");
+    } else if (!f->in.marker_ok) {
+        snprintf(f->about, sizeof f->about, "%s",
+                 "Its " XC_INSTALL_MARKER " file can't be read, so there are no details.");
+    } else {
+        char size[24] = "";
+        char files[24] = "";
+        if (m->has_bytes) {
+            ui_format_size(size, sizeof size, m->bytes);
+        }
+        if (m->has_files) {
+            snprintf(files, sizeof files, "%llu file%s", (unsigned long long)m->files,
+                     m->files == 1 ? "" : "s");
+        }
+        join(f->facts, sizeof f->facts, size);
+        join(f->facts, sizeof f->facts, files);
+        char title[sizeof m->title + 32] = "";
+        if (m->has_title_id) {
+            snprintf(title, sizeof title, "%s%stitle ID %08lX. ", m->title,
+                     m->title[0] != '\0' ? ", " : "", (unsigned long)m->title_id);
+        }
+        char from[160];
+        origin_text(m->image, from, sizeof from);
+        snprintf(f->about, sizeof f->about, "%sChecked: every file's CRC-32%s. %s", title,
+                 strstr(m->verified, "image-hash") != NULL ? ", and the image's published hash"
+                                                           : "",
+                 from);
+    }
+    *item = (ui_lib_item){f->folder, f->facts, f->about,
+                          f->in.state == XC_FOLDER_INSTALLED ? UI_LIB_INSTALLED : UI_LIB_UNFINISHED,
+                          f->note};
+}
+
+/* Lists the finished and unfinished installs in E:\Games; other folders are left out. */
+static void scan_games(void)
+{
+    xc_install_io io;
+    xc_nx_install_io(&io);
+    found_count = 0;
+    WIN32_FIND_DATAA fd;
+    HANDLE h = founds != NULL ? FindFirstFileA(GAMES_DIR "\\*", &fd) : INVALID_HANDLE_VALUE;
+    if (h == INVALID_HANDLE_VALUE) {
+        return;
+    }
+    do {
+        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || strcmp(fd.cFileName, ".") == 0 ||
+            strcmp(fd.cFileName, "..") == 0) {
+            continue;
+        }
+        if (found_count == MAX_FOUND) {
+            out("More than %d games in " GAMES_DIR ": the rest aren't listed\n", MAX_FOUND);
+            break;
+        }
+        found *f = &founds[found_count];
+        snprintf(f->folder, sizeof f->folder, "%s", fd.cFileName);
+        if (xc_installed_check(&io, GAMES_DIR, f->folder, &f->in) == XC_OK &&
+            f->in.state != XC_FOLDER_OTHER) {
+            found_count++;
+        }
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+    qsort(founds, (size_t)found_count, sizeof *founds, by_folder);
+    for (int i = 0; i < found_count; i++) {
+        describe_found(&founds[i], &found_items[i]);
+    }
+}
+
+/* Marks the games already installed (the marker names the same image) or started (a journal
+   in a folder named after the image, as xc_install would choose it, ADR 0008). */
+static void mark_games(game *games, ui_lib_item *items, int count)
+{
+    int installed = 0;
+    int unfinished = 0;
+    for (int i = 0; i < count; i++) {
+        const char *source = games[i].entry != NULL ? games[i].entry->url : games[i].path;
+        char title[128];
+        title_from(source, title, sizeof title);
+        const found *half = NULL;
+        const found *done = NULL;
+        for (int k = 0; k < found_count && done == NULL; k++) {
+            const found *f = &founds[k];
+            if (f->in.state == XC_FOLDER_INSTALLED && f->in.marker_ok &&
+                strcmp(f->in.marker.image, source) == 0) {
+                done = f;
+            } else if (f->in.state == XC_FOLDER_UNFINISHED && half == NULL &&
+                       xc_installed_folder_for(f->folder, title)) {
+                half = f;
+            }
+        }
+        const found *f = done != NULL ? done : half;
+        if (f == NULL) {
+            continue;
+        }
+        snprintf(games[i].note, sizeof games[i].note, "%s" GAMES_DIR "\\%s",
+                 done != NULL ? "In " : "Started in an earlier visit, in ", f->folder);
+        items[i].state = done != NULL ? UI_LIB_INSTALLED : UI_LIB_UNFINISHED;
+        items[i].note = games[i].note;
+        installed += done != NULL;
+        unfinished += done == NULL;
+    }
+    out(GAMES_DIR ": %d folder(s) from this app; of the games listed, %d installed and %d "
+                  "unfinished\n",
+        found_count, installed, unfinished);
+}
+
 /* Installs g on the install screen until it's installed, or the user goes back: RETRY tries
    again. Leaves what the last attempt came to in `item`. */
 static void run_install(game *g, ui_lib_item *item)
@@ -1237,6 +1396,7 @@ static void library(game *games, ui_lib_item *items, int count)
 {
     static ui_library lib;
     ui_library_open(&lib, items, count);
+    ui_library_set_installed(&lib, found_items, found_count);
     int rows = ui_library_rows(&screen);
     int range = ui_pan_range(&screen);
     char status[160];
@@ -1256,6 +1416,8 @@ static void library(game *games, ui_lib_item *items, int count)
             } else if (a == UI_LIB_INSTALL) {
                 game *g = &games[lib.list.cur];
                 run_install(g, &items[lib.list.cur]);
+                scan_games();
+                ui_library_set_installed(&lib, found_items, found_count);
                 ui_lib_state st = items[lib.list.cur].state;
                 snprintf(status, sizeof status, "%s: %s", g->name,
                          st == UI_LIB_INSTALLED ? "installed"
@@ -1323,6 +1485,12 @@ int main(void)
         items[i] =
             (ui_lib_item){games[i].name, games[i].facts, games[i].about, UI_LIB_NOT_TRIED, NULL};
     }
+    founds = malloc(MAX_FOUND * sizeof *founds);
+    if (founds == NULL) {
+        out("Out of memory for the list of installed games: none are shown\n");
+    }
+    scan_games();
+    mark_games(games, items, count);
     if (!pads_ok) {
         out("No controller support (SDL), so nothing can be picked\n");
         halt();

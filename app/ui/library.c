@@ -29,6 +29,32 @@ void ui_library_open(ui_library *lib, const ui_lib_item *items, int count)
     lib->list.count = count;
 }
 
+void ui_library_set_installed(ui_library *lib, const ui_lib_item *items, int count)
+{
+    lib->installed = items;
+    lib->installed_count = count;
+    ui_list *l = &lib->installed_list;
+    l->count = count;
+    if (l->cur >= count) {
+        l->cur = count > 0 ? count - 1 : 0;
+    }
+    if (l->top > l->cur) {
+        l->top = l->cur;
+    }
+}
+
+/* The highlighted line of the section shown, or NULL. */
+static const ui_lib_item *current(const ui_library *lib)
+{
+    if (lib->section == UI_LIB_GAMES && lib->count > 0) {
+        return &lib->items[lib->list.cur];
+    }
+    if (lib->section == UI_LIB_INSTALLED_GAMES && lib->installed_count > 0) {
+        return &lib->installed[lib->installed_list.cur];
+    }
+    return NULL;
+}
+
 int ui_library_rows(const ui_draw *d)
 {
     return ui_list_rows(d, list_in);
@@ -78,6 +104,8 @@ ui_lib_action ui_library_input(ui_library *lib, ui_button b, int rows)
         } else {
             (void)ui_list_input(&lib->list, b, rows);
         }
+    } else if (lib->section == UI_LIB_INSTALLED_GAMES && b != UI_BTN_A) {
+        (void)ui_list_input(&lib->installed_list, b, rows);
     }
     return UI_LIB_NONE;
 }
@@ -86,6 +114,12 @@ static const char *item_name(void *ctx, int i)
 {
     const ui_library *lib = ctx;
     return lib->items[i].name;
+}
+
+static const char *installed_name(void *ctx, int i)
+{
+    const ui_library *lib = ctx;
+    return lib->installed[i].name;
 }
 
 static void draw_sections(const ui_draw *d, const ui_library *lib)
@@ -110,13 +144,15 @@ static void draw_summary(const ui_draw *d, const ui_library *lib)
     int x = summary.x + 14;
     int w = summary.w - 24;
     int y = summary.y + PAD;
-    (void)ui_text_fit(d, UI_FONT_LABEL, x, y, w, ui_col_accent, "THIS VISIT");
+    (void)ui_text_fit(d, UI_FONT_LABEL, x, y, w, ui_col_accent, "SUMMARY");
     y += d->line_height(d->ctx, UI_FONT_LABEL) + 4;
     int installed = 0;
     int unfinished = 0;
     for (int i = 0; i < lib->count; i++) {
         installed += lib->items[i].state == UI_LIB_INSTALLED;
-        unfinished += lib->items[i].state == UI_LIB_FAILED || lib->items[i].state == UI_LIB_STOPPED;
+        unfinished += lib->items[i].state == UI_LIB_FAILED ||
+                      lib->items[i].state == UI_LIB_STOPPED ||
+                      lib->items[i].state == UI_LIB_UNFINISHED;
     }
     char line[48];
     int sh = d->line_height(d->ctx, UI_FONT_SMALL);
@@ -154,9 +190,10 @@ static void draw_detail(const ui_draw *d, const ui_lib_item *it)
     if (it->state != UI_LIB_NOT_TRIED) {
         (void)ui_text_fit(d, UI_FONT_LABEL, x, y, w,
                           it->state == UI_LIB_INSTALLED ? ui_col_accent : ui_col_text,
-                          it->state == UI_LIB_INSTALLED ? "INSTALLED"
-                          : it->state == UI_LIB_STOPPED ? "STOPPED"
-                                                        : "FAILED");
+                          it->state == UI_LIB_INSTALLED    ? "INSTALLED"
+                          : it->state == UI_LIB_STOPPED    ? "STOPPED"
+                          : it->state == UI_LIB_UNFINISHED ? "UNFINISHED"
+                                                           : "FAILED");
         y += d->line_height(d->ctx, UI_FONT_LABEL);
         if (it->note != NULL && it->note[0] != '\0') {
             y += ui_text_wrap(d, UI_FONT_SMALL, (ui_rect){x, y, w, 3 * sh}, ui_col_text, it->note) *
@@ -172,6 +209,15 @@ static void draw_detail(const ui_draw *d, const ui_lib_item *it)
 static void draw_list(const ui_draw *d, ui_library *lib)
 {
     ui_panel(d, list, UI_CHAMFER, ui_col_panel, ui_col_border);
+    if (lib->section == UI_LIB_INSTALLED_GAMES) {
+        if (lib->installed_count == 0) {
+            (void)ui_text_wrap(d, UI_FONT_BODY, list_in, ui_col_dim,
+                               "Nothing installed yet. Games go to E:\\Games.");
+        } else {
+            ui_list_draw(d, &lib->installed_list, list_in, installed_name, lib);
+        }
+        return;
+    }
     if (lib->section != UI_LIB_GAMES) {
         (void)ui_text_wrap(d, UI_FONT_BODY, list_in, ui_col_dim,
                            "Not here yet: this section comes in a later version.");
@@ -199,8 +245,7 @@ static void draw_screen(const ui_draw *d, ui_library *lib, int pan, const char *
     draw_sections(d, lib);
     draw_summary(d, lib);
     draw_list(d, lib);
-    bool games = lib->section == UI_LIB_GAMES && lib->count > 0;
-    draw_detail(d, games ? &lib->items[lib->list.cur] : NULL);
+    draw_detail(d, current(lib));
 
     ui_panel(d, footer, 0, ui_col_panel, ui_col_border);
     int sh = d->line_height(d->ctx, UI_FONT_SMALL);
@@ -209,8 +254,10 @@ static void draw_screen(const ui_draw *d, ui_library *lib, int pan, const char *
         (void)ui_text_fit(d, UI_FONT_SMALL, footer.x + 12, by, footer.w - 24, ui_col_text, status);
     }
     (void)ui_text_fit(d, UI_FONT_SMALL, footer.x + 12, by + sh, footer.w - 24, ui_col_dim,
-                      lib->in_sections ? "Up Down section  Right or A games  Back exit"
-                                       : "A install  LT RT page  Left sections  Back exit");
+                      lib->in_sections ? "Up Down section  Right or A list  Back exit"
+                      : lib->section == UI_LIB_GAMES
+                          ? "A install  LT RT page  Left sections  Back exit"
+                          : "LT RT page  Left sections  Back exit");
 }
 
 void ui_library_draw(const ui_draw *d, ui_library *lib, int pan, const char *status)

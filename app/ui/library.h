@@ -5,8 +5,9 @@
  * The library screen (M8, docs/ui-style.md#library): the sections on the left, the games in a
  * list, the highlighted game's details beside it, and a footer. A asks before installing the
  * highlighted game (the map is a catalog: nothing installs unasked), and Back asks before
- * leaving for the dashboard. Only GAMES works so far; the other sections say so. Plain C
- * over ui_draw like the widgets, tested on the PC (test_ui_library).
+ * leaving for the dashboard. GAMES lists what can be installed and INSTALLED what's in
+ * E:\Games; the other sections say they aren't here yet. Plain C over ui_draw like the
+ * widgets, tested on the PC (test_ui_library).
  */
 
 #include <stdbool.h>
@@ -20,10 +21,11 @@ extern "C" {
 #endif
 
 typedef enum ui_lib_state {
-    UI_LIB_NOT_TRIED, /* not installed in this run */
-    UI_LIB_INSTALLED, /* installed and verified in this run */
-    UI_LIB_FAILED,    /* tried in this run, and it failed */
-    UI_LIB_STOPPED,   /* tried in this run, and the user stopped it */
+    UI_LIB_NOT_TRIED,  /* not installed, and nothing started */
+    UI_LIB_INSTALLED,  /* installed and verified, in this run or an earlier one */
+    UI_LIB_FAILED,     /* tried in this run, and it failed */
+    UI_LIB_STOPPED,    /* tried in this run, and the user stopped it */
+    UI_LIB_UNFINISHED, /* started in an earlier run and not finished: installing carries on */
 } ui_lib_state;
 
 /* One game, as the caller describes it. The strings are the caller's and must stay alive. */
@@ -32,7 +34,7 @@ typedef struct ui_lib_item {
     const char *facts; /* under the heading, small: year, region, size; may be "" */
     const char *about; /* wrapped below: who made it, the release, where it comes from */
     ui_lib_state state;
-    const char *note; /* after an install in this run: what happened; may be NULL */
+    const char *note; /* what happened, or where it's installed; may be NULL */
 } ui_lib_item;
 
 typedef enum ui_lib_section {
@@ -50,9 +52,12 @@ typedef enum ui_lib_action {
 } ui_lib_action;
 
 typedef struct ui_library {
-    const ui_lib_item *items;
+    const ui_lib_item *items; /* GAMES */
     int count;
     ui_list list;
+    const ui_lib_item *installed; /* INSTALLED: the folders in E:\Games */
+    int installed_count;
+    ui_list installed_list;
     ui_lib_section section;
     bool in_sections;     /* the D-pad moves between the sections, not the games */
     ui_lib_action asking; /* what the open dialog asks; UI_LIB_NONE: none is open */
@@ -61,15 +66,19 @@ typedef struct ui_library {
     char message[256]; /* the dialog's */
 } ui_library;
 
-/* Starts the screen on the first game of GAMES. */
+/* Starts the screen on the first game of GAMES, with nothing in INSTALLED. */
 void ui_library_open(ui_library *lib, const ui_lib_item *items, int count);
+
+/* Gives INSTALLED its list (again, after an install), keeping its place where it can. */
+void ui_library_set_installed(ui_library *lib, const ui_lib_item *items, int count);
 
 /* How many list lines the screen shows. */
 int ui_library_rows(const ui_draw *d);
 
-/* One button press. In the list, the D-pad, LT and RT move (ui_list_input), Left goes to the
-   sections, A asks to install the highlighted game and Back asks to leave. In the sections,
-   Up and Down choose one, and Right or A go back to the list. In a dialog, its buttons. */
+/* One button press. In a list, the D-pad, LT and RT move (ui_list_input), Left goes to the
+   sections, A in GAMES asks to install the highlighted game and Back asks to leave. In the
+   sections, Up and Down choose one, and Right or A go back to the list. In a dialog, its buttons.
+ */
 ui_lib_action ui_library_input(ui_library *lib, ui_button b, int rows);
 
 /* Draws the screen with the background at pan (ui_pan_x), and `status` (may be NULL) in the

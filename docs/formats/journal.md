@@ -108,7 +108,7 @@ If files overlap in the image (two entries sharing data), a single front-to-back
 
 ### 7.1 The marker
 
-After verification the installer writes `.xcat-installed` in the game's folder. It is informational: nothing reads it to decide anything yet. It is UTF-8 text, one `key=value` per line after a first line naming the program:
+After verification the installer writes `.xcat-installed` in the game's folder. Nothing reads it to decide how an install runs; from M8 the app reads it to show what's installed ([`xcat/installed.h`](../../core/include/xcat/installed.h), [ui-style.md](../ui-style.md#library)): a listed game whose URL or path equals `image=` is shown as installed. It is UTF-8 text, one `key=value` per line after a first line naming the program:
 
 ```
 xiso-cartographer <version>
@@ -122,7 +122,7 @@ title_id=<8 hex, upper case>         (only when default.xbe has a readable certi
 title=<the certificate's title name>
 ```
 
-Readers must ignore keys they don't know. `title_id` and `title` are new in M6. A game whose `default.xbe` is missing or isn't an XBE still installs, and its marker has neither.
+Readers must ignore keys they don't know. The app's reader (`xc_marker_parse`) also accepts CRLF line ends and a missing final LF, refuses a file over 8 KiB or one whose first line doesn't start with `xiso-cartographer`, and treats a value that isn't UTF-8 text, or a malformed number, hash or title ID, as absent. `title_id` and `title` are new in M6. A game whose `default.xbe` is missing or isn't an XBE still installs, and its marker has neither.
 
 ## 8. Changes
 

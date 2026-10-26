@@ -1,0 +1,9 @@
+xiso-cartographer 0.8.0
+image=http://192.168.1.20:8080/Alpha%20Racer.xiso.iso
+files=12
+bytes=734003200
+verified=crc32,image-hash
+md5=0123456789abcdef0123456789abcdef
+sha1=0123456789abcdef0123456789abcdef01234567
+title_id=4D53000A
+title=Alpha Racer
