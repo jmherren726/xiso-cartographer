@@ -18,8 +18,8 @@
  * is compared with the catalog's.
  *
  * Startup is shown on nxdk's debug console. Then the screens take over (M8, ADR 0015,
- * docs/ui-style.md): the library lists the games, A asks before installing one, and the
- * install screen shows the progress; B asks before stopping it. The games already in
+ * docs/ui-style.md): the library lists the games, Y searches them, A asks before installing
+ * one, and the install screen shows the progress; B asks before stopping it. The games already in
  * E:\Games (a marker, or a journal for an unfinished one: xcat/installed.h) are marked in the
  * list and listed under INSTALLED. Every message is in the log.
  */
@@ -1395,7 +1395,12 @@ static void run_install(game *g, ui_lib_item *item)
 static void library(game *games, ui_lib_item *items, int count)
 {
     static ui_library lib;
-    ui_library_open(&lib, items, count);
+    int *shown = calloc(count > 0 ? (size_t)count : 1, sizeof *shown);
+    if (shown == NULL) {
+        out("Out of memory for the list of games\n");
+        halt();
+    }
+    ui_library_open(&lib, items, count, shown);
     ui_library_set_installed(&lib, found_items, found_count);
     int rows = ui_library_rows(&screen);
     int range = ui_pan_range(&screen);
@@ -1414,11 +1419,12 @@ static void library(game *games, ui_lib_item *items, int count)
             if (a == UI_LIB_EXIT) {
                 to_dashboard();
             } else if (a == UI_LIB_INSTALL) {
-                game *g = &games[lib.list.cur];
-                run_install(g, &items[lib.list.cur]);
+                int i = ui_library_game(&lib);
+                game *g = &games[i];
+                run_install(g, &items[i]);
                 scan_games();
                 ui_library_set_installed(&lib, found_items, found_count);
-                ui_lib_state st = items[lib.list.cur].state;
+                ui_lib_state st = items[i].state;
                 snprintf(status, sizeof status, "%s: %s", g->name,
                          st == UI_LIB_INSTALLED ? "installed"
                          : st == UI_LIB_STOPPED ? "stopped; install it again to carry on"

@@ -2,6 +2,7 @@
 #include "library.h"
 
 #include <stdio.h>
+#include <string.h>
 
 #include "theme.h"
 
@@ -21,12 +22,82 @@ static const ui_rect footer = {32, 408, 576, 48};
 /* The list's lines, inside its panel: 8 pixels in at the sides, PAD at the top and bottom. */
 static const ui_rect list_in = {218, 90, 196, 300};
 
-void ui_library_open(ui_library *lib, const ui_lib_item *items, int count)
+/* The search's panel, right of the title tab, while GAMES is searched. */
+static const ui_rect search_box = {280, 24, 328, 46};
+
+void ui_library_open(ui_library *lib, const ui_lib_item *items, int count, int *shown)
 {
     *lib = (ui_library){0};
     lib->items = items;
     lib->count = count;
+    lib->shown = shown;
+    for (int i = 0; i < count; i++) {
+        shown[i] = i;
+    }
     lib->list.count = count;
+}
+
+int ui_library_game(const ui_library *lib)
+{
+    return lib->list.count > 0 ? lib->shown[lib->list.cur] : -1;
+}
+
+static char lower(char c)
+{
+    return c >= 'A' && c <= 'Z' ? (char)(c - 'A' + 'a') : c;
+}
+
+/* True if s holds w[0, n), ASCII case-insensitive. */
+static bool has_word(const char *s, const char *w, size_t n)
+{
+    if (s == NULL) {
+        return false;
+    }
+    for (; *s != '\0'; s++) {
+        size_t i = 0;
+        while (i < n && s[i] != '\0' && lower(s[i]) == lower(w[i])) {
+            i++;
+        }
+        if (i == n) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool ui_library_matches(const ui_lib_item *it, const char *query)
+{
+    const char *p = query;
+    for (;;) {
+        while (*p == ' ') {
+            p++;
+        }
+        if (*p == '\0') {
+            return true;
+        }
+        size_t n = strcspn(p, " ");
+        if (!has_word(it->name, p, n) && !has_word(it->facts, p, n) && !has_word(it->about, p, n)) {
+            return false;
+        }
+        p += n;
+    }
+}
+
+/* Lists the games matching lib->query, keeping the highlighted one if it's among them. */
+static void search(ui_library *lib, int rows)
+{
+    int was = ui_library_game(lib);
+    int n = 0;
+    int cur = 0;
+    for (int i = 0; i < lib->count; i++) {
+        if (ui_library_matches(&lib->items[i], lib->query)) {
+            if (i == was) {
+                cur = n;
+            }
+            lib->shown[n++] = i;
+        }
+    }
+    lib->list = (ui_list){n, cur, cur >= rows ? cur - rows + 1 : 0};
 }
 
 void ui_library_set_installed(ui_library *lib, const ui_lib_item *items, int count)
@@ -46,8 +117,8 @@ void ui_library_set_installed(ui_library *lib, const ui_lib_item *items, int cou
 /* The highlighted line of the section shown, or NULL. */
 static const ui_lib_item *current(const ui_library *lib)
 {
-    if (lib->section == UI_LIB_GAMES && lib->count > 0) {
-        return &lib->items[lib->list.cur];
+    if (lib->section == UI_LIB_GAMES && lib->list.count > 0) {
+        return &lib->items[ui_library_game(lib)];
     }
     if (lib->section == UI_LIB_INSTALLED_GAMES && lib->installed_count > 0) {
         return &lib->installed[lib->installed_list.cur];
@@ -65,7 +136,7 @@ static void ask(ui_library *lib, ui_lib_action what)
     if (what == UI_LIB_INSTALL) {
         (void)snprintf(lib->message, sizeof lib->message,
                        "Install %s to E:\\Games? It can be stopped with B and resumed later.",
-                       lib->items[lib->list.cur].name);
+                       lib->items[ui_library_game(lib)].name);
         lib->dialog = (ui_dialog){"INSTALL", lib->message, {"INSTALL", "CANCEL", NULL}, 0, 1};
     } else {
         lib->dialog =
@@ -86,7 +157,25 @@ ui_lib_action ui_library_input(ui_library *lib, ui_button b, int rows)
         lib->asking = UI_LIB_NONE;
         return c == 0 ? what : UI_LIB_NONE;
     }
-    if (b == UI_BTN_BACK) {
+    if (lib->searching) {
+        ui_kbd_result r = ui_kbd_input(&lib->kbd, b);
+        if (r != UI_KBD_EDITING) {
+            lib->searching = false;
+        }
+        if (r == UI_KBD_DONE) {
+            (void)snprintf(lib->query, sizeof lib->query, "%s", lib->typing);
+            lib->section = UI_LIB_GAMES;
+            lib->in_sections = false;
+            search(lib, rows);
+        }
+        return UI_LIB_NONE;
+    }
+    if (b == UI_BTN_Y) {
+        (void)snprintf(lib->typing, sizeof lib->typing, "%s", lib->query);
+        ui_kbd_open(&lib->kbd, "SEARCH", lib->typing, sizeof lib->typing, false);
+        lib->searching = true;
+        lib->backdrop = false;
+    } else if (b == UI_BTN_BACK) {
         ask(lib, UI_LIB_EXIT);
     } else if (lib->in_sections) {
         if (b == UI_BTN_UP && lib->section > 0) {
@@ -99,8 +188,11 @@ ui_lib_action ui_library_input(ui_library *lib, ui_button b, int rows)
     } else if (b == UI_BTN_LEFT) {
         lib->in_sections = true;
     } else if (lib->section == UI_LIB_GAMES) {
-        if (b == UI_BTN_A && lib->count > 0) {
+        if (b == UI_BTN_A && lib->list.count > 0) {
             ask(lib, UI_LIB_INSTALL);
+        } else if (b == UI_BTN_B && lib->query[0] != '\0') {
+            lib->query[0] = '\0';
+            search(lib, rows);
         } else {
             (void)ui_list_input(&lib->list, b, rows);
         }
@@ -113,7 +205,7 @@ ui_lib_action ui_library_input(ui_library *lib, ui_button b, int rows)
 static const char *item_name(void *ctx, int i)
 {
     const ui_library *lib = ctx;
-    return lib->items[i].name;
+    return lib->items[lib->shown[i]].name;
 }
 
 static const char *installed_name(void *ctx, int i)
@@ -229,19 +321,63 @@ static void draw_list(const ui_draw *d, ui_library *lib)
                            "E:\\xcat\\isos.");
         return;
     }
+    if (lib->list.count == 0) {
+        char line[UI_LIB_QUERY_MAX + 64];
+        (void)snprintf(line, sizeof line,
+                       "No game matches \"%s\". Y to search again, B to list them all.",
+                       lib->query);
+        (void)ui_text_wrap(d, UI_FONT_BODY, list_in, ui_col_dim, line);
+        return;
+    }
     ui_list_draw(d, &lib->list, list_in, item_name, lib);
+}
+
+/* While GAMES is searched: what for, and how many games match. */
+static void draw_search(const ui_draw *d, const ui_library *lib)
+{
+    ui_panel(d, search_box, UI_CHAMFER, ui_col_panel, ui_col_border);
+    int lh = d->line_height(d->ctx, UI_FONT_LABEL);
+    int sh = d->line_height(d->ctx, UI_FONT_SMALL);
+    int x = search_box.x + 16;
+    int right = search_box.x + search_box.w - 16;
+    int y = search_box.y + (search_box.h - lh) / 2;
+    x += ui_text_fit(d, UI_FONT_LABEL, x, y, right - x, ui_col_accent, "SEARCH") + 12;
+    char n[32];
+    (void)snprintf(n, sizeof n, "%d of %d", lib->list.count, lib->count);
+    int nw = d->text_width(d->ctx, UI_FONT_SMALL, n, strlen(n));
+    int sy = search_box.y + (search_box.h - sh) / 2;
+    (void)ui_text_fit(d, UI_FONT_SMALL, right - nw, sy, nw, ui_col_dim, n);
+    (void)ui_text_fit(d, UI_FONT_BODY, x,
+                      search_box.y + (search_box.h - d->line_height(d->ctx, UI_FONT_BODY)) / 2,
+                      right - nw - 12 - x, ui_col_text, lib->query);
+}
+
+static const char *hints(const ui_library *lib)
+{
+    if (lib->in_sections) {
+        return "Up Down section  Right or A list  Y search  Back exit";
+    }
+    if (lib->section != UI_LIB_GAMES) {
+        return "LT RT page  Left sections  Y search  Back exit";
+    }
+    return lib->query[0] != '\0' ? "A install  B list all  Y search  LT RT page  Left sections"
+                                 : "A install  Y search  LT RT page  Left sections  Back exit";
 }
 
 static void draw_screen(const ui_draw *d, ui_library *lib, int pan, const char *status)
 {
-    const ui_rect panels[] = {tab, nav, summary, list, detail, footer};
-    ui_background_under(d, pan, panels, (int)(sizeof panels / sizeof panels[0]));
+    bool searched = lib->query[0] != '\0';
+    const ui_rect panels[] = {tab, nav, summary, list, detail, footer, search_box};
+    ui_background_under(d, pan, panels, (int)(sizeof panels / sizeof panels[0]) - !searched);
 
     ui_panel(d, tab, UI_CHAMFER, ui_col_panel, ui_col_border);
     int th = d->line_height(d->ctx, UI_FONT_TITLE);
     (void)ui_text_fit(d, UI_FONT_TITLE, tab.x + 22, tab.y + (tab.h - th) / 2, tab.w - 30,
                       ui_col_accent, "LIBRARY");
 
+    if (searched) {
+        draw_search(d, lib);
+    }
     draw_sections(d, lib);
     draw_summary(d, lib);
     draw_list(d, lib);
@@ -254,15 +390,12 @@ static void draw_screen(const ui_draw *d, ui_library *lib, int pan, const char *
         (void)ui_text_fit(d, UI_FONT_SMALL, footer.x + 12, by, footer.w - 24, ui_col_text, status);
     }
     (void)ui_text_fit(d, UI_FONT_SMALL, footer.x + 12, by + sh, footer.w - 24, ui_col_dim,
-                      lib->in_sections ? "Up Down section  Right or A list  Back exit"
-                      : lib->section == UI_LIB_GAMES
-                          ? "A install  LT RT page  Left sections  Back exit"
-                          : "LT RT page  Left sections  Back exit");
+                      hints(lib));
 }
 
 void ui_library_draw(const ui_draw *d, ui_library *lib, int pan, const char *status)
 {
-    if (lib->asking == UI_LIB_NONE) {
+    if (lib->asking == UI_LIB_NONE && !lib->searching) {
         lib->backdrop = false;
         draw_screen(d, lib, pan, status);
         return;
@@ -274,5 +407,9 @@ void ui_library_draw(const ui_draw *d, ui_library *lib, int pan, const char *sta
         ui_backdrop_save(d);
         lib->backdrop = true;
     }
-    ui_dialog_draw(d, &lib->dialog);
+    if (lib->searching) {
+        ui_kbd_draw(d, &lib->kbd);
+    } else {
+        ui_dialog_draw(d, &lib->dialog);
+    }
 }
