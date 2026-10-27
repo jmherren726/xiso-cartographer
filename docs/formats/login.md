@@ -1,6 +1,6 @@
 # archive.org login on the console
 
-**Status:** Normative. §1–§4 are implemented by `xcat/login.h` (M8) and §2 by `xc_http_post` ([http.md §10](http.md#10-post-for-logins)). §5 is implemented by `xc_cred_set_section` (`xcat/credentials.h`) and `xc_nx_replace_file` (`xcat/nxdk.h`), and §6 by the console's SETTINGS section. The reasons are in [ADR 0010](../adr/0010-on-box-login-required-for-beta.md) and [ADR 0007](../adr/0007-scoped-user-credentials.md).
+**Status:** Normative. §1–§4 are implemented by `xcat/login.h` (M8) and §2 by `xc_http_post` ([http.md §10](http.md#10-post-for-logins)). §5 is implemented by `xc_cred_set_section` (`xcat/credentials.h`) and `xc_nx_replace_file` (`xcat/nxdk.h`), and §6 and §7 by the console (SETTINGS, and the install's end dialog). The reasons are in [ADR 0010](../adr/0010-on-box-login-required-for-beta.md) and [ADR 0007](../adr/0007-scoped-user-credentials.md).
 
 The user logs in to archive.org on the Xbox with their email address and password. The password is sent once and never stored. Only the session that archive.org returns is written, as the `[archive]` section of the [credentials file](credentials.md).
 
@@ -74,8 +74,17 @@ A login writes the section of §4 under the name `archive`. Logging out removes 
 - Logs and messages name the section (`[archive]`), never a value. Not the email, the password or a cookie.
 - Logging out on the console removes the section. The session itself ends only when the user logs out on archive.org or changes the password there. The console says so.
 
-## 7. Changes
+## 7. Logging in again
+
+When a session expires or is revoked, the user is asked to log in again. Nothing refreshes it in the background ([ADR 0010](../adr/0010-on-box-login-required-for-beta.md) decision 4).
+
+1. An install fails with `401` or `403` (`XC_ERR_HTTP_DENIED`), and so does any request that carried credentials ([credentials.md §7](credentials.md#7-errors)). Nothing is retried.
+2. Logging in again can help if the refused hop carried the `[archive]` section, or if no `[archive]` section exists and the hop's host is `archive.org` or a subdomain of it. Then the install's end dialog offers **LOG IN** and BACK, instead of RETRY and BACK. Any other refusal, such as one for a section the user wrote by hand for another server, keeps RETRY and BACK.
+3. LOG IN opens the email and password keyboards (§1–§6). If the login succeeds, the same install starts again at once. Its journal carries it on where it stopped (resumable, [stream-install.md](stream-install.md)). If the login fails or is cancelled, the user is told why and nothing starts. The game can be installed again by hand.
+
+## 8. Changes
 
 | Version | Date | Change |
 |---|---|---|
 | 1 | 2026-10-27 | First version (M8). |
+| 1 | 2026-10-27 | §3: cookies in Set-Cookie form, as archive.org sends them (found on hardware). §7: logging in again after a refused download. |

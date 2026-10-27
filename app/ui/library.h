@@ -109,6 +109,10 @@ void ui_library_set_installed(ui_library *lib, const ui_lib_item *items, int cou
 /* Says whether the archive.org account is logged in (SETTINGS). */
 void ui_library_set_account(ui_library *lib, bool logged_in);
 
+/* Opens the keyboard for the email, then the password, as A in SETTINGS does when logged out:
+   for logging in again after a download was refused. */
+void ui_library_login(ui_library *lib);
+
 /* Wipes the password typed for UI_LIB_LOGIN, once the login has used it. */
 void ui_library_forget_password(ui_library *lib);
 

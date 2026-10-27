@@ -38,7 +38,15 @@ void ui_install_end(ui_install_view *v, bool ok, const char *message)
                    : (ui_dialog){"NOT INSTALLED", v->message, {"RETRY", "BACK", NULL}, 0, 1};
     v->stopping = false;
     v->ended = true;
+    v->login = false;
     v->backdrop = false;
+}
+
+void ui_install_end_login(ui_install_view *v, const char *message)
+{
+    ui_install_end(v, false, message);
+    v->dialog.choices[0] = "LOG IN";
+    v->login = true;
 }
 
 ui_inst_action ui_install_input(ui_install_view *v, ui_button b)
@@ -48,8 +56,11 @@ ui_inst_action ui_install_input(ui_install_view *v, ui_button b)
         if (c == UI_DIALOG_OPEN) {
             return UI_INST_NONE;
         }
-        /* OK alone, or RETRY and BACK. */
-        return v->dialog.choices[1] != NULL && c == 0 ? UI_INST_RETRY : UI_INST_DONE;
+        /* OK alone, or RETRY (LOG IN) and BACK. */
+        if (v->dialog.choices[1] == NULL || c != 0) {
+            return UI_INST_DONE;
+        }
+        return v->login ? UI_INST_LOGIN : UI_INST_RETRY;
     }
     if (v->stopping) {
         int c = ui_dialog_input(&v->dialog, b);

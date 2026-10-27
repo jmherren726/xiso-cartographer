@@ -428,6 +428,23 @@ static void test_login(void)
     TEST_ASSERT_TRUE(all_zero(lib.password, sizeof lib.password));
 }
 
+/* ui_library_login, after a refused download: the same keyboards, over any section. */
+static void test_login_again(void)
+{
+    ui_library lib;
+    ui_library_open(&lib, items, 3, shown);
+    ui_library_tell(&lib, "X", "an open message goes");
+    ui_library_login(&lib);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, lib.asking);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_TYPING_EMAIL, lib.typing_for);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_GAMES, lib.section);
+    type(&lib, "me");
+    (void)ui_library_input(&lib, UI_BTN_START, 5);
+    type(&lib, "zyx");
+    TEST_ASSERT_EQUAL_INT(UI_LIB_LOGIN, ui_library_input(&lib, UI_BTN_START, 5));
+    ui_library_forget_password(&lib);
+}
+
 /* B at either step logs nothing in; the password is wiped, the email kept for next time. */
 static void test_login_cancelled(void)
 {
@@ -503,6 +520,7 @@ int main(void)
     RUN_TEST(test_search_again);
     RUN_TEST(test_login);
     RUN_TEST(test_login_cancelled);
+    RUN_TEST(test_login_again);
     RUN_TEST(test_logout_and_tell);
     return UNITY_END();
 }
