@@ -174,7 +174,17 @@ eol         = LF / CRLF / end-of-file
 
 `UTF8-non-ascii` is any valid multi-byte UTF-8 sequence (RFC 3629). The prose sections are normative where they add constraints the grammar can't express (limits, path rules, duplicate handling).
 
-## 9. Changes
+## 9. Editing on the console
+
+SETTINGS' Map sources page (M8) edits the top-level map, `E:\xcat\map.txt`, a line at a time (`xcat/map_edit.h`). Maps it includes are never edited.
+
+- **Listed:** every line after the header that is an entry or a directive, in order. Comments and blank lines aren't listed, and invalid lines are, so they can be removed. Each line shows what the reader said about it (§7).
+- **Added:** a new line goes at the end of the file, after a line ending if the last line has none. A missing file becomes a new map: the header, a blank line, then the line. Three kinds can be added: `@archiveorg <identifier>` (§5.2, the identifier checked as there), `@include <url>` (§5.1, `http://` or `https://` only, since a path typed on the console is rarely what's meant), and `<title ID> = <url>` (§4). The include and the entry are checked by loading the line alone in a map, so they follow every rule above; an invalid one isn't added and the reason is shown. The title ID's hex digits are written in capitals.
+- **Removed:** the whole line, line ending and all.
+- Every other byte stays as it was, comments, blank lines and line endings included. A file without a valid header (§3) isn't changed. The result must stay within 1 MiB (§6). On the console the file is replaced atomically: written to `map.txt.tmp`, flushed, then renamed over `map.txt`.
+- After each change the app loads the map again, includes and `@archiveorg` items too, and lists its games.
+
+## 10. Changes
 
 | Version | Date | Change |
 |---|---|---|
@@ -182,3 +192,4 @@ eol         = LF / CRLF / end-of-file
 | 1.0 | 2026-10-15 | Implemented. §6 states the cap of 256 stored problems; nothing else changed. |
 | 1.0 | 2026-10-20 | §4.2: zip URLs, and URLs inside a zip are invalid ([ADR 0009](../adr/0009-install-from-zip-archives.md) §8). Before any release, so the version stays 1.0. |
 | 1.0 | 2026-10-20 | §5.2: `@archiveorg` is implemented, with entries keyed by name ([ADR 0013](../adr/0013-archiveorg-source.md)); §6, §7 updated. Readers before this one warn and skip it, which §5.2 allowed, so the version stays 1.0. |
+| 1.0 | 2026-10-27 | §9: editing on the console (Map sources). The format is unchanged. |

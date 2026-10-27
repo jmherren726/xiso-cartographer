@@ -49,13 +49,24 @@ void ui_library_open(ui_library *lib, const ui_lib_item *items, int count, int *
     lib->hosts = &archive;
     lib->host_count = 1;
     lib->host_list.count = 1;
+    lib->source_list.count = 1; /* "Add source" */
 }
 
-void ui_library_set_hosts(ui_library *lib, const ui_lib_host *hosts, int count)
+void ui_library_set_items(ui_library *lib, const ui_lib_item *items, int count, int *shown)
 {
-    lib->hosts = hosts;
-    lib->host_count = count;
-    ui_list *l = &lib->host_list;
+    lib->items = items;
+    lib->count = count;
+    lib->shown = shown;
+    for (int i = 0; i < count; i++) {
+        shown[i] = i;
+    }
+    lib->list = (ui_list){count, 0, 0};
+    lib->query[0] = '\0';
+}
+
+/* Keeps a list's place in range after its lines changed. */
+static void keep_place(ui_list *l, int count)
+{
     l->count = count;
     if (l->cur >= count) {
         l->cur = count > 0 ? count - 1 : 0;
@@ -63,6 +74,25 @@ void ui_library_set_hosts(ui_library *lib, const ui_lib_host *hosts, int count)
     if (l->top > l->cur) {
         l->top = l->cur;
     }
+}
+
+void ui_library_set_sources(ui_library *lib, const ui_lib_source *sources, int count)
+{
+    lib->sources = sources;
+    lib->source_count = count;
+    keep_place(&lib->source_list, count + 1);
+}
+
+int ui_library_source(const ui_library *lib)
+{
+    return lib->source_list.cur - 1;
+}
+
+void ui_library_set_hosts(ui_library *lib, const ui_lib_host *hosts, int count)
+{
+    lib->hosts = hosts;
+    lib->host_count = count;
+    keep_place(&lib->host_list, count);
 }
 
 int ui_library_host(const ui_library *lib)
@@ -233,6 +263,18 @@ static void ask(ui_library *lib, ui_lib_action what)
                        "is for, won't get it until it's added to the credentials file again.",
                        h->login, h->name);
         lib->dialog = (ui_dialog){"REMOVE LOGIN", lib->message, {"REMOVE", "CANCEL", NULL}, 1, 1};
+    } else if (what == UI_LIB_REMOVE_SOURCE) {
+        (void)snprintf(lib->message, sizeof lib->message,
+                       "Remove this line from the map? %s. Its games leave the list.",
+                       lib->sources[ui_library_source(lib)].name);
+        lib->dialog = (ui_dialog){"REMOVE SOURCE", lib->message, {"REMOVE", "CANCEL", NULL}, 1, 1};
+    } else if (what == UI_LIB_SOURCE_KIND) {
+        /* Three choices and no CANCEL: B gives 3, a choice past them, which adds nothing. */
+        lib->dialog = (ui_dialog){"ADD SOURCE",
+                                  "What do you want to add to the map? B cancels.",
+                                  {"ARCHIVE.ORG", "MAP", "IMAGE"},
+                                  0,
+                                  3};
     } else {
         lib->dialog =
             (ui_dialog){"LEAVE", "Return to the dashboard?", {"LEAVE", "STAY", NULL}, 0, 1};
@@ -250,6 +292,12 @@ static void open_kbd(ui_library *lib, ui_lib_typing what)
     } else if (what == UI_LIB_TYPING_FOLDER) {
         (void)snprintf(lib->folder, sizeof lib->folder, "%s", lib->install_dir);
         ui_kbd_open(&lib->kbd, "INSTALL FOLDER", lib->folder, sizeof lib->folder, false);
+    } else if (what == UI_LIB_TYPING_SOURCE) {
+        static const char *const labels[] = {"ARCHIVE.ORG ITEM IDENTIFIER", "MAP ADDRESS",
+                                             "IMAGE ADDRESS"};
+        ui_kbd_open(&lib->kbd, labels[lib->add_kind], lib->add_url, sizeof lib->add_url, false);
+    } else if (what == UI_LIB_TYPING_TITLE_ID) {
+        ui_kbd_open(&lib->kbd, "TITLE ID, LIKE 4D530004", lib->add_key, sizeof lib->add_key, false);
     } else {
         ui_library_forget_password(lib);
         ui_kbd_open(&lib->kbd, "ARCHIVE.ORG PASSWORD", lib->password, sizeof lib->password, true);
@@ -279,6 +327,13 @@ static ui_lib_action typed(ui_library *lib, ui_kbd_result r, int rows)
         ui_library_forget_password(lib);
     } else if (r == UI_KBD_DONE && what == UI_LIB_TYPING_EMAIL && lib->email[0] != '\0') {
         open_kbd(lib, UI_LIB_TYPING_PASSWORD);
+    } else if (r == UI_KBD_DONE && what == UI_LIB_TYPING_SOURCE && lib->add_url[0] != '\0') {
+        if (lib->add_kind != UI_LIB_SOURCE_IMAGE) {
+            return UI_LIB_ADD_SOURCE; /* the caller checks it */
+        }
+        open_kbd(lib, UI_LIB_TYPING_TITLE_ID);
+    } else if (r == UI_KBD_DONE && what == UI_LIB_TYPING_TITLE_ID && lib->add_key[0] != '\0') {
+        return UI_LIB_ADD_SOURCE;
     } else if (r == UI_KBD_DONE && what == UI_LIB_TYPING_FOLDER && lib->folder[0] != '\0') {
         lib->page = UI_LIB_PAGE_NONE;
         return UI_LIB_FOLDER; /* the caller checks it */
@@ -311,10 +366,34 @@ static void host_chosen(ui_library *lib)
     }
 }
 
+/* The kind of source to add was chosen: the keyboard, on what was typed for that kind before,
+   or on how its address starts. */
+static void source_kind(ui_library *lib, int c)
+{
+    if (c < 0 || c > UI_LIB_SOURCE_IMAGE) {
+        return; /* B */
+    }
+    if ((int)lib->add_kind != c || lib->add_url[0] == '\0') {
+        static const char *const starts[] = {"", "https://", "http://"};
+        lib->add_kind = (ui_lib_source_kind)c;
+        (void)snprintf(lib->add_url, sizeof lib->add_url, "%s", starts[c]);
+        lib->add_key[0] = '\0';
+    }
+    open_kbd(lib, UI_LIB_TYPING_SOURCE);
+}
+
 /* A press in SETTINGS' list, or in one of its pages. */
 static ui_lib_action settings_input(ui_library *lib, ui_button b, int rows)
 {
-    if (lib->page == UI_LIB_PAGE_LOGINS) {
+    if (lib->page == UI_LIB_PAGE_SOURCES) {
+        if (b == UI_BTN_B) {
+            lib->page = UI_LIB_PAGE_NONE;
+        } else if (b == UI_BTN_A) {
+            ask(lib, ui_library_source(lib) < 0 ? UI_LIB_SOURCE_KIND : UI_LIB_REMOVE_SOURCE);
+        } else {
+            (void)ui_list_input(&lib->source_list, b, rows);
+        }
+    } else if (lib->page == UI_LIB_PAGE_LOGINS) {
         if (b == UI_BTN_B) {
             lib->page = UI_LIB_PAGE_NONE;
         } else if (b == UI_BTN_A && lib->host_count > 0) {
@@ -339,6 +418,8 @@ static ui_lib_action settings_input(ui_library *lib, ui_button b, int rows)
         (void)ui_list_input(&lib->settings_list, b, rows);
     } else if (lib->settings_list.cur == UI_LIB_SETTING_FOLDER) {
         choose_folder(lib, rows);
+    } else if (lib->settings_list.cur == UI_LIB_SETTING_SOURCES) {
+        lib->page = UI_LIB_PAGE_SOURCES;
     } else {
         lib->page = UI_LIB_PAGE_LOGINS;
     }
@@ -354,6 +435,10 @@ ui_lib_action ui_library_input(ui_library *lib, ui_button b, int rows)
         }
         ui_lib_action what = lib->asking;
         lib->asking = UI_LIB_NONE;
+        if (what == UI_LIB_SOURCE_KIND) {
+            source_kind(lib, c);
+            return UI_LIB_NONE;
+        }
         return c == 0 && what != UI_LIB_TELL ? what : UI_LIB_NONE;
     }
     if (lib->typing_for != UI_LIB_TYPING_NONE) {
@@ -491,7 +576,9 @@ static void draw_detail(const ui_draw *d, const ui_lib_item *it)
 static const char *setting_name(void *ctx, int i)
 {
     (void)ctx;
-    return i == UI_LIB_SETTING_FOLDER ? "Install location" : "Authentication";
+    static const char *const names[UI_LIB_SETTING_COUNT_] = {"Install location", "Authentication",
+                                                             "Map sources"};
+    return names[i];
 }
 
 static const char *folder_name(void *ctx, int i)
@@ -549,6 +636,53 @@ static void draw_folder(const ui_draw *d, ui_library *lib)
                        here ? "Games install here now." : "A installs games here from now on.");
 }
 
+static const char *source_name(void *ctx, int i)
+{
+    const ui_library *lib = ctx;
+    return i == 0 ? "Add source" : lib->sources[i - 1].name;
+}
+
+/* Map sources' details: the line in SETTINGS, "Add source", or the map's line highlighted. */
+static void draw_sources(const ui_draw *d, const ui_library *lib)
+{
+    int x = detail.x + PAD + 4;
+    int w = detail.w - 2 * PAD - 4;
+    int y = detail.y + PAD;
+    int bottom = detail.y + detail.h - PAD;
+    int bh = d->line_height(d->ctx, UI_FONT_BOLD);
+    int sh = d->line_height(d->ctx, UI_FONT_SMALL);
+    const char *title = "Map sources";
+    const char *text = "The lines of E:\\xcat\\map.txt that list your games. A lists them.";
+    const char *more = "Add an archive.org item, a map or an image, or remove one. The games "
+                       "are listed again after each change.";
+    const char *note = NULL;
+    if (lib->page == UI_LIB_PAGE_SOURCES && ui_library_source(lib) < 0) {
+        title = "Add source";
+        text = "An archive.org item (its name), a map (its address), or one image (its address "
+               "and title ID).";
+        more = "It goes at the end of the map.";
+    } else if (lib->page == UI_LIB_PAGE_SOURCES) {
+        const ui_lib_source *s = &lib->sources[ui_library_source(lib)];
+        title = s->name;
+        note = s->note;
+        text = s->about;
+        more = "A removes this line from the map.";
+    }
+    y += ui_text_wrap(d, UI_FONT_BOLD, (ui_rect){x, y, w, 2 * bh}, ui_col_accent, title) * bh;
+    if (note != NULL && note[0] != '\0') {
+        (void)ui_text_fit(d, UI_FONT_SMALL, x, y, w, ui_col_dim, note);
+        y += sh;
+    }
+    y += 6;
+    if (text != NULL) {
+        y += ui_text_wrap(d, UI_FONT_SMALL, (ui_rect){x, y, w, 8 * sh}, ui_col_text, text) * sh;
+        y += 6;
+    }
+    if (y < bottom) {
+        (void)ui_text_wrap(d, UI_FONT_SMALL, (ui_rect){x, y, w, bottom - y}, ui_col_dim, more);
+    }
+}
+
 static const char *host_name(void *ctx, int i)
 {
     const ui_library *lib = ctx;
@@ -569,14 +703,13 @@ static void draw_logins(const ui_draw *d, const ui_library *lib)
     if (lib->page != UI_LIB_PAGE_LOGINS) {
         (void)ui_text_fit(d, UI_FONT_BOLD, x, y, w, ui_col_accent, "Authentication");
         y += bh + 6;
-        (void)ui_text_fit(d, UI_FONT_SMALL, x, y, w, ui_col_dim, "archive.org");
-        y += sh;
-        (void)ui_text_fit(d, UI_FONT_LABEL, x, y, w, lib->logged_in ? ui_col_accent : ui_col_text,
-                          lib->logged_in ? "LOGGED IN" : "NOT LOGGED IN");
-        y += lh + 6;
-        (void)ui_text_wrap(d, UI_FONT_SMALL, (ui_rect){x, y, w, bottom - y}, ui_col_text,
-                           "A lists archive.org and the servers your map gets games from, with "
-                           "their logins.");
+        y += ui_text_wrap(d, UI_FONT_SMALL, (ui_rect){x, y, w, 5 * sh}, ui_col_text,
+                          "The logins for the servers your map gets games from. A lists them.") *
+             sh;
+        y += 6;
+        (void)ui_text_wrap(d, UI_FONT_SMALL, (ui_rect){x, y, w, bottom - y}, ui_col_dim,
+                           "archive.org logs in here. Other logins come from the credentials "
+                           "file, and can be removed here.");
         return;
     }
     if (lib->host_count == 0) {
@@ -634,6 +767,8 @@ static void draw_list(const ui_draw *d, ui_library *lib)
             ui_list_draw(d, &lib->folder_list, list_in, folder_name, lib);
         } else if (lib->page == UI_LIB_PAGE_LOGINS) {
             ui_list_draw(d, &lib->host_list, list_in, host_name, lib);
+        } else if (lib->page == UI_LIB_PAGE_SOURCES) {
+            ui_list_draw(d, &lib->source_list, list_in, source_name, lib);
         } else {
             ui_list_draw(d, &lib->settings_list, list_in, setting_name, NULL);
         }
@@ -696,9 +831,15 @@ static const char *hints(const ui_library *lib)
                : h->login != NULL           ? "A remove login  B back  Left sections  Back exit"
                                             : "A how to add one  B back  Left sections  Back exit";
     }
+    if (lib->section == UI_LIB_SETTINGS && lib->page == UI_LIB_PAGE_SOURCES) {
+        return ui_library_source(lib) < 0 ? "A add  B back  Left sections  Back exit"
+                                          : "A remove  B back  Left sections  Back exit";
+    }
     if (lib->section == UI_LIB_SETTINGS && lib->page == UI_LIB_PAGE_NONE) {
         return lib->settings_list.cur == UI_LIB_SETTING_FOLDER
                    ? "A change  Left sections  Y search  Back exit"
+               : lib->settings_list.cur == UI_LIB_SETTING_SOURCES
+                   ? "A list, add, remove  Left sections  Y search  Back exit"
                    : "A servers and logins  Left sections  Y search  Back exit";
     }
     if (lib->section != UI_LIB_GAMES) {
@@ -727,11 +868,13 @@ static void draw_screen(const ui_draw *d, ui_library *lib, int pan, const char *
     draw_list(d, lib);
     if (lib->section == UI_LIB_SETTINGS) {
         ui_panel(d, detail, UI_CHAMFER, ui_col_panel, ui_col_border);
-        bool folders =
-            lib->page == UI_LIB_PAGE_FOLDERS ||
-            (lib->page == UI_LIB_PAGE_NONE && lib->settings_list.cur == UI_LIB_SETTING_FOLDER);
-        if (folders) {
+        bool on_line = lib->page == UI_LIB_PAGE_NONE;
+        int line = lib->settings_list.cur;
+        if (lib->page == UI_LIB_PAGE_FOLDERS || (on_line && line == UI_LIB_SETTING_FOLDER)) {
             draw_folder(d, lib);
+        } else if (lib->page == UI_LIB_PAGE_SOURCES ||
+                   (on_line && line == UI_LIB_SETTING_SOURCES)) {
+            draw_sources(d, lib);
         } else {
             draw_logins(d, lib);
         }

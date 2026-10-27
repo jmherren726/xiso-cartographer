@@ -6,9 +6,10 @@
  * list, the highlighted game's details beside it, and a footer. A asks before installing the
  * highlighted game (the map is a catalog: nothing installs unasked), and Back asks before
  * leaving for the dashboard. GAMES lists what can be installed, INSTALLED what's in the install
- * folder, and SETTINGS where games install (docs/formats/settings.md) and Authentication: the
- * servers the map uses and their logins, with the archive.org account (log in and out, ADR
- * 0010); DOWNLOADS says it isn't here yet. Y searches GAMES with the on-screen
+ * folder, and SETTINGS where games install (docs/formats/settings.md), Authentication (the
+ * servers the map uses and their logins, with the archive.org account: log in and out, ADR
+ * 0010) and Map sources (the map's own lines, added and removed: map.md §9); DOWNLOADS says it
+ * isn't here yet. Y searches GAMES with the on-screen
  * keyboard (keyboard.h), which also takes the email and password. Plain C over ui_draw like the
  * widgets, tested on the PC (test_ui_library).
  */
@@ -50,15 +51,25 @@ typedef enum ui_lib_section {
 } ui_lib_section;
 
 typedef enum ui_lib_action {
-    UI_LIB_NONE,    /* redraw if the screen says it changed */
-    UI_LIB_INSTALL, /* install items[ui_library_game()]: the user said yes */
-    UI_LIB_EXIT,    /* back to the dashboard: the user said yes */
-    UI_LIB_LOGIN,   /* log in with email and password, then ui_library_forget_password */
-    UI_LIB_LOGOUT,  /* log out of archive.org: the user said yes */
-    UI_LIB_TELL,    /* (internal: a message with OK is open) */
-    UI_LIB_FOLDER,  /* install to lib->folder from now on: the user chose it */
-    UI_LIB_FORGET,  /* remove the login of hosts[ui_library_host()]: the user said yes */
+    UI_LIB_NONE,          /* redraw if the screen says it changed */
+    UI_LIB_INSTALL,       /* install items[ui_library_game()]: the user said yes */
+    UI_LIB_EXIT,          /* back to the dashboard: the user said yes */
+    UI_LIB_LOGIN,         /* log in with email and password, then ui_library_forget_password */
+    UI_LIB_LOGOUT,        /* log out of archive.org: the user said yes */
+    UI_LIB_TELL,          /* (internal: a message with OK is open) */
+    UI_LIB_FOLDER,        /* install to lib->folder from now on: the user chose it */
+    UI_LIB_FORGET,        /* remove the login of hosts[ui_library_host()]: the user said yes */
+    UI_LIB_ADD_SOURCE,    /* add a source of kind add_kind from add_url (and add_key) */
+    UI_LIB_REMOVE_SOURCE, /* remove sources[ui_library_source()]: the user said yes */
+    UI_LIB_SOURCE_KIND,   /* (internal: the dialog asking what kind of source to add) */
 } ui_lib_action;
+
+/* What kind of source to add to the map. */
+typedef enum ui_lib_source_kind {
+    UI_LIB_SOURCE_ARCHIVE, /* @archiveorg <identifier> */
+    UI_LIB_SOURCE_MAP,     /* @include <url> */
+    UI_LIB_SOURCE_IMAGE,   /* <title ID> = <url> */
+} ui_lib_source_kind;
 
 typedef enum ui_lib_typing {
     UI_LIB_TYPING_NONE, /* the keyboard is closed */
@@ -66,12 +77,15 @@ typedef enum ui_lib_typing {
     UI_LIB_TYPING_EMAIL,
     UI_LIB_TYPING_PASSWORD,
     UI_LIB_TYPING_FOLDER,
+    UI_LIB_TYPING_SOURCE,   /* the identifier or URL of a new source */
+    UI_LIB_TYPING_TITLE_ID, /* a new image's title ID */
 } ui_lib_typing;
 
 /* SETTINGS' lines. */
 typedef enum ui_lib_setting {
-    UI_LIB_SETTING_FOLDER, /* where games install */
-    UI_LIB_SETTING_LOGINS, /* Authentication: the servers and their logins */
+    UI_LIB_SETTING_FOLDER,  /* where games install */
+    UI_LIB_SETTING_LOGINS,  /* Authentication: the servers and their logins */
+    UI_LIB_SETTING_SOURCES, /* Map sources: the map's own lines */
     UI_LIB_SETTING_COUNT_
 } ui_lib_setting;
 
@@ -80,6 +94,7 @@ typedef enum ui_lib_page {
     UI_LIB_PAGE_NONE,    /* its lines */
     UI_LIB_PAGE_FOLDERS, /* the folders to install to, then "Other folder" */
     UI_LIB_PAGE_LOGINS,  /* Authentication's servers */
+    UI_LIB_PAGE_SOURCES, /* "Add source", then the map's sources */
 } ui_lib_page;
 
 /* A server on the Authentication page, as the caller describes it. */
@@ -91,6 +106,13 @@ typedef struct ui_lib_host {
     const char *about; /* wrapped below it; may be NULL */
 } ui_lib_host;
 
+/* A line of the map on the Map sources page, as the caller describes it. */
+typedef struct ui_lib_source {
+    const char *name;  /* the list's line: "archive.org: my-item", "Map: http://..." */
+    const char *note;  /* under it, small: what kind it is, its line; may be NULL */
+    const char *about; /* wrapped below it: the whole line, and any problem; may be NULL */
+} ui_lib_source;
+
 /* A folder SETTINGS offers to install to, as the caller describes it. */
 typedef struct ui_lib_folder {
     const char *path; /* "F:\Games" */
@@ -101,6 +123,8 @@ typedef struct ui_lib_folder {
 #define UI_LIB_EMAIL_MAX 255    /* with the NUL: xcat/login.h's 254 bytes */
 #define UI_LIB_PASSWORD_MAX 129 /* with the NUL: xcat/login.h's 128 bytes */
 #define UI_LIB_FOLDER_MAX 67    /* with the NUL: xcat/settings.h's XC_SETTINGS_DIR_SIZE */
+#define UI_LIB_URL_MAX 512      /* a new source's identifier or URL, with the NUL */
+#define UI_LIB_KEY_MAX 32       /* a new image's title ID, with the NUL */
 
 typedef struct ui_library {
     const ui_lib_item *items; /* GAMES: every game */
@@ -124,6 +148,12 @@ typedef struct ui_library {
     const ui_lib_host *hosts; /* UI_LIB_PAGE_LOGINS: the caller's */
     int host_count;
     ui_list host_list;
+    const ui_lib_source *sources; /* UI_LIB_PAGE_SOURCES: the caller's */
+    int source_count;
+    ui_list source_list;         /* over "Add source", then sources */
+    ui_lib_source_kind add_kind; /* UI_LIB_ADD_SOURCE's */
+    char add_url[UI_LIB_URL_MAX];
+    char add_key[UI_LIB_KEY_MAX];
     char folder[UI_LIB_FOLDER_MAX]; /* UI_LIB_FOLDER's, and the keyboard's for "Other folder" */
     const ui_lib_item *installed;   /* INSTALLED: the folders in install_dir */
     int installed_count;
@@ -162,6 +192,18 @@ void ui_library_set_hosts(ui_library *lib, const ui_lib_host *hosts, int count);
 /* The index in hosts of the server highlighted on the Authentication page. */
 int ui_library_host(const ui_library *lib);
 
+/* Gives Map sources its lines (the strings stay the caller's), keeping its place where it
+   can. Until then it lists only "Add source". */
+void ui_library_set_sources(ui_library *lib, const ui_lib_source *sources, int count);
+
+/* The index in sources of the line highlighted on the Map sources page, or -1 for "Add
+   source". */
+int ui_library_source(const ui_library *lib);
+
+/* Gives GAMES a new list of games (after the map changed): every game listed, the search and
+   the highlight cleared. `shown` has room for `count` ints. */
+void ui_library_set_items(ui_library *lib, const ui_lib_item *items, int count, int *shown);
+
 /* Says whether the archive.org account is logged in (SETTINGS). */
 void ui_library_set_account(ui_library *lib, bool logged_in);
 
@@ -189,8 +231,11 @@ int ui_library_rows(const ui_draw *d);
    Authentication lists the servers. A on archive.org asks for the email, then the password
    (dots only), and DONE on a password gives UI_LIB_LOGIN; B wipes it. Logged in, A asks before
    UI_LIB_LOGOUT. A on another server with a login asks before UI_LIB_FORGET; without one, a
-   message says how logins are added. B goes back. In a dialog or the keyboard, their
-   buttons. */
+   message says how logins are added. B goes back. A on Map sources lists "Add source", then
+   the map's lines. A on "Add source" asks what kind (ARCHIVE.ORG, MAP or IMAGE; B closes it),
+   then opens the keyboard for the identifier or URL, and for an image the title ID too; DONE
+   gives UI_LIB_ADD_SOURCE, and B there adds nothing (what was typed stays for the next try).
+   A on a line asks before UI_LIB_REMOVE_SOURCE. In a dialog or the keyboard, their buttons. */
 ui_lib_action ui_library_input(ui_library *lib, ui_button b, int rows);
 
 /* Draws the screen with the background at pan (ui_pan_x), and `status` (may be NULL) in the

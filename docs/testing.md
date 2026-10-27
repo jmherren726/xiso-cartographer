@@ -27,6 +27,7 @@ Newest first. "Build" is the commit or CI artifact tested.
 
 | Date | Milestone | Build | Where | Result | Notes |
 |---|---|---|---|---|---|
+| 2026-10-27 | M8 map sources in xemu | branch `feat/map-sources` | xemu, no map | ✅ xemu | Steps 1 and 3 of "M8: map sources", with timed presses, without adding anything (that would write the xemu disk's `map.txt`): SETTINGS lists three lines, each with details saying what it's for; Map sources lists only "Add source"; the ADD SOURCE question shows ARCHIVE.ORG, MAP and IMAGE, and its keyboard opens and closes. Adding, removing and reloading are covered by `test_map_edit`, `test_ui_library` and `fuzz_map_edit` (34.7M runs); steps 2 and 4–8 need hardware. |
 | 2026-10-27 | M8 authentication in xemu | branch `feat/authentication` | xemu, no map | ✅ xemu | Step 1 of "M8: authentication", and A on the page, with timed presses: SETTINGS lists Install location and Authentication; the page lists archive.org alone (xemu's disk has no map), NOT LOGGED IN, "Not in the map"; A opens the ARCHIVE.ORG EMAIL keyboard and B closes it. The other servers' lines, LOGIN [name] and REMOVE are covered by `test_ui_library`; steps 2–6 need hardware with a map. |
 | 2026-10-27 | M8 install location on hardware | `main` at `b07bb3a` (#92) | Hardware: main console, F: partition (owner) | ⚠️ Hardware | Installing to `F:\Games` worked, but the install screen's WRITING line said `E:\Games`: the text was fixed in the Authentication PR (step 6 of "M8: authentication" checks it). |
 | 2026-10-27 | M8 install location in xemu | branch `feat/install-location` | xemu, stock drive (no F: or G:) | ✅ xemu | Steps 1–3 of "M8: install location", with timed presses: SETTINGS lists Install location and archive.org; the folders are `E:\Games` (5.11 GB free, CURRENT) and Other folder, since the drive has no F: or G:; choosing `E:\Games` saved it; typing `qq` was refused with "must start with E:\, F:\ or G:\". Steps 4–7 need hardware with an F: partition. |
@@ -363,6 +364,23 @@ SETTINGS' Authentication page: the servers the map uses and their logins ([ui-st
 | 6 | Hardware | B; then install a game | B goes back to SETTINGS' lines. The install screen's WRITING line says "Writing the game's files to" the install folder chosen in SETTINGS (`F:\Games` if that's the one), not always `E:\Games` |
 
 Afterwards, put the kept `credentials` back over FTP.
+
+## M8: map sources
+
+SETTINGS' Map sources page: adding and removing the map's lines on the console ([map.md §9](formats/map.md#9-editing-on-the-console)). Copy `app/bin/` as above. Keep a copy of `E:\xcat\map.txt` (FTP) first: the steps change it. Have an archive.org item you can use, and a LAN server with a map or an image if you can.
+
+| Step | Where | How | Pass |
+|---|---|---|---|
+| 1 | xemu, then hardware | Left, Down three times, Right; Down, Down | SETTINGS lists Install location, Authentication and Map sources. With each highlighted, the details say what it's for (Authentication explains the page, not archive.org's status) |
+| 2 | Hardware | A | "Add source", then each entry and directive of `map.txt` in order (comments aren't listed). A line's details show its kind, line number, the whole line, and any problem the map has on it |
+| 3 | xemu, then hardware | A on Add source; B. A; ARCHIVE.ORG; type a few letters; B | B closes the question, and B in the keyboard adds nothing. `map.txt` is unchanged |
+| 4 | Hardware, internet | A on Add source; ARCHIVE.ORG; the item's identifier; Start | "Loading the map again...", then SOURCE ADDED with the line and the number of games now listed; the item's games are in GAMES. Over FTP, `map.txt` has `@archiveorg <identifier>` as its last line, and every other line as it was |
+| 5 | Hardware | A on Add source; IMAGE; an address; Start; `4D53` (too short); Start | NOT ADDED says the title ID is wrong. A on Add source, IMAGE again: the address is still typed; Start; a full title ID; Start: SOURCE ADDED |
+| 6 | Hardware | A on Add source; MAP; `https://` and nothing more, or an address without `http`; Start | NOT ADDED with the reason. Nothing changed |
+| 7 | Hardware | A on the line added in step 4; CANCEL. A; REMOVE | CANCEL changes nothing. REMOVE says SOURCE REMOVED; the item's games leave GAMES; the line is gone from `map.txt`, and the other lines and comments are as they were |
+| 8 | Hardware | Over FTP, delete `map.txt`; launch the app; add an archive.org item | A new `map.txt`: `# xcat-map v1`, a blank line, and the line |
+
+Afterwards, put the kept `map.txt` back over FTP.
 
 ## FATX probe (M2)
 
