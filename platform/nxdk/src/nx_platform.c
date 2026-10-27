@@ -291,6 +291,67 @@ bool xc_nx_exists(const char *path)
     return GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES;
 }
 
+/* Writes n bytes (or zeros, if data is NULL) to a new file `path`, flushed. */
+static bool write_flushed(const char *path, const void *data, size_t n)
+{
+    HANDLE h =
+        CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    static const uint8_t zeros[512];
+    bool ok = true;
+    size_t most = data != NULL ? 0x40000000U : sizeof zeros;
+    for (size_t done = 0; ok && done < n;) {
+        DWORD chunk = (DWORD)(n - done > most ? most : n - done);
+        const uint8_t *from = data != NULL ? (const uint8_t *)data + done : zeros;
+        DWORD put = 0;
+        ok = WriteFile(h, from, chunk, &put, NULL) && put == chunk;
+        done += put;
+    }
+    IO_STATUS_BLOCK io;
+    ok = ok && NT_SUCCESS(NtFlushBuffersFile(h, &io));
+    return CloseHandle(h) != 0 && ok;
+}
+
+/* nxdk's MoveFileA, but replacing an existing `to`. */
+static bool rename_over(const char *from, const char *to)
+{
+    ANSI_STRING path;
+    RtlInitAnsiString(&path, from);
+    OBJECT_ATTRIBUTES attrs;
+    InitializeObjectAttributes(&attrs, &path, OBJ_CASE_INSENSITIVE, ObDosDevicesDirectory(), NULL);
+    IO_STATUS_BLOCK io;
+    HANDLE h;
+    NTSTATUS st = NtOpenFile(&h, DELETE | SYNCHRONIZE, &attrs, &io,
+                             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                             FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_FOR_BACKUP_INTENT);
+    if (!NT_SUCCESS(st)) {
+        return false;
+    }
+    FILE_RENAME_INFORMATION info;
+    info.ReplaceIfExists = TRUE;
+    info.RootDirectory = ObDosDevicesDirectory();
+    RtlInitAnsiString(&info.FileName, to);
+    st = NtSetInformationFile(h, &io, &info, sizeof info, FileRenameInformation);
+    return NT_SUCCESS(NtClose(h)) && NT_SUCCESS(st);
+}
+
+xc_err xc_nx_replace_file(const char *path, const void *data, size_t len)
+{
+    char tmp[XC_NX_PATH_MAX];
+    int n = snprintf(tmp, sizeof tmp, "%s.tmp", path);
+    if (n < 0 || (size_t)n >= sizeof tmp || (data == NULL && len > 0)) {
+        return XC_ERR_INVALID_ARG;
+    }
+    if (write_flushed(tmp, data, len) && rename_over(tmp, path)) {
+        return XC_OK;
+    }
+    (void)write_flushed(tmp, NULL, len); /* the data may be secret: overwrite, then delete */
+    (void)DeleteFileA(tmp);
+    return XC_ERR_IO;
+}
+
 bool xc_nx_mkdirs(const char *path)
 {
     char buf[XC_NX_PATH_MAX];

@@ -66,7 +66,7 @@ static bool put_text(char *out, size_t cap, size_t *n, const char *s)
     if (cap - *n <= k) {
         return false;
     }
-    memcpy(out + *n, s, k);
+    memcpy(out + *n, s, k + 1); /* with its NUL: there's room, and the next part overwrites it */
     *n += k;
     return true;
 }

@@ -27,6 +27,7 @@ Newest first. "Build" is the commit or CI artifact tested.
 
 | Date | Milestone | Build | Where | Result | Notes |
 |---|---|---|---|---|---|
+| 2026-10-27 | M8 on-box login, steps 1 and 3 in xemu | `feat/onbox-login`, and a scratch build pressing Left, Down ×3, Right, A, "m", "e", Start, A ×3, B on a timer (not committed) | xemu v0.8.139 on the owner's PC, run by the agent | ✅ xemu; hardware to be run | Read from the guest's framebuffer over QMP; no login was sent. SETTINGS showed archive.org, NOT LOGGED IN, "A logs in with your archive.org email and password" and the note that the password is never stored. A opened ARCHIVE.ORG EMAIL with the typed text; Start opened ARCHIVE.ORG PASSWORD, which showed three dots for three letters. The image has no credentials file. |
 | 2026-10-26 | M8 search, steps 1 and 2 in xemu | `feat/ui-search`, and a scratch build pressing Y, s, m, Start on a timer (not committed) | xemu v0.8.139 on the owner's PC, run by the agent | ✅ xemu; hardware to be run | Read from the guest's framebuffer over QMP, on the HDD image used for the earlier tests. Y opened the keyboard over the library, with SEARCH and "s" in the field after the first key. After Start, the SEARCH panel said "sm" and "1 of 1", GAMES listed the sample (still INSTALLED), and the footer said "A install  B list all  Y search". The image lists one game, so narrowing a longer list is left to hardware. |
 | 2026-10-26 | M8 installed games on hardware | `feat/ui-installed` at `92a5f7f` (#85) | Hardware: main console, internet (owner) | ✅ Hardware | "Works" (owner): games installed in earlier visits keep their INSTALLED mark after a restart, and the INSTALLED section lists them. |
 | 2026-10-26 | M8 installed games, steps 1 and 2 in xemu | `feat/ui-installed`, and a scratch build pressing Left, Down, Down, Right on a timer (not committed) | xemu v0.8.139 on the owner's PC, run by the agent | ✅ xemu; hardware to be run | Read from the guest's framebuffer over QMP, on the HDD image used for the earlier tests. GAMES marked the bundled sample INSTALLED, "In E:\Games\small", from an install in an earlier session; SUMMARY said "1 game listed, 1 installed". INSTALLED listed "small" and "small (2)" (both earlier installs of the sample): "197 KB \| 9 files", INSTALLED, "E:\Games\small", "Checked: every file's CRC-32. From E:\xcat\isos\small.iso." The synthetic sample has no title ID. |
@@ -300,6 +301,20 @@ Y searches GAMES ([ui-style.md](ui-style.md#library)). Copy `app/bin/` as above,
 | 3 | Hardware | B | Every game is listed again, the SEARCH panel goes, and the highlight stays on the same game |
 | 4 | Hardware | Y; type a word no game has; Start; then Y, DELETE it all, Start | "No game matches" with "0 of M", and A does nothing. Searching for nothing lists every game. Y then B in the keyboard leaves the list as it was |
 | 5 | Hardware | Left to INSTALLED; Y; type; Start | The search applies to GAMES, which is shown; INSTALLED keeps its list |
+
+## M8: on-box login
+
+Logging in to archive.org on the Xbox ([login.md](formats/login.md), [ADR 0010](adr/0010-on-box-login-required-for-beta.md)). Copy `app/bin/` as above. If `E:\Apps\xcat\credentials` was written by hand, keep a copy of it first (FTP): logging out removes its `[archive]` section.
+
+| Step | Where | How | Pass |
+|---|---|---|---|
+| 1 | xemu, then hardware | Left, Down three times, Right | SETTINGS lists archive.org. The details say LOGGED IN if the credentials file has an `[archive]` section, otherwise NOT LOGGED IN, and that the password is never stored. The footer says "A log in" or "A log out" |
+| 2 | Hardware | If LOGGED IN: A, LOG OUT | "LOGGED OUT", then NOT LOGGED IN. Over FTP, `credentials` has no `[archive]` section, and every other section and comment is unchanged. There's no `credentials.tmp` |
+| 3 | xemu, then hardware | A; type part of an email; Start; type a few letters; B | The keyboards say ARCHIVE.ORG EMAIL, then ARCHIVE.ORG PASSWORD, which shows only dots. B closes it, and nothing logs in |
+| 4 | Hardware, internet | A; the account's email (kept from step 3, finish it); Start; a wrong password; Start | "Logging in to archive.org..." in the footer, then a message: "The password is wrong. Try again." Still NOT LOGGED IN |
+| 5 | Hardware, internet | A; Start (the email is kept); the right password; Start | A LOGGED IN message, then LOGGED IN in SETTINGS. Over FTP, `credentials` has the `[archive]` section of login.md §4 (a comment line, `hosts`, `cookie`) and its other sections as before. **Neither the password nor the email appears** in `credentials` or `E:\xcat\install.log`; the log says "Logging in to archive.org" and "Logged in to archive.org: [archive] written to ..." |
+| 6 | Hardware, internet | Install an item that needs the login | It installs (M8 exit test: "a login-required item installs") |
+| 7 | Hardware | Leave for the dashboard and launch the app again | SETTINGS still says LOGGED IN |
 
 ## FATX probe (M2)
 

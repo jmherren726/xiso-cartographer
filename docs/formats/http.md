@@ -1,8 +1,8 @@
 # HTTP client profile, version 1
 
-**Status:** Normative. §2, §4 and §5 are implemented by `xcat/url.h` and `xcat/http.h`; §3 and §6–§9 by the HTTP client (`xcat/http_client.h`). The reasons behind the design are in [ADR 0004](../adr/0004-streaming-install.md) (Range is required), [ADR 0006](../adr/0006-no-links-no-bypass.md) (good-guest networking) and [ADR 0007](../adr/0007-scoped-user-credentials.md) (credentials per hop).
+**Status:** Normative. §2, §4 and §5 are implemented by `xcat/url.h` and `xcat/http.h`; §3 and §6–§10 by the HTTP client (`xcat/http_client.h`). The reasons behind the design are in [ADR 0004](../adr/0004-streaming-install.md) (Range is required), [ADR 0006](../adr/0006-no-links-no-bypass.md) (good-guest networking) and [ADR 0007](../adr/0007-scoped-user-credentials.md) (credentials per hop).
 
-xiso-cartographer speaks a small, strict subset of HTTP/1.1 ([RFC 9110](https://www.rfc-editor.org/rfc/rfc9110), [RFC 9112](https://www.rfc-editor.org/rfc/rfc9112)): `GET` with `Range`, nothing else. Every byte the server sends is untrusted (HANDOFF §7.3). Where this profile is stricter than the RFCs, it rejects rather than guesses, because a misread response could write wrong bytes into a game.
+xiso-cartographer speaks a small, strict subset of HTTP/1.1 ([RFC 9110](https://www.rfc-editor.org/rfc/rfc9110), [RFC 9112](https://www.rfc-editor.org/rfc/rfc9112)): `GET` with `Range`, and one `POST` for logins (§10), nothing else. Every byte the server sends is untrusted (HANDOFF §7.3). Where this profile is stricter than the RFCs, it rejects rather than guesses, because a misread response could write wrong bytes into a game.
 
 The words **must**, **must not**, **should** and **may** are used as in RFC 2119.
 
@@ -147,10 +147,22 @@ Before every request hop, including each redirect target, the client asks the cr
 - One connection at a time. It is reused for the next request to the same scheme, host and port when the previous response was read completely, was a `2xx`, and didn't say `Connection: close`. Otherwise it is closed.
 - Any bytes after the end of a body (the client never pipelines) mean the response can't be trusted to have ended where it says, so the connection is closed.
 
-## 10. Changes
+## 10. POST, for logins
+
+`xc_http_post` sends one form to a login API ([login.md](login.md)). It is not a download, so §6–§9 don't apply. Instead:
+
+- The URL **must** be `https`; anything else is refused before connecting (`XC_ERR_URL`).
+- The request is `POST <target> HTTP/1.1`, with the `Host`, `User-Agent` and `Accept-Encoding` lines of §3, then `Content-Type`, `Content-Length` and `Connection: close`, then the body. There is no `Range`.
+- **No credentials are attached** (§8 isn't asked), whatever the credentials file says.
+- The request goes **once**, on a fresh connection, which is closed when the response has been read. Nothing is retried, and a redirect isn't followed. Sending a password twice, or to a second host, is never right.
+- Right after sending, the client overwrites the part of its buffer that held the request. The caller wipes its own copy of the body.
+- A `200` whose body is framed as in §5 (`Content-Length` or chunked) and at most the caller's limit is passed to the caller. A larger body is `XC_ERR_LIMIT`. Any other status is an error, as in §6 (`401`/`403` `XC_ERR_HTTP_DENIED`, `404`/`410` `XC_ERR_HTTP_NOT_FOUND`, anything else `XC_ERR_HTTP_STATUS`, a redirect included), with the status kept for the message.
+
+## 11. Changes
 
 | Version | Date | Change |
 |---|---|---|
 | 1 | 2026-10-14 | First version. |
 | 1 | 2026-10-16 | Clarified for M5: TLS failures aren't retried (§7.2); how `https` connects (§9). No change for plain HTTP. |
 | 1 | 2026-10-20 | §3: whole small files without `Range`, for map includes and archive.org listings (M6). Range requests are unchanged. |
+| 1 | 2026-10-27 | §10: one `POST` over `https`, for the on-box login (M8). Downloads are unchanged. |

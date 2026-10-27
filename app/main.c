@@ -21,7 +21,9 @@
  * docs/ui-style.md): the library lists the games, Y searches them, A asks before installing
  * one, and the install screen shows the progress; B asks before stopping it. The games already in
  * E:\Games (a marker, or a journal for an unfinished one: xcat/installed.h) are marked in the
- * list and listed under INSTALLED. Every message is in the log.
+ * list and listed under INSTALLED. SETTINGS logs in to archive.org with an email and password
+ * typed on the console, keeping only the session (ADR 0010, docs/formats/login.md), and logs
+ * out. Every message is in the log, never a password or a session.
  */
 #include <SDL.h>
 #include <hal/debug.h>
@@ -43,6 +45,7 @@
 #include "xcat/http_client.h"
 #include "xcat/install.h"
 #include "xcat/installed.h"
+#include "xcat/login.h"
 #include "xcat/map.h"
 #include "xcat/nxdk.h"
 #include "xcat/version.h"
@@ -52,7 +55,8 @@
 #define MAP_FILE XCAT_DIR "\\map.txt"
 #define ISO_DIR XCAT_DIR "\\isos"
 #define LOG_FILE XCAT_DIR "\\install.log"
-#define CRED_FILE "E:\\Apps\\xcat\\credentials"
+#define APPS_DIR "E:\\Apps\\xcat"
+#define CRED_FILE APPS_DIR "\\credentials"
 #define CATALOG_FILE "E:\\Apps\\xcat\\catalog.bin"
 #define SAMPLE_DIR "D:\\samples"
 #define GAMES_DIR "E:\\Games"
@@ -557,6 +561,168 @@ static bool load_map(xc_map *map)
     out("Map: %u entr%s from %u file(s)\n", (unsigned)map->entry_count,
         map->entry_count == 1 ? "y" : "ies", (unsigned)map->source_count);
     return err == XC_OK;
+}
+
+/* --- logging in to archive.org (docs/formats/login.md, ADR 0010) ------------------------- */
+
+/* Reads the credentials file again, after a login or a log out, and gives it to the client. */
+static void reload_credentials(void)
+{
+    if (have_creds) {
+        xc_cred_free(&creds);
+        have_creds = false;
+    }
+    load_credentials();
+    if (net_up) {
+        if (have_creds) {
+            xc_cred_http_auth(&auth, &creds);
+        }
+        http_cfg.auth = have_creds ? &auth : NULL;
+        xc_http_client_close(&client);
+        net_up = xc_http_client_init(&client, &http_cfg) == XC_OK;
+    }
+}
+
+static bool logged_in(void)
+{
+    return have_creds && xc_cred_section_named(&creds, XC_LOGIN_SECTION) != NULL;
+}
+
+/* Writes [archive] into the credentials file, or removes it when `section` is NULL (login.md
+   §5). On failure, msg says why for the screen. */
+static bool write_section(const char *section, char *msg, size_t size)
+{
+    char *old = NULL;
+    size_t old_len = 0;
+    xc_err err = XC_OK;
+    if (xc_nx_exists(CRED_FILE)) {
+        err = read_local(CRED_FILE, XC_CRED_MAX_FILE, &old, &old_len);
+    }
+    char *text = NULL;
+    size_t len = 0;
+    xc_cred_error cerr;
+    memset(&cerr, 0, sizeof cerr);
+    if (err == XC_OK) {
+        err = xc_cred_set_section(old, old_len, XC_LOGIN_SECTION, section, &text, &len, &cerr);
+    }
+    if (old != NULL) {
+        xc_login_wipe(old, old_len);
+        free(old);
+    }
+    if (err == XC_OK && len > 0) {
+        (void)xc_nx_mkdirs(APPS_DIR);
+        err = xc_nx_replace_file(CRED_FILE, text, len);
+    }
+    if (text != NULL) {
+        xc_login_wipe(text, len);
+        free(text);
+    }
+    if (err == XC_ERR_CREDENTIALS) {
+        out("%s line %u: %s; not changed\n", CRED_FILE, (unsigned)cerr.line, cerr.message);
+        (void)snprintf(msg, size,
+                       "E:\\Apps\\xcat\\credentials has a problem on line %u: %s. Fix or delete "
+                       "it, then try again.",
+                       (unsigned)cerr.line, cerr.message);
+    } else if (err != XC_OK) {
+        out("%s: %s; not changed\n", CRED_FILE, xc_err_str(err));
+        (void)snprintf(msg, size, "E:\\Apps\\xcat\\credentials couldn't be written: %s.",
+                       xc_err_str(err));
+    }
+    return err == XC_OK;
+}
+
+static char login_body[XC_LOGIN_MAX_BODY];
+static xc_login_result login_result;
+static char login_section[2 * XC_LOGIN_MAX_COOKIE + 256];
+
+/* The email and password typed in SETTINGS: one POST over HTTPS, then the session into the
+   credentials file. The password is wiped as soon as the body is made, and the body once
+   it's sent; neither is logged. */
+static void login(ui_library *lib)
+{
+    size_t body_len = 0;
+    xc_err err = xc_login_body(lib->email, lib->password, login_body, sizeof login_body, &body_len);
+    ui_library_forget_password(lib);
+    if (err != XC_OK) {
+        xc_login_wipe(login_body, sizeof login_body);
+        ui_library_tell(lib, "LOG IN",
+                        "The email or the password is too long, or has a character it can't "
+                        "have.");
+        return;
+    }
+    out("Logging in to archive.org\n");
+    if (!network() || !https_ready()) {
+        xc_login_wipe(login_body, sizeof login_body);
+        ui_library_tell(lib, "LOG IN",
+                        "No network, or HTTPS couldn't start. The reason is in "
+                        "E:\\xcat\\install.log.");
+        return;
+    }
+    mem_ctx m = {NULL, 0, 0};
+    err = xc_http_post(&client, XC_LOGIN_URL, XC_LOGIN_CONTENT_TYPE, login_body, body_len,
+                       XC_LOGIN_MAX_RESPONSE, to_mem, &m);
+    xc_login_wipe(login_body, sizeof login_body);
+    xc_login_wipe(recv_buf, RECV_BUF_SIZE); /* the answer, with the session, came through it */
+    if (err == XC_OK) {
+        err = xc_login_parse(m.buf, m.len, &login_result);
+    }
+    if (m.buf != NULL) {
+        xc_login_wipe(m.buf, m.cap);
+        free(m.buf);
+    }
+    char msg[256];
+    if (err != XC_OK) {
+        out("Login failed: %s (HTTP %d)\n", xc_err_str(err), client.last_status);
+        (void)snprintf(msg, sizeof msg,
+                       "The login didn't get through: %s. Check the network and try again.",
+                       xc_err_str(err));
+        ui_library_tell(lib, "LOG IN", msg);
+        return;
+    }
+    if (login_result.outcome != XC_LOGIN_OK) {
+        out("Login refused: %s\n",
+            login_result.reason[0] != '\0' ? login_result.reason : "no reason given");
+        if (login_result.outcome == XC_LOGIN_NO_ACCOUNT) {
+            (void)snprintf(msg, sizeof msg, "archive.org has no account with that email address.");
+        } else if (login_result.outcome == XC_LOGIN_BAD_PASSWORD) {
+            (void)snprintf(msg, sizeof msg, "The password is wrong. Try again.");
+        } else {
+            (void)snprintf(msg, sizeof msg, "archive.org refused the login: %s.",
+                           login_result.reason[0] != '\0' ? login_result.reason
+                                                          : "no reason given");
+        }
+        ui_library_tell(lib, "LOG IN", msg);
+        return;
+    }
+    err = xc_login_section(&login_result, login_section, sizeof login_section, NULL);
+    xc_login_wipe(&login_result, sizeof login_result);
+    bool ok = err == XC_OK && write_section(login_section, msg, sizeof msg);
+    xc_login_wipe(login_section, sizeof login_section);
+    if (!ok) {
+        ui_library_tell(lib, "LOG IN", err == XC_OK ? msg : "The session can't be saved.");
+        return;
+    }
+    out("Logged in to archive.org: [%s] written to %s\n", XC_LOGIN_SECTION, CRED_FILE);
+    reload_credentials();
+    ui_library_set_account(lib, logged_in());
+    ui_library_tell(lib, "LOGGED IN",
+                    "You're logged in to archive.org. The session is saved in "
+                    "E:\\Apps\\xcat\\credentials; the password isn't.");
+}
+
+static void logout(ui_library *lib)
+{
+    char msg[256];
+    if (!write_section(NULL, msg, sizeof msg)) {
+        ui_library_tell(lib, "LOG OUT", msg);
+        return;
+    }
+    out("Logged out of archive.org: [%s] removed from %s\n", XC_LOGIN_SECTION, CRED_FILE);
+    reload_credentials();
+    ui_library_set_account(lib, logged_in());
+    ui_library_tell(lib, "LOGGED OUT",
+                    "This console is logged out of archive.org. The session itself ends when "
+                    "you log out on archive.org.");
 }
 
 /* --- the catalog (docs/formats/catalog.md) ------------------------------------------------ */
@@ -1402,6 +1568,7 @@ static void library(game *games, ui_lib_item *items, int count)
     }
     ui_library_open(&lib, items, count, shown);
     ui_library_set_installed(&lib, found_items, found_count);
+    ui_library_set_account(&lib, logged_in());
     int rows = ui_library_rows(&screen);
     int range = ui_pan_range(&screen);
     char status[160];
@@ -1429,6 +1596,14 @@ static void library(game *games, ui_lib_item *items, int count)
                          st == UI_LIB_INSTALLED ? "installed"
                          : st == UI_LIB_STOPPED ? "stopped; install it again to carry on"
                                                 : "not installed");
+            } else if (a == UI_LIB_LOGIN) {
+                /* Say so first: starting HTTPS and logging in take a few seconds. */
+                ui_sdl_begin(ui_col_bg);
+                ui_library_draw(&screen, &lib, pan_now, "Logging in to archive.org...");
+                ui_sdl_present();
+                login(&lib);
+            } else if (a == UI_LIB_LOGOUT) {
+                logout(&lib);
             }
         }
         int pan = ui_pan_x(SDL_GetTicks(), range);
