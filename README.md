@@ -8,7 +8,7 @@ Homebrew game catalog and installer for the modded original Xbox. Browse the ful
 
 **Pre-alpha, installing real games on hardware.** The install engine is done and has been tested on a real console. The catalog UI isn't built yet: for now the app shows a plain text list. Milestones M0–M7 are met. What works on the Xbox today:
 
-- **Installs from your map, over HTTP or HTTPS:** TLS 1.2 with certificate checks against built-in roots, the clock set from NTP, and archive.org logins from a [credentials file](docs/formats/credentials.md). Files are stream-extracted straight into `E:\Games\<title>`, with no temporary copy, so full-disc images of 7+ GB install too.
+- **Installs from your map, over HTTP or HTTPS:** TLS 1.2 with certificate checks against built-in roots, the clock set from NTP, and archive.org logins from a [credentials file](docs/formats/credentials.md). Files are stream-extracted straight into `E:\Games\<title>` (or a folder on F: or G: chosen in SETTINGS), with no temporary copy, so full-disc images of 7+ GB install too.
 - **Images and zips:** trimmed xisos, full-disc `.iso` dumps, and `.zip` files holding one image, stored or Deflate (including Zip64). Deflate zips are decompressed as they download.
 - **Resumable and verified:** a pulled cable is retried, and a power cut resumes where it stopped, even in the middle of a Deflate zip. Every file is read back and checked against its CRC-32, and trimmed xisos against their MD5 and SHA-1.
 - **archive.org items:** `@archiveorg <item>` in the map lists every game the item holds, with the size and hashes it publishes.

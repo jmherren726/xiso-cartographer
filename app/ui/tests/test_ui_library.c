@@ -387,6 +387,80 @@ static void to_settings(ui_library *lib)
     TEST_ASSERT_EQUAL_INT(UI_LIB_SETTINGS, lib->section);
 }
 
+/* SETTINGS' second line, the archive.org account. */
+static void to_account(ui_library *lib)
+{
+    to_settings(lib);
+    (void)ui_library_input(lib, UI_BTN_DOWN, 5);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_SETTING_ACCOUNT, lib->settings_list.cur);
+}
+
+/* SETTINGS' first line: where games install. A lists the folders, the current one first
+   highlighted; A on one chooses it, "Other folder" types one, B goes back. */
+static void test_install_folder(void)
+{
+    static const ui_lib_folder folders[] = {{"E:\\Games", "12.3 GB free"},
+                                            {"F:\\Games", "400 GB free"}};
+    ui_library lib;
+    ui_library_open(&lib, items, 3, shown);
+    TEST_ASSERT_EQUAL_STRING("E:\\Games", lib.install_dir); /* until the caller says */
+    ui_library_set_folders(&lib, "f:\\games", folders, 2);
+    to_settings(&lib);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_SETTING_FOLDER, lib.settings_list.cur);
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_TRUE(fake_find_text("Install location") >= 0);
+    TEST_ASSERT_TRUE(fake_find_text("archive.org") >= 0);
+    TEST_ASSERT_TRUE(fake_find_text("f:\\games") >= 0);
+    TEST_ASSERT_TRUE(fake_saw("A change"));
+
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_TRUE(lib.choosing);
+    TEST_ASSERT_EQUAL_INT(3, lib.folder_list.count);
+    TEST_ASSERT_EQUAL_INT(1, lib.folder_list.cur); /* F:\Games, whatever its case */
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_TRUE(fake_find_text("Other folder") >= 0);
+    TEST_ASSERT_TRUE(fake_find_text("400 GB free") >= 0);
+    TEST_ASSERT_TRUE(fake_find_text("CURRENT") >= 0);
+    TEST_ASSERT_TRUE(fake_saw("A choose"));
+
+    (void)ui_library_input(&lib, UI_BTN_B, 5);
+    TEST_ASSERT_FALSE(lib.choosing);
+    (void)ui_library_input(&lib, UI_BTN_A, 5);
+    (void)ui_library_input(&lib, UI_BTN_UP, 5);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_FOLDER, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_STRING("E:\\Games", lib.folder);
+    TEST_ASSERT_FALSE(lib.choosing);
+
+    /* Other folder: the keyboard on the current one. X deletes; B changes nothing. */
+    (void)ui_library_input(&lib, UI_BTN_A, 5);
+    (void)ui_library_input(&lib, UI_BTN_DOWN, 5);
+    (void)ui_library_input(&lib, UI_BTN_DOWN, 5);
+    (void)ui_library_input(&lib, UI_BTN_A, 5);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_TYPING_FOLDER, lib.typing_for);
+    TEST_ASSERT_EQUAL_STRING("f:\\games", lib.folder);
+    (void)ui_library_input(&lib, UI_BTN_B, 5);
+    TEST_ASSERT_TRUE(lib.choosing);
+    (void)ui_library_input(&lib, UI_BTN_A, 5);
+    for (int i = 0; i < 5; i++) {
+        (void)ui_library_input(&lib, UI_BTN_X, 5);
+    }
+    type(&lib, "xbox");
+    TEST_ASSERT_EQUAL_INT(UI_LIB_FOLDER, ui_library_input(&lib, UI_BTN_START, 5));
+    TEST_ASSERT_EQUAL_STRING("f:\\xbox", lib.folder);
+    TEST_ASSERT_FALSE(lib.choosing);
+
+    /* The install question names the folder. */
+    (void)ui_library_input(&lib, UI_BTN_LEFT, 5);
+    (void)ui_library_input(&lib, UI_BTN_UP, 5);
+    (void)ui_library_input(&lib, UI_BTN_UP, 5);
+    (void)ui_library_input(&lib, UI_BTN_UP, 5);
+    (void)ui_library_input(&lib, UI_BTN_RIGHT, 5);
+    (void)ui_library_input(&lib, UI_BTN_A, 5);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_INSTALL, lib.asking);
+    TEST_ASSERT_NOT_NULL(strstr(lib.message, "to f:\\games?"));
+}
+
 static bool all_zero(const char *p, size_t n)
 {
     for (size_t i = 0; i < n; i++) {
@@ -402,7 +476,7 @@ static void test_login(void)
 {
     ui_library lib;
     ui_library_open(&lib, items, 3, shown);
-    to_settings(&lib);
+    to_account(&lib);
     ui_library_draw(&fake_draw, &lib, 0, NULL);
     TEST_ASSERT_TRUE(fake_find_text("archive.org") >= 0);
     TEST_ASSERT_TRUE(fake_find_text("NOT LOGGED IN") >= 0);
@@ -450,7 +524,7 @@ static void test_login_cancelled(void)
 {
     ui_library lib;
     ui_library_open(&lib, items, 3, shown);
-    to_settings(&lib);
+    to_account(&lib);
     (void)ui_library_input(&lib, UI_BTN_A, 5);
     (void)ui_library_input(&lib, UI_BTN_START, 5); /* no email: nothing happens */
     TEST_ASSERT_EQUAL_INT(UI_LIB_TYPING_NONE, lib.typing_for);
@@ -478,7 +552,7 @@ static void test_logout_and_tell(void)
 {
     ui_library lib;
     ui_library_open(&lib, items, 3, shown);
-    to_settings(&lib);
+    to_account(&lib);
     ui_library_set_account(&lib, true);
     ui_library_draw(&fake_draw, &lib, 0, NULL);
     TEST_ASSERT_TRUE(fake_find_text("LOGGED IN") >= 0);
@@ -522,5 +596,6 @@ int main(void)
     RUN_TEST(test_login_cancelled);
     RUN_TEST(test_login_again);
     RUN_TEST(test_logout_and_tell);
+    RUN_TEST(test_install_folder);
     return UNITY_END();
 }

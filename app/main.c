@@ -20,10 +20,12 @@
  * Startup is shown on nxdk's debug console. Then the screens take over (M8, ADR 0015,
  * docs/ui-style.md): the library lists the games, Y searches them, A asks before installing
  * one, and the install screen shows the progress; B asks before stopping it. The games already in
- * E:\Games (a marker, or a journal for an unfinished one: xcat/installed.h) are marked in the
- * list and listed under INSTALLED. SETTINGS logs in to archive.org with an email and password
- * typed on the console, keeping only the session (ADR 0010, docs/formats/login.md), and logs
- * out. Every message is in the log, never a password or a session.
+ * the install folder (a marker, or a journal for an unfinished one: xcat/installed.h) are marked
+ * in the list and listed under INSTALLED. SETTINGS chooses the install folder, E:\Games by
+ * default, kept in E:\Apps\xcat\settings (docs/formats/settings.md, ADR 0016); it logs in to
+ * archive.org with an email and password typed on the console, keeping only the session (ADR
+ * 0010, docs/formats/login.md), and logs out. Every message is in the log, never a password or
+ * a session.
  */
 #include <SDL.h>
 #include <hal/debug.h>
@@ -48,6 +50,7 @@
 #include "xcat/login.h"
 #include "xcat/map.h"
 #include "xcat/nxdk.h"
+#include "xcat/settings.h"
 #include "xcat/version.h"
 #include "xcat/zip.h"
 
@@ -58,12 +61,14 @@
 #define APPS_DIR "E:\\Apps\\xcat"
 #define CRED_FILE APPS_DIR "\\credentials"
 #define CATALOG_FILE "E:\\Apps\\xcat\\catalog.bin"
+#define SETTINGS_FILE APPS_DIR "\\settings"
 #define SAMPLE_DIR "D:\\samples"
-#define GAMES_DIR "E:\\Games"
 #define IO_BUF_SIZE ((size_t)1024 * 1024)
 #define RECV_BUF_SIZE ((size_t)256 * 1024)
-#define CLUSTER 16384U /* FATX cluster size on a retail E: partition; for the space estimate */
-#define ATTEMPTS 40U   /* consecutive failures before giving up: about half an hour */
+#define CLUSTER                                                                                    \
+    16384U           /* FATX cluster size on a retail E: partition, if a drive's can't be read     \
+                      */
+#define ATTEMPTS 40U /* consecutive failures before giving up: about half an hour */
 #define MAX_LOCAL 16
 #define LOG_MAX_BYTES (1024U * 1024U)
 #define REPORT_EVERY_MS 5000U
@@ -302,6 +307,9 @@ static xc_clock clk;
 static xc_credentials creds;
 static xc_http_auth auth;
 static bool have_creds;
+static xc_settings settings;       /* E:\Apps\xcat\settings, or the defaults */
+static char settings_problem[256]; /* why it isn't used, for the screen; "" if it is */
+static bool has_f, has_g;          /* the drives F: and G: are there */
 static xc_http_client client;
 static uint64_t run_start_ms;
 
@@ -629,6 +637,110 @@ static bool write_section(const char *section, char *msg, size_t size)
                        xc_err_str(err));
     }
     return err == XC_OK;
+}
+
+/* Reads E:\Apps\xcat\settings (settings.md §2): without one, the defaults; with one that can't
+   be used, the defaults too, and settings_problem says why. An install folder that can't be
+   made (its drive is gone) falls back to E:\Games for this run. */
+static void load_settings(void)
+{
+    xc_settings_default(&settings);
+    if (xc_nx_exists(SETTINGS_FILE)) {
+        char *data = NULL;
+        size_t len = 0;
+        xc_settings_error serr;
+        memset(&serr, 0, sizeof serr);
+        xc_err err = read_local(SETTINGS_FILE, XC_SETTINGS_MAX_FILE, &data, &len);
+        if (err == XC_OK) {
+            err = xc_settings_parse(data, len, &settings, &serr);
+        }
+        free(data);
+        if (err == XC_ERR_SETTINGS) {
+            out("%s line %u: %s; using the defaults\n", SETTINGS_FILE, (unsigned)serr.line,
+                serr.message);
+            snprintf(settings_problem, sizeof settings_problem,
+                     "E:\\Apps\\xcat\\settings has a problem on line %u: %s. Games install to "
+                     "E:\\Games until it's fixed or deleted.",
+                     (unsigned)serr.line, serr.message);
+        } else if (err != XC_OK) {
+            const char *what = err == XC_ERR_LIMIT ? "larger than 16 KiB" : xc_err_str(err);
+            out("%s: %s; using the defaults\n", SETTINGS_FILE, what);
+            snprintf(settings_problem, sizeof settings_problem,
+                     "E:\\Apps\\xcat\\settings can't be read (%s). Games install to E:\\Games.",
+                     what);
+        }
+    }
+    if (!xc_nx_mkdirs(settings.install_dir)) {
+        out("%s can't be made; installing to " XC_SETTINGS_DEFAULT_DIR " instead\n",
+            settings.install_dir);
+        snprintf(settings_problem, sizeof settings_problem,
+                 "%s can't be made (is its drive there?), so games install to E:\\Games for "
+                 "now. SETTINGS chooses another folder.",
+                 settings.install_dir);
+        xc_settings_default(&settings);
+    }
+    out("Games install to %s\n", settings.install_dir);
+}
+
+/* Makes `dir` the install folder (settings.md §6): checks it, makes it, and writes it into
+   E:\Apps\xcat\settings. On failure, msg says why for the screen, and nothing changed. */
+static bool save_folder(const char *dir, char *msg, size_t size)
+{
+    const char *why = xc_settings_check_dir(dir);
+    if (why != NULL) {
+        snprintf(msg, size, "\"%s\" %s.", dir, why);
+        return false;
+    }
+    char d[XC_SETTINGS_DIR_SIZE];
+    snprintf(d, sizeof d, "%s", dir);
+    if (d[0] >= 'a') {
+        d[0] = (char)(d[0] - 'a' + 'A');
+    }
+    if ((d[0] == 'F' && !has_f) || (d[0] == 'G' && !has_g)) {
+        snprintf(msg, size, "This console has no %c: drive.", d[0]);
+        return false;
+    }
+    if (!xc_nx_mkdirs(d)) {
+        out("%s can't be made\n", d);
+        snprintf(msg, size, "%s can't be made on the drive.", d);
+        return false;
+    }
+    char *old = NULL;
+    size_t old_len = 0;
+    xc_err err = XC_OK;
+    if (xc_nx_exists(SETTINGS_FILE)) {
+        err = read_local(SETTINGS_FILE, XC_SETTINGS_MAX_FILE, &old, &old_len);
+    }
+    char *text = NULL;
+    size_t len = 0;
+    xc_settings_error serr;
+    memset(&serr, 0, sizeof serr);
+    if (err == XC_OK) {
+        err = xc_settings_set(old, old_len, "install_dir", d, &text, &len, &serr);
+    }
+    free(old);
+    if (err == XC_OK) {
+        (void)xc_nx_mkdirs(APPS_DIR);
+        err = xc_nx_replace_file(SETTINGS_FILE, text, len);
+    }
+    free(text);
+    if (err == XC_ERR_SETTINGS) {
+        out("%s line %u: %s; not changed\n", SETTINGS_FILE, (unsigned)serr.line, serr.message);
+        snprintf(msg, size,
+                 "E:\\Apps\\xcat\\settings has a problem on line %u: %s. Fix or delete it, then "
+                 "try again.",
+                 (unsigned)serr.line, serr.message);
+        return false;
+    }
+    if (err != XC_OK) {
+        out("%s: %s; not changed\n", SETTINGS_FILE, xc_err_str(err));
+        snprintf(msg, size, "E:\\Apps\\xcat\\settings couldn't be written: %s.", xc_err_str(err));
+        return false;
+    }
+    snprintf(settings.install_dir, sizeof settings.install_dir, "%s", d);
+    settings_problem[0] = '\0';
+    out("Games now install to %s\n", d);
+    return true;
 }
 
 static char login_body[XC_LOGIN_MAX_BODY];
@@ -1062,12 +1174,17 @@ static bool install(const xc_source *src, const char *name, const char *etag,
     req.etag = etag;
     req.last_modified = last_modified;
     req.source_name = name;
-    req.games_dir = GAMES_DIR;
+    req.games_dir = settings.install_dir;
+    req.games_dir_len = strlen(settings.install_dir) - 2U; /* without "E:" */
     req.title = title;
     req.io = &io;
     req.buf = io_buf;
     req.buf_size = IO_BUF_SIZE;
-    req.cluster_size = CLUSTER;
+    char root[4] = {settings.install_dir[0], ':', '\\', '\0'};
+    req.cluster_size = xc_nx_cluster_size(root);
+    if (req.cluster_size == 0) {
+        req.cluster_size = CLUSTER;
+    }
     req.progress = on_progress;
     req.progress_ctx = &u;
     req.zip = xc_zip_is_zip_name(name);
@@ -1402,15 +1519,15 @@ static game *list_games(const xc_map *map, char local[][XC_NX_PATH_MAX], int nlo
     return games;
 }
 
-/* --- what's already in E:\Games (xcat/installed.h) ------------------------------------- */
+/* --- what's already in the install folder (xcat/installed.h) --------------------------- */
 
 #define MAX_FOUND 256
 
 typedef struct found {
     char folder[XC_FATX_MAX_NAME + 1];
     xc_installed in;
-    char facts[64];  /* size, files */
-    char note[96];   /* where */
+    char facts[64];                                         /* size, files */
+    char note[XC_SETTINGS_DIR_SIZE + XC_FATX_MAX_NAME + 2]; /* where */
     char about[400]; /* the title, the checks, where it came from */
 } found;
 
@@ -1448,7 +1565,7 @@ static void origin_text(const char *image, char *out_text, size_t size)
 static void describe_found(found *f, ui_lib_item *item)
 {
     const xc_marker *m = &f->in.marker;
-    snprintf(f->note, sizeof f->note, GAMES_DIR "\\%s", f->folder);
+    snprintf(f->note, sizeof f->note, "%s\\%s", settings.install_dir, f->folder);
     f->facts[0] = '\0';
     if (f->in.state == XC_FOLDER_UNFINISHED) {
         snprintf(f->about, sizeof f->about, "%s",
@@ -1486,14 +1603,17 @@ static void describe_found(found *f, ui_lib_item *item)
                           f->note};
 }
 
-/* Lists the finished and unfinished installs in E:\Games; other folders are left out. */
+/* Lists the finished and unfinished installs in the install folder; other folders are left
+   out. */
 static void scan_games(void)
 {
     xc_install_io io;
     xc_nx_install_io(&io);
     found_count = 0;
     WIN32_FIND_DATAA fd;
-    HANDLE h = founds != NULL ? FindFirstFileA(GAMES_DIR "\\*", &fd) : INVALID_HANDLE_VALUE;
+    char pattern[XC_SETTINGS_DIR_SIZE + 2];
+    snprintf(pattern, sizeof pattern, "%s\\*", settings.install_dir);
+    HANDLE h = founds != NULL ? FindFirstFileA(pattern, &fd) : INVALID_HANDLE_VALUE;
     if (h == INVALID_HANDLE_VALUE) {
         return;
     }
@@ -1503,12 +1623,13 @@ static void scan_games(void)
             continue;
         }
         if (found_count == MAX_FOUND) {
-            out("More than %d games in " GAMES_DIR ": the rest aren't listed\n", MAX_FOUND);
+            out("More than %d games in %s: the rest aren't listed\n", MAX_FOUND,
+                settings.install_dir);
             break;
         }
         found *f = &founds[found_count];
         snprintf(f->folder, sizeof f->folder, "%s", fd.cFileName);
-        if (xc_installed_check(&io, GAMES_DIR, f->folder, &f->in) == XC_OK &&
+        if (xc_installed_check(&io, settings.install_dir, f->folder, &f->in) == XC_OK &&
             f->in.state != XC_FOLDER_OTHER) {
             found_count++;
         }
@@ -1546,16 +1667,16 @@ static void mark_games(game *games, ui_lib_item *items, int count)
         if (f == NULL) {
             continue;
         }
-        snprintf(games[i].note, sizeof games[i].note, "%s" GAMES_DIR "\\%s",
-                 done != NULL ? "In " : "Started in an earlier visit, in ", f->folder);
+        snprintf(games[i].note, sizeof games[i].note, "%s%s\\%s",
+                 done != NULL ? "In " : "Started in an earlier visit, in ", settings.install_dir,
+                 f->folder);
         items[i].state = done != NULL ? UI_LIB_INSTALLED : UI_LIB_UNFINISHED;
         items[i].note = games[i].note;
         installed += done != NULL;
         unfinished += done == NULL;
     }
-    out(GAMES_DIR ": %d folder(s) from this app; of the games listed, %d installed and %d "
-                  "unfinished\n",
-        found_count, installed, unfinished);
+    out("%s: %d folder(s) from this app; of the games listed, %d installed and %d unfinished\n",
+        settings.install_dir, found_count, installed, unfinished);
 }
 
 /* Installs g on the install screen until it's installed, or the user goes back: RETRY tries
@@ -1626,6 +1747,76 @@ static bool install_game(ui_library *lib, game *games, ui_lib_item *items, int i
     return login_wanted;
 }
 
+/* --- the install folder (SETTINGS) ------------------------------------------------------ */
+
+static char folder_paths[3][12];
+static char folder_notes[3][40];
+static ui_lib_folder folder_choices[3];
+
+/* Games on each drive there is, with how much is free on it. */
+static int list_folders(void)
+{
+    int n = 0;
+    for (char letter = 'E'; letter <= 'G'; letter++) {
+        if ((letter == 'F' && !has_f) || (letter == 'G' && !has_g)) {
+            continue;
+        }
+        snprintf(folder_paths[n], sizeof folder_paths[n], "%c:\\Games", letter);
+        char root[4] = {letter, ':', '\\', '\0'};
+        uint64_t free_bytes = 0;
+        folder_notes[n][0] = '\0';
+        if (xc_nx_free_space(root, &free_bytes) == XC_OK) {
+            char size[24];
+            ui_format_size(size, sizeof size, free_bytes);
+            snprintf(folder_notes[n], sizeof folder_notes[n], "%s free", size);
+        }
+        folder_choices[n] = (ui_lib_folder){folder_paths[n], folder_notes[n]};
+        n++;
+    }
+    return n;
+}
+
+static bool same_ci(const char *a, const char *b)
+{
+    for (;; a++, b++) {
+        char x = *a >= 'A' && *a <= 'Z' ? (char)(*a - 'A' + 'a') : *a;
+        char y = *b >= 'A' && *b <= 'Z' ? (char)(*b - 'A' + 'a') : *b;
+        if (x != y || x == '\0') {
+            return x == y;
+        }
+    }
+}
+
+/* UI_LIB_FOLDER: installs go to lib->folder from now on, if it can be. The library then marks
+   and lists what's in it; games installed elsewhere stay where they are. */
+static void change_folder(ui_library *lib, game *games, ui_lib_item *items, int count)
+{
+    char msg[256];
+    if (same_ci(lib->folder, settings.install_dir)) {
+        snprintf(msg, sizeof msg, "Games already install to %s.", settings.install_dir);
+        ui_library_tell(lib, "INSTALL LOCATION", msg);
+        return;
+    }
+    if (!save_folder(lib->folder, msg, sizeof msg)) {
+        ui_library_tell(lib, "NOT CHANGED", msg);
+        return;
+    }
+    for (int i = 0; i < count; i++) {
+        if (items[i].state == UI_LIB_INSTALLED || items[i].state == UI_LIB_UNFINISHED) {
+            items[i].state = UI_LIB_NOT_TRIED;
+            items[i].note = NULL;
+        }
+    }
+    scan_games();
+    mark_games(games, items, count);
+    ui_library_set_installed(lib, found_items, found_count);
+    ui_library_set_folders(lib, settings.install_dir, folder_choices, list_folders());
+    snprintf(msg, sizeof msg,
+             "Games install to %s from now on. Games installed in another folder stay there.",
+             settings.install_dir);
+    ui_library_tell(lib, "INSTALL LOCATION", msg);
+}
+
 /* The library screen, until the user leaves for the dashboard. */
 static void library(game *games, ui_lib_item *items, int count)
 {
@@ -1638,6 +1829,10 @@ static void library(game *games, ui_lib_item *items, int count)
     ui_library_open(&lib, items, count, shown);
     ui_library_set_installed(&lib, found_items, found_count);
     ui_library_set_account(&lib, logged_in());
+    ui_library_set_folders(&lib, settings.install_dir, folder_choices, list_folders());
+    if (settings_problem[0] != '\0') {
+        ui_library_tell(&lib, "SETTINGS", settings_problem);
+    }
     int rows = ui_library_rows(&screen);
     int range = ui_pan_range(&screen);
     char status[160];
@@ -1670,6 +1865,8 @@ static void library(game *games, ui_lib_item *items, int count)
                 resume = -1;
             } else if (a == UI_LIB_LOGOUT) {
                 logout(&lib);
+            } else if (a == UI_LIB_FOLDER) {
+                change_folder(&lib, games, items, count);
             } else if (resume >= 0 && lib.typing_for == UI_LIB_TYPING_NONE) {
                 resume = -1; /* the keyboard was cancelled: nothing carries on */
             }
@@ -1710,12 +1907,19 @@ int main(void)
         debugPrint("Startup failed (memory or E: drive)\n");
         halt();
     }
-    if (!xc_nx_mkdirs(ISO_DIR) || !xc_nx_mkdirs(GAMES_DIR)) {
-        debugPrint("Could not create " ISO_DIR " or " GAMES_DIR "\n");
+    if (!xc_nx_mkdirs(ISO_DIR)) {
+        debugPrint("Could not create " ISO_DIR "\n");
         halt();
     }
     open_log();
     out("==== xiso-cartographer %s ====\n", xc_version_string());
+    xc_nx_mount_fg(&has_f, &has_g);
+    out("Drives: E:%s%s\n", has_f ? ", F:" : "", has_g ? ", G:" : "");
+    load_settings();
+    if (!xc_nx_mkdirs(settings.install_dir)) {
+        out("Could not create %s\n", settings.install_dir);
+        halt();
+    }
     load_credentials();
     load_catalog();
 

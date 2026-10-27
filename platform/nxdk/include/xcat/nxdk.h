@@ -51,8 +51,15 @@ void xc_nx_last_io_error(const char **op, unsigned long *code);
 /* Mounts E: (HDD partition 1) if needed. */
 bool xc_nx_mount_e(void);
 
+/* Mounts F: and G: (HDD partitions 6 and 7, on drives set up with them) if needed, and says
+   whether each is there: its root can be read (docs/formats/settings.md §4.1). */
+void xc_nx_mount_fg(bool *has_f, bool *has_g);
+
 /* Free bytes on the drive containing `path` (e.g. "E:\"). */
 xc_err xc_nx_free_space(const char *path, uint64_t *free_bytes);
+
+/* The cluster size of the drive `root` ("F:\"), or 0 if it can't be read. */
+uint32_t xc_nx_cluster_size(const char *root);
 
 /* True if `path` names an existing file or directory. */
 bool xc_nx_exists(const char *path);
