@@ -137,6 +137,18 @@ xc_err xc_http_get(xc_http_client *c, xc_http_resource *r, uint64_t max_len, xc_
 
 /* An xc_source over HTTP: every read_at, and every read_stream (a whole span), is one
  * xc_http_read. */
+/*
+ * One POST over https, for a login (§10): `body` (`body_len` bytes, of type `content_type`)
+ * goes once, on a fresh connection that is closed afterwards, with no credentials attached;
+ * there are no retries and no redirects. The client's buffer is wiped where the request was,
+ * but the caller wipes its own copy of `body`. A 200 body of at most `max_len` bytes goes to
+ * `fn` from offset 0 (XC_ERR_LIMIT if longer). Any other status fails as a read would (401/403
+ * XC_ERR_HTTP_DENIED, a redirect XC_ERR_HTTP_STATUS) with last_status set. XC_ERR_URL for a
+ * URL that isn't https.
+ */
+xc_err xc_http_post(xc_http_client *c, const char *url, const char *content_type, const void *body,
+                    size_t body_len, uint64_t max_len, xc_http_data_fn fn, void *ctx);
+
 typedef struct xc_http_source {
     xc_http_client *client;
     xc_http_resource *res;

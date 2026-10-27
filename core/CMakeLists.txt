@@ -17,6 +17,7 @@ add_library(xcat
   src/installed.c
   src/journal.c
   src/json.c
+  src/login.c
   src/map.c
   src/seq.c
   src/source.c

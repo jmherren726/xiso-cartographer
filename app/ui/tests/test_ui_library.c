@@ -95,6 +95,8 @@ static void test_sections(void)
     }
     TEST_ASSERT_EQUAL_INT(UI_LIB_SETTINGS, lib.section); /* and at the bottom */
     TEST_ASSERT_EQUAL_INT(0, lib.list.cur);              /* the D-pad didn't move the list */
+    (void)ui_library_input(&lib, UI_BTN_UP, 5);
+    (void)ui_library_input(&lib, UI_BTN_UP, 5); /* DOWNLOADS */
     (void)ui_library_input(&lib, UI_BTN_A, 5);
     TEST_ASSERT_FALSE(lib.in_sections);
     /* Not GAMES: no list to move, nothing to install. */
@@ -102,6 +104,7 @@ static void test_sections(void)
     TEST_ASSERT_EQUAL_INT(0, lib.list.cur);
     (void)ui_library_input(&lib, UI_BTN_A, 5);
     TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, lib.asking);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_TYPING_NONE, lib.typing_for);
     ui_library_draw(&fake_draw, &lib, 0, NULL);
     TEST_ASSERT_TRUE(fake_saw("Not here yet"));
     TEST_ASSERT_FALSE(fake_saw("First game"));
@@ -292,14 +295,14 @@ static void test_search(void)
     (void)ui_library_input(&lib, UI_BTN_LEFT, 5);
     (void)ui_library_input(&lib, UI_BTN_DOWN, 5); /* in DOWNLOADS */
     TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_Y, 5));
-    TEST_ASSERT_TRUE(lib.searching);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_TYPING_SEARCH, lib.typing_for);
     ui_library_draw(&fake_draw, &lib, 0, NULL);
     TEST_ASSERT_EQUAL_INT(1, count_kind('s')); /* over the screen behind */
     TEST_ASSERT_TRUE(fake_find_text("SEARCH") >= 0);
     type(&lib, "racing");
     TEST_ASSERT_EQUAL_STRING("", lib.query); /* not searched before DONE */
     TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_START, 5));
-    TEST_ASSERT_FALSE(lib.searching);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_TYPING_NONE, lib.typing_for);
     TEST_ASSERT_EQUAL_STRING("racing", lib.query);
     TEST_ASSERT_EQUAL_INT(UI_LIB_GAMES, lib.section);
     TEST_ASSERT_FALSE(lib.in_sections);
@@ -349,7 +352,7 @@ static void test_search_again(void)
     TEST_ASSERT_EQUAL_STRING("fast", lib.typing);
     type(&lib, "x");
     (void)ui_library_input(&lib, UI_BTN_B, 5); /* cancel */
-    TEST_ASSERT_FALSE(lib.searching);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_TYPING_NONE, lib.typing_for);
     TEST_ASSERT_EQUAL_STRING("fast", lib.query);
     TEST_ASSERT_EQUAL_INT(2, lib.list.count);
 
@@ -374,6 +377,114 @@ static void test_search_again(void)
     TEST_ASSERT_EQUAL_INT(4, lib.list.count);
 }
 
+static void to_settings(ui_library *lib)
+{
+    (void)ui_library_input(lib, UI_BTN_LEFT, 5);
+    for (int i = 0; i < 3; i++) {
+        (void)ui_library_input(lib, UI_BTN_DOWN, 5);
+    }
+    (void)ui_library_input(lib, UI_BTN_RIGHT, 5);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_SETTINGS, lib->section);
+}
+
+static bool all_zero(const char *p, size_t n)
+{
+    for (size_t i = 0; i < n; i++) {
+        if (p[i] != '\0') {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* A in SETTINGS: the email, then the password, which is never drawn; DONE logs in. */
+static void test_login(void)
+{
+    ui_library lib;
+    ui_library_open(&lib, items, 3, shown);
+    to_settings(&lib);
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_TRUE(fake_find_text("archive.org") >= 0);
+    TEST_ASSERT_TRUE(fake_find_text("NOT LOGGED IN") >= 0);
+    TEST_ASSERT_TRUE(fake_saw("A log in"));
+    TEST_ASSERT_TRUE(fake_saw("never stored"));
+
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_TYPING_EMAIL, lib.typing_for);
+    type(&lib, "me");
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_START, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_TYPING_PASSWORD, lib.typing_for);
+    TEST_ASSERT_TRUE(lib.kbd.password);
+    type(&lib, "zyx");
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_TRUE(fake_saw("ARCHIVE.ORG PASSWORD"));
+    TEST_ASSERT_FALSE(fake_saw("zyx")); /* dots only */
+    TEST_ASSERT_EQUAL_INT(UI_LIB_LOGIN, ui_library_input(&lib, UI_BTN_START, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_TYPING_NONE, lib.typing_for);
+    TEST_ASSERT_EQUAL_STRING("me", lib.email);
+    TEST_ASSERT_EQUAL_STRING("zyx", lib.password);
+    ui_library_forget_password(&lib);
+    TEST_ASSERT_TRUE(all_zero(lib.password, sizeof lib.password));
+}
+
+/* B at either step logs nothing in; the password is wiped, the email kept for next time. */
+static void test_login_cancelled(void)
+{
+    ui_library lib;
+    ui_library_open(&lib, items, 3, shown);
+    to_settings(&lib);
+    (void)ui_library_input(&lib, UI_BTN_A, 5);
+    (void)ui_library_input(&lib, UI_BTN_START, 5); /* no email: nothing happens */
+    TEST_ASSERT_EQUAL_INT(UI_LIB_TYPING_NONE, lib.typing_for);
+    (void)ui_library_input(&lib, UI_BTN_A, 5);
+    type(&lib, "me");
+    (void)ui_library_input(&lib, UI_BTN_B, 5);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_TYPING_NONE, lib.typing_for);
+
+    (void)ui_library_input(&lib, UI_BTN_A, 5);
+    TEST_ASSERT_EQUAL_STRING("me", lib.email);
+    (void)ui_library_input(&lib, UI_BTN_START, 5);
+    type(&lib, "zyx");
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_B, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_TYPING_NONE, lib.typing_for);
+    TEST_ASSERT_TRUE(all_zero(lib.password, sizeof lib.password));
+
+    (void)ui_library_input(&lib, UI_BTN_A, 5);
+    (void)ui_library_input(&lib, UI_BTN_START, 5);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_START, 5)); /* empty */
+    TEST_ASSERT_EQUAL_INT(UI_LIB_TYPING_NONE, lib.typing_for);
+}
+
+/* Logged in, A asks before logging out, CANCEL first; a message closes with A or B. */
+static void test_logout_and_tell(void)
+{
+    ui_library lib;
+    ui_library_open(&lib, items, 3, shown);
+    to_settings(&lib);
+    ui_library_set_account(&lib, true);
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_TRUE(fake_find_text("LOGGED IN") >= 0);
+    TEST_ASSERT_TRUE(fake_saw("A log out"));
+    (void)ui_library_input(&lib, UI_BTN_A, 5);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_LOGOUT, lib.asking);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5)); /* CANCEL */
+    (void)ui_library_input(&lib, UI_BTN_A, 5);
+    (void)ui_library_input(&lib, UI_BTN_LEFT, 5);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_LOGOUT, ui_library_input(&lib, UI_BTN_A, 5));
+
+    ui_library_tell(&lib, "LOGGED IN", "You're logged in.");
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_TRUE(fake_saw("You're logged in."));
+    TEST_ASSERT_TRUE(fake_find_text("OK") >= 0);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, lib.asking);
+    ui_library_tell(&lib, "LOG IN", "No.");
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_B, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, lib.asking);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -390,5 +501,8 @@ int main(void)
     RUN_TEST(test_matches);
     RUN_TEST(test_search);
     RUN_TEST(test_search_again);
+    RUN_TEST(test_login);
+    RUN_TEST(test_login_cancelled);
+    RUN_TEST(test_logout_and_tell);
     return UNITY_END();
 }

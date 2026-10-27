@@ -100,6 +100,29 @@ static void search(ui_library *lib, int rows)
     lib->list = (ui_list){n, cur, cur >= rows ? cur - rows + 1 : 0};
 }
 
+void ui_library_set_account(ui_library *lib, bool logged_in)
+{
+    lib->logged_in = logged_in;
+}
+
+void ui_library_forget_password(ui_library *lib)
+{
+    volatile char *p = lib->password; /* a store the compiler can't drop */
+    for (size_t i = 0; i < sizeof lib->password; i++) {
+        p[i] = '\0';
+    }
+}
+
+void ui_library_tell(ui_library *lib, const char *title, const char *message)
+{
+    (void)snprintf(lib->tell_title, sizeof lib->tell_title, "%s", title);
+    (void)snprintf(lib->message, sizeof lib->message, "%s", message);
+    lib->dialog = (ui_dialog){lib->tell_title, lib->message, {"OK", NULL, NULL}, 0, 0};
+    lib->asking = UI_LIB_TELL;
+    lib->typing_for = UI_LIB_TYPING_NONE;
+    lib->backdrop = false;
+}
+
 void ui_library_set_installed(ui_library *lib, const ui_lib_item *items, int count)
 {
     lib->installed = items;
@@ -138,12 +161,57 @@ static void ask(ui_library *lib, ui_lib_action what)
                        "Install %s to E:\\Games? It can be stopped with B and resumed later.",
                        lib->items[ui_library_game(lib)].name);
         lib->dialog = (ui_dialog){"INSTALL", lib->message, {"INSTALL", "CANCEL", NULL}, 0, 1};
+    } else if (what == UI_LIB_LOGOUT) {
+        lib->dialog = (ui_dialog){"LOG OUT",
+                                  "Log out of archive.org on this console? Items that need the "
+                                  "login won't download until you log in again.",
+                                  {"LOG OUT", "CANCEL", NULL},
+                                  1,
+                                  1};
     } else {
         lib->dialog =
             (ui_dialog){"LEAVE", "Return to the dashboard?", {"LEAVE", "STAY", NULL}, 0, 1};
     }
     lib->asking = what;
     lib->backdrop = false;
+}
+
+static void open_kbd(ui_library *lib, ui_lib_typing what)
+{
+    if (what == UI_LIB_TYPING_SEARCH) {
+        ui_kbd_open(&lib->kbd, "SEARCH", lib->typing, sizeof lib->typing, false);
+    } else if (what == UI_LIB_TYPING_EMAIL) {
+        ui_kbd_open(&lib->kbd, "ARCHIVE.ORG EMAIL", lib->email, sizeof lib->email, false);
+    } else {
+        ui_library_forget_password(lib);
+        ui_kbd_open(&lib->kbd, "ARCHIVE.ORG PASSWORD", lib->password, sizeof lib->password, true);
+    }
+    lib->typing_for = what;
+    lib->backdrop = false;
+}
+
+/* The keyboard closed with DONE or B, or is still open. */
+static ui_lib_action typed(ui_library *lib, ui_kbd_result r, int rows)
+{
+    if (r == UI_KBD_EDITING) {
+        return UI_LIB_NONE;
+    }
+    ui_lib_typing what = lib->typing_for;
+    lib->typing_for = UI_LIB_TYPING_NONE;
+    if (what == UI_LIB_TYPING_PASSWORD) {
+        if (r == UI_KBD_DONE && lib->password[0] != '\0') {
+            return UI_LIB_LOGIN; /* the caller logs in, then forgets the password */
+        }
+        ui_library_forget_password(lib);
+    } else if (r == UI_KBD_DONE && what == UI_LIB_TYPING_EMAIL && lib->email[0] != '\0') {
+        open_kbd(lib, UI_LIB_TYPING_PASSWORD);
+    } else if (r == UI_KBD_DONE && what == UI_LIB_TYPING_SEARCH) {
+        (void)snprintf(lib->query, sizeof lib->query, "%s", lib->typing);
+        lib->section = UI_LIB_GAMES;
+        lib->in_sections = false;
+        search(lib, rows);
+    }
+    return UI_LIB_NONE;
 }
 
 ui_lib_action ui_library_input(ui_library *lib, ui_button b, int rows)
@@ -155,26 +223,14 @@ ui_lib_action ui_library_input(ui_library *lib, ui_button b, int rows)
         }
         ui_lib_action what = lib->asking;
         lib->asking = UI_LIB_NONE;
-        return c == 0 ? what : UI_LIB_NONE;
+        return c == 0 && what != UI_LIB_TELL ? what : UI_LIB_NONE;
     }
-    if (lib->searching) {
-        ui_kbd_result r = ui_kbd_input(&lib->kbd, b);
-        if (r != UI_KBD_EDITING) {
-            lib->searching = false;
-        }
-        if (r == UI_KBD_DONE) {
-            (void)snprintf(lib->query, sizeof lib->query, "%s", lib->typing);
-            lib->section = UI_LIB_GAMES;
-            lib->in_sections = false;
-            search(lib, rows);
-        }
-        return UI_LIB_NONE;
+    if (lib->typing_for != UI_LIB_TYPING_NONE) {
+        return typed(lib, ui_kbd_input(&lib->kbd, b), rows);
     }
     if (b == UI_BTN_Y) {
         (void)snprintf(lib->typing, sizeof lib->typing, "%s", lib->query);
-        ui_kbd_open(&lib->kbd, "SEARCH", lib->typing, sizeof lib->typing, false);
-        lib->searching = true;
-        lib->backdrop = false;
+        open_kbd(lib, UI_LIB_TYPING_SEARCH);
     } else if (b == UI_BTN_BACK) {
         ask(lib, UI_LIB_EXIT);
     } else if (lib->in_sections) {
@@ -198,6 +254,12 @@ ui_lib_action ui_library_input(ui_library *lib, ui_button b, int rows)
         }
     } else if (lib->section == UI_LIB_INSTALLED_GAMES && b != UI_BTN_A) {
         (void)ui_list_input(&lib->installed_list, b, rows);
+    } else if (lib->section == UI_LIB_SETTINGS && b == UI_BTN_A) {
+        if (lib->logged_in) {
+            ask(lib, UI_LIB_LOGOUT);
+        } else {
+            open_kbd(lib, UI_LIB_TYPING_EMAIL);
+        }
     }
     return UI_LIB_NONE;
 }
@@ -298,6 +360,38 @@ static void draw_detail(const ui_draw *d, const ui_lib_item *it)
     }
 }
 
+static const char *setting_name(void *ctx, int i)
+{
+    (void)ctx;
+    (void)i;
+    return "archive.org";
+}
+
+/* SETTINGS' details: the account, logged in or not, and what happens to the password. */
+static void draw_account(const ui_draw *d, const ui_library *lib)
+{
+    ui_panel(d, detail, UI_CHAMFER, ui_col_panel, ui_col_border);
+    int x = detail.x + PAD + 4;
+    int w = detail.w - 2 * PAD - 4;
+    int y = detail.y + PAD;
+    int bottom = detail.y + detail.h - PAD;
+    int bh = d->line_height(d->ctx, UI_FONT_BOLD);
+    int sh = d->line_height(d->ctx, UI_FONT_SMALL);
+    (void)ui_text_fit(d, UI_FONT_BOLD, x, y, w, ui_col_accent, "archive.org");
+    y += bh + 6;
+    (void)ui_text_fit(d, UI_FONT_LABEL, x, y, w, lib->logged_in ? ui_col_accent : ui_col_text,
+                      lib->logged_in ? "LOGGED IN" : "NOT LOGGED IN");
+    y += d->line_height(d->ctx, UI_FONT_LABEL);
+    y += ui_text_wrap(d, UI_FONT_SMALL, (ui_rect){x, y, w, 4 * sh}, ui_col_text,
+                      lib->logged_in ? "Items that need your login download with it. A logs out."
+                                     : "A logs in with your archive.org email and password.") *
+         sh;
+    y += 6;
+    (void)ui_text_wrap(d, UI_FONT_SMALL, (ui_rect){x, y, w, bottom - y}, ui_col_dim,
+                       "The password is sent once, over HTTPS, and never stored. The session "
+                       "is kept in the credentials file in E:\\Apps\\xcat.");
+}
+
 static void draw_list(const ui_draw *d, ui_library *lib)
 {
     ui_panel(d, list, UI_CHAMFER, ui_col_panel, ui_col_border);
@@ -308,6 +402,11 @@ static void draw_list(const ui_draw *d, ui_library *lib)
         } else {
             ui_list_draw(d, &lib->installed_list, list_in, installed_name, lib);
         }
+        return;
+    }
+    if (lib->section == UI_LIB_SETTINGS) {
+        static const ui_list one = {1, 0, 0};
+        ui_list_draw(d, &one, list_in, setting_name, NULL);
         return;
     }
     if (lib->section != UI_LIB_GAMES) {
@@ -357,6 +456,10 @@ static const char *hints(const ui_library *lib)
     if (lib->in_sections) {
         return "Up Down section  Right or A list  Y search  Back exit";
     }
+    if (lib->section == UI_LIB_SETTINGS) {
+        return lib->logged_in ? "A log out  Left sections  Y search  Back exit"
+                              : "A log in  Left sections  Y search  Back exit";
+    }
     if (lib->section != UI_LIB_GAMES) {
         return "LT RT page  Left sections  Y search  Back exit";
     }
@@ -381,7 +484,11 @@ static void draw_screen(const ui_draw *d, ui_library *lib, int pan, const char *
     draw_sections(d, lib);
     draw_summary(d, lib);
     draw_list(d, lib);
-    draw_detail(d, current(lib));
+    if (lib->section == UI_LIB_SETTINGS) {
+        draw_account(d, lib);
+    } else {
+        draw_detail(d, current(lib));
+    }
 
     ui_panel(d, footer, 0, ui_col_panel, ui_col_border);
     int sh = d->line_height(d->ctx, UI_FONT_SMALL);
@@ -395,7 +502,8 @@ static void draw_screen(const ui_draw *d, ui_library *lib, int pan, const char *
 
 void ui_library_draw(const ui_draw *d, ui_library *lib, int pan, const char *status)
 {
-    if (lib->asking == UI_LIB_NONE && !lib->searching) {
+    bool typing = lib->typing_for != UI_LIB_TYPING_NONE;
+    if (lib->asking == UI_LIB_NONE && !typing) {
         lib->backdrop = false;
         draw_screen(d, lib, pan, status);
         return;
@@ -407,7 +515,7 @@ void ui_library_draw(const ui_draw *d, ui_library *lib, int pan, const char *sta
         ui_backdrop_save(d);
         lib->backdrop = true;
     }
-    if (lib->searching) {
+    if (typing) {
         ui_kbd_draw(d, &lib->kbd);
     } else {
         ui_dialog_draw(d, &lib->dialog);

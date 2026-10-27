@@ -1,0 +1,4 @@
+r# xcat-credentials v1
+[archive]
+hosts = archive.org
+cookie = a=b

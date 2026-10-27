@@ -34,6 +34,11 @@ typedef struct req {
     char auth[128]; /* the Authorization header, if any */
     bool has_ua;
     bool identity;
+    bool post;
+    char content_type[64];
+    size_t content_length;
+    bool conn_close; /* Connection: close */
+    char body[256];  /* a POST's */
 } req;
 
 typedef struct fconn {
@@ -139,7 +144,11 @@ static void serve_req(fake *f, fconn *c, const req *r)
 static void parse_req(const char *text, req *r)
 {
     memset(r, 0, sizeof *r);
-    TEST_ASSERT_EQUAL_INT(0, strncmp(text, "GET ", 4));
+    if (strncmp(text, "POST ", 5) == 0) {
+        r->post = true;
+        text++; /* "OST " lines up with "GET " */
+    }
+    TEST_ASSERT_TRUE(r->post || strncmp(text, "GET ", 4) == 0);
     const char *sp = strchr(text + 4, ' ');
     TEST_ASSERT_NOT_NULL(sp);
     TEST_ASSERT_TRUE((size_t)(sp - text - 4) < sizeof r->target);
@@ -167,7 +176,21 @@ static void parse_req(const char *text, req *r)
             r->has_ua = true;
         } else if (strncmp(line, "Accept-Encoding: identity\r\n", 27) == 0) {
             r->identity = true;
+        } else if (strncmp(line, "Content-Type: ", 14) == 0) {
+            const char *e = strstr(line, "\r\n");
+            TEST_ASSERT_TRUE((size_t)(e - line - 14) < sizeof r->content_type);
+            memcpy(r->content_type, line + 14, (size_t)(e - line - 14));
+        } else if (strncmp(line, "Content-Length: ", 16) == 0) {
+            r->content_length = (size_t)strtoul(line + 16, NULL, 10);
+        } else if (strncmp(line, "Connection: close\r\n", 19) == 0) {
+            r->conn_close = true;
         }
+    }
+    if (r->post) {
+        const char *body = strstr(text, "\r\n\r\n") + 4;
+        TEST_ASSERT_TRUE(r->content_length < sizeof r->body);
+        TEST_ASSERT_EQUAL_size_t(r->content_length, strlen(body));
+        memcpy(r->body, body, r->content_length);
     }
 }
 
@@ -208,6 +231,14 @@ static xc_err f_send(void *ctx, xc_net_conn *conn, const void *buf, size_t len, 
     c->rq_len += len;
     c->rq[c->rq_len] = '\0';
     char *end = strstr(c->rq, "\r\n\r\n");
+    if (end != NULL && !c->dead && strncmp(c->rq, "POST ", 5) == 0) {
+        const char *cl = strstr(c->rq, "\r\nContent-Length: ");
+        TEST_ASSERT_TRUE(cl != NULL && cl < end);
+        if ((size_t)(c->rq + c->rq_len - (end + 4)) < (size_t)strtoul(cl + 18, NULL, 10)) {
+            return XC_OK; /* the body isn't all here yet */
+        }
+        end = c->rq + c->rq_len - 4; /* the request ends with its body */
+    }
     if (end != NULL && !c->dead) {
         TEST_ASSERT_EQUAL_PTR(c->rq + c->rq_len - 4, end); /* one request at a time */
         TEST_ASSERT_TRUE(f->nlog < MAX_LOG);
@@ -990,6 +1021,116 @@ static void test_source_adapter(void)
     TEST_ASSERT_EQUAL_INT(XC_ERR_RANGE, xc_source_read(&src, FILE_SIZE - 10U, buf, 11));
 }
 
+/* --- xc_http_post (§10) ------------------------------------------------------------------- */
+
+static int g_post_status;
+
+static void serve_post(fake *f, fconn *c, const req *r)
+{
+    (void)f;
+    TEST_ASSERT_TRUE(r->post);
+    static const char answer[] = "{\"success\": true}";
+    if (g_post_status == 200) {
+        out_fmt(c, "HTTP/1.1 200 OK\r\nContent-Length: %u\r\nConnection: close\r\n\r\n%s",
+                (unsigned)strlen(answer), answer);
+    } else if (g_post_status == 302) {
+        out_fmt(c, "HTTP/1.1 302 Found\r\nLocation: /elsewhere\r\nContent-Length: 0\r\n\r\n");
+    } else {
+        out_fmt(c, "HTTP/1.1 %d X\r\nContent-Length: 0\r\n\r\n", g_post_status);
+    }
+    c->close_after = true;
+}
+
+static xc_err always_auth(void *ctx, const xc_url *url, char *out, size_t cap, size_t *len,
+                          const char **section)
+{
+    (void)ctx;
+    (void)url;
+    static const char h[] = "Authorization: Bearer TOKEN\r\n";
+    TEST_ASSERT_TRUE(cap >= sizeof h);
+    memcpy(out, h, sizeof h - 1);
+    *len = sizeof h - 1;
+    *section = "always";
+    return XC_OK;
+}
+
+static const xc_http_auth always = {always_auth, NULL};
+
+/* Starts a client whose https goes to the fake, with credentials for every host. */
+static void start_post(int status)
+{
+    start(serve_post, "http://h/f");
+    xc_http_config cfg = base_cfg();
+    cfg.tls = &fnet;
+    cfg.auth = &always;
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_http_client_init(&client, &cfg));
+    g_post_status = status;
+}
+
+static xc_err post(const char *url, uint64_t max)
+{
+    static const char body[] = "email=e%40x&password=SECRETPASSWORD";
+    got_len = 0;
+    return xc_http_post(&client, url, "application/x-www-form-urlencoded", body, sizeof body - 1,
+                        max, collect, NULL);
+}
+
+/* One request, with the body, no credentials and no keep-alive; the buffer is wiped. */
+static void test_post(void)
+{
+    start_post(200);
+    TEST_ASSERT_EQUAL_INT(XC_OK, post("https://h/services/x/?op=login", 1000));
+    TEST_ASSERT_EQUAL_INT(1, F.nlog);
+    const req *r = &F.log[0];
+    TEST_ASSERT_EQUAL_STRING("/services/x/?op=login", r->target);
+    TEST_ASSERT_EQUAL_UINT(443, r->port);
+    TEST_ASSERT_EQUAL_STRING("application/x-www-form-urlencoded", r->content_type);
+    TEST_ASSERT_EQUAL_STRING("email=e%40x&password=SECRETPASSWORD", r->body);
+    TEST_ASSERT_EQUAL_STRING("", r->auth);
+    TEST_ASSERT_TRUE(r->has_ua && r->identity && r->conn_close);
+    TEST_ASSERT_EQUAL_UINT64(17, got_len);
+    TEST_ASSERT_EQUAL_MEMORY("{\"success\": true}", got, 17);
+    TEST_ASSERT_NULL(client.last_section);
+    for (size_t i = 0; i + 6 <= sizeof rbuf; i++) {
+        TEST_ASSERT_FALSE_MESSAGE(memcmp(rbuf + i, "SECRET", 6) == 0, "password left in buffer");
+    }
+    for (int i = 0; i < MAX_CONNS; i++) {
+        TEST_ASSERT_FALSE(F.conns[i].used); /* closed */
+    }
+}
+
+/* No retries, no redirects, no plain http, and the size limit. */
+static void test_post_failures(void)
+{
+    start_post(302);
+    TEST_ASSERT_EQUAL_INT(XC_ERR_HTTP_STATUS, post("https://h/login", 1000));
+    TEST_ASSERT_EQUAL_INT(302, client.last_status);
+    TEST_ASSERT_EQUAL_INT(1, F.nlog);
+
+    start_post(503);
+    TEST_ASSERT_EQUAL_INT(XC_ERR_HTTP_STATUS, post("https://h/login", 1000));
+    TEST_ASSERT_EQUAL_INT(1, F.nlog);
+    TEST_ASSERT_EQUAL_INT(0, F.nsleeps);
+
+    start_post(403);
+    TEST_ASSERT_EQUAL_INT(XC_ERR_HTTP_DENIED, post("https://h/login", 1000));
+
+    start_post(200);
+    TEST_ASSERT_EQUAL_INT(XC_ERR_LIMIT, post("https://h/login", 10));
+
+    start_post(200);
+    F.connect_failures = 3;
+    TEST_ASSERT_EQUAL_INT(XC_ERR_NET_CONNECT, post("https://h/login", 1000));
+    TEST_ASSERT_EQUAL_INT(1, F.connects);
+    TEST_ASSERT_EQUAL_INT(0, F.nsleeps);
+
+    start_post(200);
+    TEST_ASSERT_EQUAL_INT(XC_ERR_URL, post("http://h/login", 1000));
+    TEST_ASSERT_EQUAL_INT(0, F.connects);
+    TEST_ASSERT_EQUAL_INT(XC_ERR_INVALID_ARG,
+                          xc_http_post(&client, "https://h/", "a\r\nb", "", 0, 10, collect, NULL));
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -1013,5 +1154,7 @@ int main(void)
     RUN_TEST(test_get);
     RUN_TEST(test_get_retries);
     RUN_TEST(test_source_adapter);
+    RUN_TEST(test_post);
+    RUN_TEST(test_post_failures);
     return UNITY_END();
 }

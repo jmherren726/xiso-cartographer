@@ -88,6 +88,20 @@ xc_err xc_cred_headers(const xc_cred_section *s, char *out, size_t cap, size_t *
 /* Fills in an xc_http_auth that attaches `c`'s credentials hop by hop. `c` must outlive it. */
 void xc_cred_http_auth(xc_http_auth *auth, const xc_credentials *c);
 
+/* The section called `name` (case-insensitively), or NULL. */
+const xc_cred_section *xc_cred_section_named(const xc_credentials *c, const char *name);
+
+/*
+ * The file with one section written or removed (docs/formats/login.md §5): data[0, len) with
+ * section [name] replaced by `section` (whole lines, each ending in "\n"), or removed if
+ * `section` is NULL; added at the end if the file has none. With no file (data NULL, len 0),
+ * a new one. Every other byte stays as it was. The file must parse before, and the result
+ * after, or it's XC_ERR_CREDENTIALS and `err` says why. On success *out (malloc'd, NUL-
+ * terminated, *out_len bytes) holds tokens: wipe it before freeing it.
+ */
+xc_err xc_cred_set_section(const char *data, size_t len, const char *name, const char *section,
+                           char **out, size_t *out_len, xc_cred_error *err);
+
 #ifdef __cplusplus
 }
 #endif

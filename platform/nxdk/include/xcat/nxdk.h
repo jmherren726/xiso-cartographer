@@ -60,6 +60,11 @@ bool xc_nx_exists(const char *path);
 /* Creates `path` and any missing parents. */
 bool xc_nx_mkdirs(const char *path);
 
+/* Replaces the file `path` with data[0, len) all at once (docs/formats/login.md §5): writes
+   `path`.tmp, flushes it, then renames it over `path`. A power cut leaves the old file or the
+   new one, and at worst a stale .tmp. The .tmp is wiped and deleted if anything fails. */
+xc_err xc_nx_replace_file(const char *path, const void *data, size_t len);
+
 /*
  * Networking (xcat/net.h) over nxdk's lwIP (nx_net.c). xc_nx_net_startup()
  * brings the network up with the dashboard's settings (DHCP or static) and

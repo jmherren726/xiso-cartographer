@@ -1,6 +1,6 @@
 /*
  * HTTP/1.1 Range client: docs/formats/http.md §3 (requests), §6 (status codes),
- * §7 (retries and resume), §8 (credentials) and §9 (connections).
+ * §7 (retries and resume), §8 (credentials), §9 (connections) and §10 (POST, for logins).
  */
 #include "xcat/http_client.h"
 
@@ -195,6 +195,33 @@ static xc_err build_request(xc_http_client *c, const xc_url *u, const attempt *a
     return XC_OK;
 }
 
+/* After a request is sent: reads until the head is complete. *have = bytes in the buffer, also
+   on an error (the connection is then left open). */
+static xc_err recv_head(xc_http_client *c, size_t *have, size_t *head_len)
+{
+    *have = 0;
+    for (;;) {
+        size_t got = 0;
+        xc_err err = c->conn_net->recv(c->conn_net->ctx, c->conn, c->cfg.buf + *have,
+                                       c->cfg.buf_size - *have, c->cfg.timeout_ms, &got);
+        if (err == XC_OK && got == 0) {
+            err = XC_ERR_NET_IO; /* closed before the head was complete */
+        }
+        if (err != XC_OK) {
+            return err;
+        }
+        *have += got;
+        size_t end = xc_http_head_end(c->cfg.buf, *have);
+        if (end > 0) {
+            *head_len = end;
+            return XC_OK;
+        }
+        if (*have >= XC_HTTP_MAX_HEAD) {
+            return XC_ERR_HTTP_PROTOCOL;
+        }
+    }
+}
+
 /* Sends the request and reads until the head is complete. *n = bytes in the buffer. */
 static xc_err exchange(xc_http_client *c, const xc_url *u, attempt *a, size_t *n, size_t *head_len)
 {
@@ -215,26 +242,15 @@ static xc_err exchange(xc_http_client *c, const xc_url *u, attempt *a, size_t *n
         }
         err = c->conn_net->send(c->conn_net->ctx, c->conn, c->cfg.buf, req_len, c->cfg.timeout_ms);
         size_t have = 0;
-        while (err == XC_OK) {
-            size_t got = 0;
-            err = c->conn_net->recv(c->conn_net->ctx, c->conn, c->cfg.buf + have,
-                                    c->cfg.buf_size - have, c->cfg.timeout_ms, &got);
-            if (err == XC_OK && got == 0) {
-                err = XC_ERR_NET_IO; /* closed before the head was complete */
-            }
-            if (err != XC_OK) {
-                break;
-            }
-            have += got;
-            size_t end = xc_http_head_end(c->cfg.buf, have);
-            if (end > 0) {
+        if (err == XC_OK) {
+            err = recv_head(c, &have, head_len);
+            if (err == XC_OK) {
                 *n = have;
-                *head_len = end;
                 return XC_OK;
             }
-            if (have >= XC_HTTP_MAX_HEAD) {
+            if (err == XC_ERR_HTTP_PROTOCOL) {
                 xc_http_client_close(c);
-                return XC_ERR_HTTP_PROTOCOL;
+                return err;
             }
         }
         xc_http_client_close(c);
@@ -589,6 +605,123 @@ xc_err xc_http_get(xc_http_client *c, xc_http_resource *r, uint64_t max_len, xc_
         return XC_ERR_INVALID_ARG;
     }
     return fetch(c, r, 0, 0, max_len, fn, ctx);
+}
+
+/* --- POST (§10) -------------------------------------------------------------------------- */
+
+/* Overwrites n bytes in a way the compiler can't drop as a dead store. */
+static void wipe(void *p, size_t n)
+{
+    volatile uint8_t *v = p;
+    while (n-- > 0) {
+        *v++ = 0;
+    }
+}
+
+static xc_err status_error(int s)
+{
+    switch (s) {
+    case 401:
+    case 403:
+        return XC_ERR_HTTP_DENIED;
+    case 404:
+    case 410:
+        return XC_ERR_HTTP_NOT_FOUND;
+    default:
+        return XC_ERR_HTTP_STATUS;
+    }
+}
+
+static xc_err post_once(xc_http_client *c, const xc_url *u, const char *content_type,
+                        const void *body, size_t body_len, attempt *a)
+{
+    bool reused = false;
+    xc_err err = ensure_conn(c, u, &reused);
+    if (err != XC_OK) {
+        return err;
+    }
+    wbuf w = {(char *)c->cfg.buf, c->cfg.buf_size, 0, false};
+    w_str(&w, "POST ");
+    w_str(&w, u->target);
+    w_str(&w, " HTTP/1.1\r\nHost: ");
+    w_str(&w, u->host);
+    if (!xc_url_default_port(u)) {
+        w_str(&w, ":");
+        w_u64(&w, u->port);
+    }
+    w_str(&w, "\r\nUser-Agent: xiso-cartographer/");
+    w_str(&w, xc_version_string());
+    w_str(&w, USER_AGENT_SUFFIX "\r\nAccept-Encoding: identity\r\nContent-Type: ");
+    w_str(&w, content_type);
+    w_str(&w, "\r\nContent-Length: ");
+    w_u64(&w, body_len);
+    w_str(&w, "\r\nConnection: close\r\n\r\n");
+    w_mem(&w, body, body_len);
+    if (w.overflow) {
+        wipe(c->cfg.buf, w.n);
+        return XC_ERR_LIMIT;
+    }
+    err = c->conn_net->send(c->conn_net->ctx, c->conn, c->cfg.buf, w.n, c->cfg.timeout_ms);
+    wipe(c->cfg.buf, w.n); /* the body may hold a password */
+    if (err != XC_OK) {
+        return err;
+    }
+    size_t have = 0;
+    size_t head_len = 0;
+    err = recv_head(c, &have, &head_len);
+    if (err != XC_OK) {
+        return err;
+    }
+    xc_http_response resp;
+    err = xc_http_parse_head(c->cfg.buf, head_len, &resp);
+    if (err != XC_OK) {
+        return err;
+    }
+    c->last_status = resp.status;
+    if (resp.status != 200) {
+        return status_error(resp.status); /* a redirect isn't followed */
+    }
+    if (!resp.chunked && !resp.has_length) {
+        return XC_ERR_HTTP_PROTOCOL;
+    }
+    if (resp.has_length && resp.length > a->max) {
+        return XC_ERR_LIMIT;
+    }
+    return read_body(c, a, &resp, head_len, have, resp.has_length, resp.length);
+}
+
+xc_err xc_http_post(xc_http_client *c, const char *url, const char *content_type, const void *body,
+                    size_t body_len, uint64_t max_len, xc_http_data_fn fn, void *ctx)
+{
+    if (c == NULL || url == NULL || content_type == NULL || (body == NULL && body_len > 0) ||
+        fn == NULL || max_len == 0) {
+        return XC_ERR_INVALID_ARG;
+    }
+    for (const char *p = content_type; *p != '\0'; p++) {
+        if ((unsigned char)*p < 0x20U || *p == 0x7F) {
+            return XC_ERR_INVALID_ARG;
+        }
+    }
+    xc_url u;
+    xc_err err = xc_url_parse(url, strlen(url), &u);
+    if (err != XC_OK) {
+        return err;
+    }
+    if (u.scheme != XC_URL_HTTPS) {
+        return XC_ERR_URL;
+    }
+    xc_http_client_close(c); /* a fresh connection: nothing is sent twice */
+    c->last_status = 0;
+    c->last_section = NULL;
+    attempt a;
+    memset(&a, 0, sizeof a);
+    a.whole = true;
+    a.max = max_len;
+    a.fn = fn;
+    a.ctx = ctx;
+    err = post_once(c, &u, content_type, body, body_len, &a);
+    xc_http_client_close(c);
+    return err;
 }
 
 /* --- xc_source adapter ------------------------------------------------------------------- */

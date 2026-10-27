@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "text.h"
+#include "xcat/login.h"
 
 /* --- small helpers ------------------------------------------------------------------ */
 
@@ -536,4 +537,153 @@ void xc_cred_http_auth(xc_http_auth *auth, const xc_credentials *c)
 {
     auth->headers = auth_headers;
     auth->ctx = (void *)(uintptr_t)c; /* only ever read */
+}
+
+const xc_cred_section *xc_cred_section_named(const xc_credentials *c, const char *name)
+{
+    for (size_t i = 0; c != NULL && name != NULL && i < c->section_count; i++) {
+        if (xc_text_eq_ci(c->sections[i].name, name)) {
+            return &c->sections[i];
+        }
+    }
+    return NULL;
+}
+
+/* --- login.md §5: writing one section --------------------------------------------------- */
+
+/* One line of the file: [start, end) with its line ending, and its text trimmed. */
+typedef struct line_at {
+    size_t start, end;
+    const char *text;
+    size_t text_len;
+} line_at;
+
+static bool next_line(const char *data, size_t len, size_t pos, line_at *l)
+{
+    if (pos >= len) {
+        return false;
+    }
+    const char *nl = memchr(data + pos, '\n', len - pos);
+    l->start = pos;
+    l->end = nl != NULL ? (size_t)(nl - data) + 1U : len;
+    size_t a = pos;
+    size_t b = nl != NULL ? (size_t)(nl - data) : len;
+    while (a < b && (data[a] == ' ' || data[a] == '\t')) {
+        a++;
+    }
+    while (b > a && (data[b - 1] == ' ' || data[b - 1] == '\t' || data[b - 1] == '\r')) {
+        b--;
+    }
+    l->text = data + a;
+    l->text_len = b - a;
+    return true;
+}
+
+static bool is_section_line(const line_at *l)
+{
+    return l->text_len >= 2 && l->text[0] == '[' && l->text[l->text_len - 1] == ']';
+}
+
+static bool names_section(const line_at *l, const char *name)
+{
+    size_t n = strlen(name);
+    if (!is_section_line(l) || l->text_len != n + 2U) {
+        return false;
+    }
+    for (size_t i = 0; i < n; i++) {
+        if (lower(l->text[i + 1]) != lower(name[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* §5: where [name] is: from its line to the end of its last key line. False if it isn't. */
+static bool find_section(const char *data, size_t len, const char *name, size_t *from, size_t *to)
+{
+    line_at l;
+    bool in = false;
+    for (size_t pos = 0; next_line(data, len, pos, &l); pos = l.end) {
+        if (in && is_section_line(&l)) {
+            break;
+        }
+        if (!in && names_section(&l, name)) {
+            in = true;
+            *from = l.start;
+            *to = l.end;
+        } else if (in && l.text_len > 0 && l.text[0] != '#') {
+            *to = l.end;
+        }
+    }
+    return in;
+}
+
+static bool append(char **buf, size_t *n, size_t *cap, const char *s, size_t len)
+{
+    if (len > *cap - *n) {
+        return false;
+    }
+    memcpy(*buf + *n, s, len);
+    *n += len;
+    return true;
+}
+
+xc_err xc_cred_set_section(const char *data, size_t len, const char *name, const char *section,
+                           char **out, size_t *out_len, xc_cred_error *err)
+{
+    if (name == NULL || out == NULL || out_len == NULL || err == NULL ||
+        (data == NULL && len > 0)) {
+        return XC_ERR_INVALID_ARG;
+    }
+    *out = NULL;
+    *out_len = 0;
+    memset(err, 0, sizeof *err);
+    xc_credentials c;
+    static const char header[] = "# xcat-credentials v1\n\n";
+    if (len > 0) {
+        xc_err e = xc_cred_parse(data, len, &c, err);
+        if (e != XC_OK) {
+            return e;
+        }
+        xc_cred_free(&c);
+    }
+    size_t sec_len = section != NULL ? strlen(section) : 0;
+    size_t cap = len + sec_len + sizeof header + 2U;
+    char *buf = malloc(cap + 1U);
+    if (buf == NULL) {
+        return XC_ERR_NOMEM;
+    }
+    size_t n = 0;
+    size_t from = 0;
+    size_t to = 0;
+    bool ok = true;
+    if (len == 0) {
+        ok = section == NULL || (append(&buf, &n, &cap, header, sizeof header - 1U) &&
+                                 append(&buf, &n, &cap, section, sec_len));
+    } else if (find_section(data, len, name, &from, &to)) {
+        ok = append(&buf, &n, &cap, data, from) && append(&buf, &n, &cap, section, sec_len) &&
+             append(&buf, &n, &cap, data + to, len - to);
+    } else {
+        ok = append(&buf, &n, &cap, data, len);
+        if (ok && section != NULL) {
+            ok = (data[len - 1] == '\n' || append(&buf, &n, &cap, "\n", 1)) &&
+                 append(&buf, &n, &cap, "\n", 1) && append(&buf, &n, &cap, section, sec_len);
+        }
+    }
+    buf[n] = '\0';
+    xc_err e = ok ? XC_OK : XC_ERR_LIMIT;
+    if (e == XC_OK && n > 0) {
+        e = xc_cred_parse(buf, n, &c, err); /* the result must be a valid file too */
+        if (e == XC_OK) {
+            xc_cred_free(&c);
+        }
+    }
+    if (e != XC_OK) {
+        xc_login_wipe(buf, cap + 1U);
+        free(buf);
+        return e;
+    }
+    *out = buf;
+    *out_len = n;
+    return XC_OK;
 }
