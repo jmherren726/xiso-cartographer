@@ -193,6 +193,7 @@ static void tenths(char *buf, size_t size, uint64_t t)
 
 #define INSTALL_DRAW_MS 250U /* a frame costs the install CPU time: four a second */
 
+static xc_settings settings; /* E:\Apps\xcat\settings, or the defaults */
 static ui_install_view view;
 static CRITICAL_SECTION view_lock;
 static bool view_dirty;           /* a callback changed `view`: draw it at the next look */
@@ -250,6 +251,7 @@ static DWORD WINAPI install_screen(LPVOID arg)
 static void install_start(const char *name)
 {
     ui_install_open(&view, name);
+    view.dir = settings.install_dir;
     stop_asked = false;
     combo_held = false;
     screen_quit = false;
@@ -307,9 +309,10 @@ static xc_clock clk;
 static xc_credentials creds;
 static xc_http_auth auth;
 static bool have_creds;
-static xc_settings settings;       /* E:\Apps\xcat\settings, or the defaults */
 static char settings_problem[256]; /* why it isn't used, for the screen; "" if it is */
 static bool has_f, has_g;          /* the drives F: and G: are there */
+static xc_map map;                 /* E:\xcat\map.txt and what it includes */
+static bool have_map;
 static xc_http_client client;
 static uint64_t run_start_ms;
 
@@ -596,9 +599,9 @@ static bool logged_in(void)
     return have_creds && xc_cred_section_named(&creds, XC_LOGIN_SECTION) != NULL;
 }
 
-/* Writes [archive] into the credentials file, or removes it when `section` is NULL (login.md
-   §5). On failure, msg says why for the screen. */
-static bool write_section(const char *section, char *msg, size_t size)
+/* Writes section [name] into the credentials file, or removes it when `section` is NULL
+   (login.md §5). On failure, msg says why for the screen. */
+static bool write_section(const char *name, const char *section, char *msg, size_t size)
 {
     char *old = NULL;
     size_t old_len = 0;
@@ -611,7 +614,7 @@ static bool write_section(const char *section, char *msg, size_t size)
     xc_cred_error cerr;
     memset(&cerr, 0, sizeof cerr);
     if (err == XC_OK) {
-        err = xc_cred_set_section(old, old_len, XC_LOGIN_SECTION, section, &text, &len, &cerr);
+        err = xc_cred_set_section(old, old_len, name, section, &text, &len, &cerr);
     }
     if (old != NULL) {
         xc_login_wipe(old, old_len);
@@ -743,6 +746,113 @@ static bool save_folder(const char *dir, char *msg, size_t size)
     return true;
 }
 
+/* --- Authentication: the map's servers and their logins (SETTINGS) ----------------------- */
+
+#define MAX_HOSTS 32 /* servers listed besides archive.org; more are left out */
+
+static xc_map_host map_hosts[MAX_HOSTS];
+static char host_names[MAX_HOSTS + 1][XC_URL_MAX_HOST + 16];
+static char host_logins[MAX_HOSTS + 1][XC_CRED_MAX_NAME + 1];
+static char host_notes[MAX_HOSTS + 1][64];
+static ui_lib_host hosts[MAX_HOSTS + 1];
+
+static bool archive_host(const char *host)
+{
+    size_t n = strlen(host);
+    return strcmp(host, "archive.org") == 0 ||
+           (n > 12 && strcmp(host + n - 12, ".archive.org") == 0);
+}
+
+/* What the map gets from a server, for its details. */
+static void host_note(char *out, size_t size, size_t entries, size_t maps)
+{
+    if (entries == 0 && maps == 0) {
+        snprintf(out, size, "%s", "Not in the map");
+    } else if (maps == 0) {
+        snprintf(out, size, "%u game%s", (unsigned)entries, entries == 1 ? "" : "s");
+    } else {
+        snprintf(out, size, "%u game%s, %u map%s", (unsigned)entries, entries == 1 ? "" : "s",
+                 (unsigned)maps, maps == 1 ? "" : "s");
+    }
+}
+
+/* archive.org (and its subdomains), then the map's other servers in the order the map has
+   them, each with the credentials section that would go with a request to it (credentials.md
+   §6). The strings are copies: the credentials can be reloaded under them. */
+static int list_hosts(void)
+{
+    size_t n = have_map ? xc_map_hosts(&map, map_hosts, MAX_HOSTS) : 0;
+    size_t archive_entries = 0;
+    size_t archive_maps = 0;
+    int k = 1;
+    static xc_url u;
+    for (size_t i = 0; i < n; i++) {
+        const xc_map_host *h = &map_hosts[i];
+        if (archive_host(h->host)) {
+            archive_entries += h->entries;
+            archive_maps += h->maps;
+            continue;
+        }
+        bool https = h->scheme == XC_URL_HTTPS;
+        bool plain_port = h->port == (https ? 443 : 80);
+        char port[8] = "";
+        if (!plain_port) {
+            snprintf(port, sizeof port, ":%u", (unsigned)h->port);
+        }
+        snprintf(host_names[k], sizeof host_names[k], "%s%s%s", https ? "" : "http://", h->host,
+                 port);
+        memset(&u, 0, sizeof u);
+        u.scheme = h->scheme;
+        u.port = h->port;
+        u.is_ipv4 = h->is_ipv4;
+        memcpy(u.host, h->host, sizeof u.host);
+        u.target[0] = '/';
+        const xc_cred_section *sec = have_creds ? xc_cred_for_url(&creds, &u) : NULL;
+        if (sec != NULL) {
+            snprintf(host_logins[k], sizeof host_logins[k], "%s", sec->name);
+        }
+        host_note(host_notes[k], sizeof host_notes[k], h->entries, h->maps);
+        hosts[k] = (ui_lib_host){
+            host_names[k], false, sec != NULL ? host_logins[k] : NULL, host_notes[k],
+            https || sec != NULL
+                ? NULL
+                : "Plain http: a login goes only to a LAN address (10.x, 172.16-31.x, 192.168.x) "
+                  "whose section says allow_http = yes."};
+        k++;
+    }
+    host_note(host_notes[0], sizeof host_notes[0], archive_entries, archive_maps);
+    hosts[0] = (ui_lib_host){"archive.org", true, NULL, host_notes[0], NULL};
+    return k;
+}
+
+/* After the credentials changed: what Authentication shows. */
+static void refresh_logins(ui_library *lib)
+{
+    ui_library_set_account(lib, logged_in());
+    ui_library_set_hosts(lib, hosts, list_hosts());
+}
+
+/* UI_LIB_FORGET: removes the section that logs in to the highlighted server. */
+static void forget(ui_library *lib)
+{
+    const ui_lib_host *h = &hosts[ui_library_host(lib)];
+    char name[XC_CRED_MAX_NAME + 1];
+    snprintf(name, sizeof name, "%s", h->login != NULL ? h->login : "");
+    char msg[256] = "No login is listed for this server.";
+    if (name[0] == '\0' || !write_section(name, NULL, msg, sizeof msg)) {
+        ui_library_tell(lib, "NOT REMOVED", msg);
+        return;
+    }
+    out("Login [%s] removed from %s\n", name, CRED_FILE);
+    reload_credentials();
+    refresh_logins(lib);
+    snprintf(msg, sizeof msg,
+             "The login [%s] is removed from this console. Every other section of the "
+             "credentials file is as it was.",
+             name);
+    ui_library_tell(lib, "LOGIN REMOVED", msg);
+}
+
 static char login_body[XC_LOGIN_MAX_BODY];
 static xc_login_result login_result;
 static char login_section[2 * XC_LOGIN_MAX_COOKIE + 256];
@@ -820,7 +930,7 @@ static bool login(ui_library *lib, bool resuming)
     }
     err = xc_login_section(&login_result, login_section, sizeof login_section, NULL);
     xc_login_wipe(&login_result, sizeof login_result);
-    bool ok = err == XC_OK && write_section(login_section, msg, sizeof msg);
+    bool ok = err == XC_OK && write_section(XC_LOGIN_SECTION, login_section, msg, sizeof msg);
     xc_login_wipe(login_section, sizeof login_section);
     if (!ok) {
         ui_library_tell(lib, "LOG IN", err == XC_OK ? msg : "The session can't be saved.");
@@ -828,7 +938,7 @@ static bool login(ui_library *lib, bool resuming)
     }
     out("Logged in to archive.org: [%s] written to %s\n", XC_LOGIN_SECTION, CRED_FILE);
     reload_credentials();
-    ui_library_set_account(lib, logged_in());
+    refresh_logins(lib);
     if (!resuming) { /* else the install it was for carries on at once */
         ui_library_tell(lib, "LOGGED IN",
                         "You're logged in to archive.org. The session is saved in "
@@ -840,13 +950,13 @@ static bool login(ui_library *lib, bool resuming)
 static void logout(ui_library *lib)
 {
     char msg[256];
-    if (!write_section(NULL, msg, sizeof msg)) {
+    if (!write_section(XC_LOGIN_SECTION, NULL, msg, sizeof msg)) {
         ui_library_tell(lib, "LOG OUT", msg);
         return;
     }
     out("Logged out of archive.org: [%s] removed from %s\n", XC_LOGIN_SECTION, CRED_FILE);
     reload_credentials();
-    ui_library_set_account(lib, logged_in());
+    refresh_logins(lib);
     ui_library_tell(lib, "LOGGED OUT",
                     "This console is logged out of archive.org. The session itself ends when "
                     "you log out on archive.org.");
@@ -1124,13 +1234,6 @@ __attribute__((format(printf, 1, 2))) static void detail(const char *fmt, ...)
     va_end(ap);
     out("   %s\n", line);
     explain("%s.", line);
-}
-
-static bool archive_host(const char *host)
-{
-    size_t n = strlen(host);
-    return strcmp(host, "archive.org") == 0 ||
-           (n > 12 && strcmp(host + n - 12, ".archive.org") == 0);
 }
 
 /* After a 401/403 (ADR 0010 decision 4): whose login was refused, in `why`, and whether
@@ -1828,7 +1931,7 @@ static void library(game *games, ui_lib_item *items, int count)
     }
     ui_library_open(&lib, items, count, shown);
     ui_library_set_installed(&lib, found_items, found_count);
-    ui_library_set_account(&lib, logged_in());
+    refresh_logins(&lib);
     ui_library_set_folders(&lib, settings.install_dir, folder_choices, list_folders());
     if (settings_problem[0] != '\0') {
         ui_library_tell(&lib, "SETTINGS", settings_problem);
@@ -1865,6 +1968,8 @@ static void library(game *games, ui_lib_item *items, int count)
                 resume = -1;
             } else if (a == UI_LIB_LOGOUT) {
                 logout(&lib);
+            } else if (a == UI_LIB_FORGET) {
+                forget(&lib);
             } else if (a == UI_LIB_FOLDER) {
                 change_folder(&lib, games, items, count);
             } else if (resume >= 0 && lib.typing_for == UI_LIB_TYPING_NONE) {
@@ -1923,8 +2028,7 @@ int main(void)
     load_credentials();
     load_catalog();
 
-    static xc_map map;
-    bool have_map = load_map(&map);
+    have_map = load_map(&map);
     static char local[MAX_LOCAL][XC_NX_PATH_MAX];
     int nlocal = list_local(local);
     if ((!have_map || map.entry_count == 0) && nlocal == 0) {

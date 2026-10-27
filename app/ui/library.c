@@ -45,6 +45,29 @@ void ui_library_open(ui_library *lib, const ui_lib_item *items, int count, int *
     lib->folders = &games;
     lib->folder_count = 1;
     lib->settings_list.count = UI_LIB_SETTING_COUNT_;
+    static const ui_lib_host archive = {"archive.org", true, NULL, NULL, NULL};
+    lib->hosts = &archive;
+    lib->host_count = 1;
+    lib->host_list.count = 1;
+}
+
+void ui_library_set_hosts(ui_library *lib, const ui_lib_host *hosts, int count)
+{
+    lib->hosts = hosts;
+    lib->host_count = count;
+    ui_list *l = &lib->host_list;
+    l->count = count;
+    if (l->cur >= count) {
+        l->cur = count > 0 ? count - 1 : 0;
+    }
+    if (l->top > l->cur) {
+        l->top = l->cur;
+    }
+}
+
+int ui_library_host(const ui_library *lib)
+{
+    return lib->host_list.cur;
 }
 
 void ui_library_set_folders(ui_library *lib, const char *install_dir, const ui_lib_folder *folders,
@@ -53,7 +76,7 @@ void ui_library_set_folders(ui_library *lib, const char *install_dir, const ui_l
     lib->install_dir = install_dir;
     lib->folders = folders;
     lib->folder_count = count;
-    lib->choosing = false;
+    lib->page = UI_LIB_PAGE_NONE;
 }
 
 static bool same_folder(const char *a, const char *b)
@@ -74,7 +97,7 @@ static void choose_folder(ui_library *lib, int rows)
         }
     }
     lib->folder_list = (ui_list){lib->folder_count + 1, cur, cur >= rows ? cur - rows + 1 : 0};
-    lib->choosing = true;
+    lib->page = UI_LIB_PAGE_FOLDERS;
 }
 
 int ui_library_game(const ui_library *lib)
@@ -203,6 +226,13 @@ static void ask(ui_library *lib, ui_lib_action what)
                                   {"LOG OUT", "CANCEL", NULL},
                                   1,
                                   1};
+    } else if (what == UI_LIB_FORGET) {
+        const ui_lib_host *h = &lib->hosts[ui_library_host(lib)];
+        (void)snprintf(lib->message, sizeof lib->message,
+                       "Remove the login [%s] from this console? %s, and every other server it "
+                       "is for, won't get it until it's added to the credentials file again.",
+                       h->login, h->name);
+        lib->dialog = (ui_dialog){"REMOVE LOGIN", lib->message, {"REMOVE", "CANCEL", NULL}, 1, 1};
     } else {
         lib->dialog =
             (ui_dialog){"LEAVE", "Return to the dashboard?", {"LEAVE", "STAY", NULL}, 0, 1};
@@ -250,7 +280,7 @@ static ui_lib_action typed(ui_library *lib, ui_kbd_result r, int rows)
     } else if (r == UI_KBD_DONE && what == UI_LIB_TYPING_EMAIL && lib->email[0] != '\0') {
         open_kbd(lib, UI_LIB_TYPING_PASSWORD);
     } else if (r == UI_KBD_DONE && what == UI_LIB_TYPING_FOLDER && lib->folder[0] != '\0') {
-        lib->choosing = false;
+        lib->page = UI_LIB_PAGE_NONE;
         return UI_LIB_FOLDER; /* the caller checks it */
     } else if (r == UI_KBD_DONE && what == UI_LIB_TYPING_SEARCH) {
         (void)snprintf(lib->query, sizeof lib->query, "%s", lib->typing);
@@ -261,16 +291,44 @@ static ui_lib_action typed(ui_library *lib, ui_kbd_result r, int rows)
     return UI_LIB_NONE;
 }
 
-/* A press in SETTINGS' list, or in its list of folders. */
+/* A on a server of the Authentication page. */
+static void host_chosen(ui_library *lib)
+{
+    const ui_lib_host *h = &lib->hosts[ui_library_host(lib)];
+    if (h->archive && lib->logged_in) {
+        ask(lib, UI_LIB_LOGOUT);
+    } else if (h->archive) {
+        open_kbd(lib, UI_LIB_TYPING_EMAIL);
+    } else if (h->login != NULL) {
+        ask(lib, UI_LIB_FORGET);
+    } else {
+        char msg[sizeof lib->message];
+        (void)snprintf(msg, sizeof msg,
+                       "%s has no login. Logins for servers other than archive.org are added by "
+                       "hand to E:\\Apps\\xcat\\credentials (see docs/formats/credentials.md).",
+                       h->name);
+        ui_library_tell(lib, "NO LOGIN", msg);
+    }
+}
+
+/* A press in SETTINGS' list, or in one of its pages. */
 static ui_lib_action settings_input(ui_library *lib, ui_button b, int rows)
 {
-    if (lib->choosing) {
+    if (lib->page == UI_LIB_PAGE_LOGINS) {
+        if (b == UI_BTN_B) {
+            lib->page = UI_LIB_PAGE_NONE;
+        } else if (b == UI_BTN_A && lib->host_count > 0) {
+            host_chosen(lib);
+        } else {
+            (void)ui_list_input(&lib->host_list, b, rows);
+        }
+    } else if (lib->page == UI_LIB_PAGE_FOLDERS) {
         int cur = lib->folder_list.cur;
         if (b == UI_BTN_B) {
-            lib->choosing = false;
+            lib->page = UI_LIB_PAGE_NONE;
         } else if (b == UI_BTN_A && cur < lib->folder_count) {
             (void)snprintf(lib->folder, sizeof lib->folder, "%s", lib->folders[cur].path);
-            lib->choosing = false;
+            lib->page = UI_LIB_PAGE_NONE;
             return UI_LIB_FOLDER;
         } else if (b == UI_BTN_A) {
             open_kbd(lib, UI_LIB_TYPING_FOLDER);
@@ -281,10 +339,8 @@ static ui_lib_action settings_input(ui_library *lib, ui_button b, int rows)
         (void)ui_list_input(&lib->settings_list, b, rows);
     } else if (lib->settings_list.cur == UI_LIB_SETTING_FOLDER) {
         choose_folder(lib, rows);
-    } else if (lib->logged_in) {
-        ask(lib, UI_LIB_LOGOUT);
     } else {
-        open_kbd(lib, UI_LIB_TYPING_EMAIL);
+        lib->page = UI_LIB_PAGE_LOGINS;
     }
     return UI_LIB_NONE;
 }
@@ -318,7 +374,7 @@ ui_lib_action ui_library_input(ui_library *lib, ui_button b, int rows)
         }
     } else if (b == UI_BTN_LEFT) {
         lib->in_sections = true;
-        lib->choosing = false;
+        lib->page = UI_LIB_PAGE_NONE;
     } else if (lib->section == UI_LIB_GAMES) {
         if (b == UI_BTN_A && lib->list.count > 0) {
             ask(lib, UI_LIB_INSTALL);
@@ -435,7 +491,7 @@ static void draw_detail(const ui_draw *d, const ui_lib_item *it)
 static const char *setting_name(void *ctx, int i)
 {
     (void)ctx;
-    return i == UI_LIB_SETTING_FOLDER ? "Install location" : "archive.org";
+    return i == UI_LIB_SETTING_FOLDER ? "Install location" : "Authentication";
 }
 
 static const char *folder_name(void *ctx, int i)
@@ -454,7 +510,7 @@ static void draw_folder(const ui_draw *d, ui_library *lib)
     int bh = d->line_height(d->ctx, UI_FONT_BOLD);
     int lh = d->line_height(d->ctx, UI_FONT_LABEL);
     int sh = d->line_height(d->ctx, UI_FONT_SMALL);
-    if (!lib->choosing) {
+    if (lib->page != UI_LIB_PAGE_FOLDERS) {
         (void)ui_text_fit(d, UI_FONT_BOLD, x, y, w, ui_col_accent, "Install location");
         y += bh + 6;
         (void)ui_text_fit(d, UI_FONT_LABEL, x, y, w, ui_col_accent, lib->install_dir);
@@ -493,28 +549,71 @@ static void draw_folder(const ui_draw *d, ui_library *lib)
                        here ? "Games install here now." : "A installs games here from now on.");
 }
 
-/* SETTINGS' details: the account, logged in or not, and what happens to the password. */
-static void draw_account(const ui_draw *d, const ui_library *lib)
+static const char *host_name(void *ctx, int i)
+{
+    const ui_library *lib = ctx;
+    return lib->hosts[i].name;
+}
+
+/* Authentication's details: the line in SETTINGS, or the server highlighted on its page. For
+   archive.org, logged in or not, and what happens to the password. */
+static void draw_logins(const ui_draw *d, const ui_library *lib)
 {
     int x = detail.x + PAD + 4;
     int w = detail.w - 2 * PAD - 4;
     int y = detail.y + PAD;
     int bottom = detail.y + detail.h - PAD;
     int bh = d->line_height(d->ctx, UI_FONT_BOLD);
+    int lh = d->line_height(d->ctx, UI_FONT_LABEL);
     int sh = d->line_height(d->ctx, UI_FONT_SMALL);
-    (void)ui_text_fit(d, UI_FONT_BOLD, x, y, w, ui_col_accent, "archive.org");
-    y += bh + 6;
-    (void)ui_text_fit(d, UI_FONT_LABEL, x, y, w, lib->logged_in ? ui_col_accent : ui_col_text,
-                      lib->logged_in ? "LOGGED IN" : "NOT LOGGED IN");
-    y += d->line_height(d->ctx, UI_FONT_LABEL);
-    y += ui_text_wrap(d, UI_FONT_SMALL, (ui_rect){x, y, w, 4 * sh}, ui_col_text,
-                      lib->logged_in ? "Items that need your login download with it. A logs out."
-                                     : "A logs in with your archive.org email and password.") *
-         sh;
+    if (lib->page != UI_LIB_PAGE_LOGINS) {
+        (void)ui_text_fit(d, UI_FONT_BOLD, x, y, w, ui_col_accent, "Authentication");
+        y += bh + 6;
+        (void)ui_text_fit(d, UI_FONT_SMALL, x, y, w, ui_col_dim, "archive.org");
+        y += sh;
+        (void)ui_text_fit(d, UI_FONT_LABEL, x, y, w, lib->logged_in ? ui_col_accent : ui_col_text,
+                          lib->logged_in ? "LOGGED IN" : "NOT LOGGED IN");
+        y += lh + 6;
+        (void)ui_text_wrap(d, UI_FONT_SMALL, (ui_rect){x, y, w, bottom - y}, ui_col_text,
+                           "A lists archive.org and the servers your map gets games from, with "
+                           "their logins.");
+        return;
+    }
+    if (lib->host_count == 0) {
+        return;
+    }
+    const ui_lib_host *h = &lib->hosts[ui_library_host(lib)];
+    y += ui_text_wrap(d, UI_FONT_BOLD, (ui_rect){x, y, w, 2 * bh}, ui_col_accent, h->name) * bh;
+    if (h->note != NULL && h->note[0] != '\0') {
+        (void)ui_text_fit(d, UI_FONT_SMALL, x, y, w, ui_col_dim, h->note);
+        y += sh;
+    }
     y += 6;
-    (void)ui_text_wrap(d, UI_FONT_SMALL, (ui_rect){x, y, w, bottom - y}, ui_col_dim,
-                       "The password is sent once, over HTTPS, and never stored. The session "
-                       "is kept in the credentials file in E:\\Apps\\xcat.");
+    char label[48];
+    bool in = h->archive ? lib->logged_in : h->login != NULL;
+    if (h->archive) {
+        (void)snprintf(label, sizeof label, "%s", in ? "LOGGED IN" : "NOT LOGGED IN");
+    } else if (in) {
+        (void)snprintf(label, sizeof label, "LOGIN [%s]", h->login);
+    } else {
+        (void)snprintf(label, sizeof label, "NO LOGIN");
+    }
+    (void)ui_text_fit(d, UI_FONT_LABEL, x, y, w, in ? ui_col_accent : ui_col_text, label);
+    y += lh;
+    const char *what = h->archive && in ? "Items that need your login download with it. A logs out."
+                       : h->archive     ? "A logs in with your archive.org email and password."
+                       : in             ? "Sent only to the servers the login is for. A removes it."
+                                        : "Logins for servers other than archive.org are added by "
+                                          "hand to the credentials file.";
+    y += ui_text_wrap(d, UI_FONT_SMALL, (ui_rect){x, y, w, 4 * sh}, ui_col_text, what) * sh;
+    y += 6;
+    const char *about = h->about;
+    if (h->archive) {
+        about = "The password is sent once, over HTTPS, and never stored: only the session is.";
+    }
+    if (about != NULL && y < bottom) {
+        (void)ui_text_wrap(d, UI_FONT_SMALL, (ui_rect){x, y, w, bottom - y}, ui_col_dim, about);
+    }
 }
 
 static void draw_list(const ui_draw *d, ui_library *lib)
@@ -531,8 +630,10 @@ static void draw_list(const ui_draw *d, ui_library *lib)
         return;
     }
     if (lib->section == UI_LIB_SETTINGS) {
-        if (lib->choosing) {
+        if (lib->page == UI_LIB_PAGE_FOLDERS) {
             ui_list_draw(d, &lib->folder_list, list_in, folder_name, lib);
+        } else if (lib->page == UI_LIB_PAGE_LOGINS) {
+            ui_list_draw(d, &lib->host_list, list_in, host_name, lib);
         } else {
             ui_list_draw(d, &lib->settings_list, list_in, setting_name, NULL);
         }
@@ -585,15 +686,20 @@ static const char *hints(const ui_library *lib)
     if (lib->in_sections) {
         return "Up Down section  Right or A list  Y search  Back exit";
     }
-    if (lib->section == UI_LIB_SETTINGS && lib->choosing) {
+    if (lib->section == UI_LIB_SETTINGS && lib->page == UI_LIB_PAGE_FOLDERS) {
         return "A choose  B back  Left sections  Y search  Back exit";
     }
-    if (lib->section == UI_LIB_SETTINGS && lib->settings_list.cur == UI_LIB_SETTING_FOLDER) {
-        return "A change  Left sections  Y search  Back exit";
+    if (lib->section == UI_LIB_SETTINGS && lib->page == UI_LIB_PAGE_LOGINS && lib->host_count > 0) {
+        const ui_lib_host *h = &lib->hosts[ui_library_host(lib)];
+        return h->archive && lib->logged_in ? "A log out  B back  Left sections  Back exit"
+               : h->archive                 ? "A log in  B back  Left sections  Back exit"
+               : h->login != NULL           ? "A remove login  B back  Left sections  Back exit"
+                                            : "A how to add one  B back  Left sections  Back exit";
     }
-    if (lib->section == UI_LIB_SETTINGS) {
-        return lib->logged_in ? "A log out  Left sections  Y search  Back exit"
-                              : "A log in  Left sections  Y search  Back exit";
+    if (lib->section == UI_LIB_SETTINGS && lib->page == UI_LIB_PAGE_NONE) {
+        return lib->settings_list.cur == UI_LIB_SETTING_FOLDER
+                   ? "A change  Left sections  Y search  Back exit"
+                   : "A servers and logins  Left sections  Y search  Back exit";
     }
     if (lib->section != UI_LIB_GAMES) {
         return "LT RT page  Left sections  Y search  Back exit";
@@ -621,10 +727,13 @@ static void draw_screen(const ui_draw *d, ui_library *lib, int pan, const char *
     draw_list(d, lib);
     if (lib->section == UI_LIB_SETTINGS) {
         ui_panel(d, detail, UI_CHAMFER, ui_col_panel, ui_col_border);
-        if (lib->choosing || lib->settings_list.cur == UI_LIB_SETTING_FOLDER) {
+        bool folders =
+            lib->page == UI_LIB_PAGE_FOLDERS ||
+            (lib->page == UI_LIB_PAGE_NONE && lib->settings_list.cur == UI_LIB_SETTING_FOLDER);
+        if (folders) {
             draw_folder(d, lib);
         } else {
-            draw_account(d, lib);
+            draw_logins(d, lib);
         }
     } else {
         draw_detail(d, current(lib));

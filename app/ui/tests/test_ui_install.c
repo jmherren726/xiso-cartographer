@@ -136,6 +136,11 @@ static void test_draw(void)
     TEST_ASSERT_TRUE(fake_find_text("File 3 of 120") >= 0);
     TEST_ASSERT_TRUE(fake_saw("8.1 MB/s, about 6 minutes left"));
     TEST_ASSERT_TRUE(fake_find_text("Retrying in 4 s") >= 0);
+    TEST_ASSERT_TRUE(fake_saw("files to E:\\Games.")); /* no folder given */
+    fake_reset();
+    v.dir = "F:\\Games";
+    ui_install_draw(&fake_draw, &v, 0);
+    TEST_ASSERT_TRUE(fake_saw("files to F:\\Games."));
 
     /* The stop dialog over the screen behind, saved once. */
     (void)ui_install_input(&v, UI_BTN_B);

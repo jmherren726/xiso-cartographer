@@ -27,6 +27,8 @@ Newest first. "Build" is the commit or CI artifact tested.
 
 | Date | Milestone | Build | Where | Result | Notes |
 |---|---|---|---|---|---|
+| 2026-10-27 | M8 authentication in xemu | branch `feat/authentication` | xemu, no map | ✅ xemu | Step 1 of "M8: authentication", and A on the page, with timed presses: SETTINGS lists Install location and Authentication; the page lists archive.org alone (xemu's disk has no map), NOT LOGGED IN, "Not in the map"; A opens the ARCHIVE.ORG EMAIL keyboard and B closes it. The other servers' lines, LOGIN [name] and REMOVE are covered by `test_ui_library`; steps 2–6 need hardware with a map. |
+| 2026-10-27 | M8 install location on hardware | `main` at `b07bb3a` (#92) | Hardware: main console, F: partition (owner) | ⚠️ Hardware | Installing to `F:\Games` worked, but the install screen's WRITING line said `E:\Games`: the text was fixed in the Authentication PR (step 6 of "M8: authentication" checks it). |
 | 2026-10-27 | M8 install location in xemu | branch `feat/install-location` | xemu, stock drive (no F: or G:) | ✅ xemu | Steps 1–3 of "M8: install location", with timed presses: SETTINGS lists Install location and archive.org; the folders are `E:\Games` (5.11 GB free, CURRENT) and Other folder, since the drive has no F: or G:; choosing `E:\Games` saved it; typing `qq` was refused with "must start with E:\, F:\ or G:\". Steps 4–7 need hardware with an F: partition. |
 | 2026-10-27 | M8 log in again on hardware | `main` at `6c29b83` (#89) | Hardware: main console, internet (owner) | ✅ Hardware | Steps 1–5 of "M8: log in again" (owner: "worked great"): with `logged-in-sig` spoiled over FTP, installing a login-required item ended with LOG IN; after logging in on the console the stopped install carried on and finished. archive.org answered the bad session in a way the app treats as a refused login (401/403). With the on-box login rows, this meets the login part of the M8 exit test: log in on the Xbox with no PC, the token is saved and the password isn't, a login-required item installs, and an expired or revoked session offers "log in again" and then resumes the install. |
 | 2026-10-27 | M8 on-box login on hardware (try 2) | `feat/onbox-login` at `224b5e9` (#88) | Hardware: main console, internet (owner) | ✅ Hardware | "Tried the login again on the box and it works" (owner): logged in to archive.org on the Xbox with the email and password, after logging out in try 1. Steps 5–7 passed too (owner): neither the password nor the email is in `credentials` or `install.log`; an item that needs the login installed; after a restart SETTINGS still said LOGGED IN. This meets the login parts of the M8 exit test (the token is saved, the password isn't, a login-required item installs); the expired-session part ("log in again", then resume) is still to come. |
@@ -313,7 +315,7 @@ Logging in to archive.org on the Xbox ([login.md](formats/login.md), [ADR 0010](
 
 | Step | Where | How | Pass |
 |---|---|---|---|
-| 1 | xemu, then hardware | Left, Down three times, Right, Down (since M8: install location, archive.org is SETTINGS' second line) | SETTINGS lists archive.org. The details say LOGGED IN if the credentials file has an `[archive]` section, otherwise NOT LOGGED IN, and that the password is never stored. The footer says "A log in" or "A log out" |
+| 1 | xemu, then hardware | Left, Down three times, Right, Down, A (since M8: authentication, archive.org is the first server on SETTINGS' Authentication page) | Authentication lists archive.org. The details say LOGGED IN if the credentials file has an `[archive]` section, otherwise NOT LOGGED IN, and that the password is never stored. The footer says "A log in" or "A log out" |
 | 2 | Hardware | If LOGGED IN: A, LOG OUT | "LOGGED OUT", then NOT LOGGED IN. Over FTP, `credentials` has no `[archive]` section, and every other section and comment is unchanged. There's no `credentials.tmp` |
 | 3 | xemu, then hardware | A; type part of an email; Start; type a few letters; B | The keyboards say ARCHIVE.ORG EMAIL, then ARCHIVE.ORG PASSWORD, which shows only dots. B closes it, and nothing logs in |
 | 4 | Hardware, internet | A; the account's email (kept from step 3, finish it); Start; a wrong password; Start | "Logging in to archive.org..." in the footer, then a message: "The password is wrong. Try again." Still NOT LOGGED IN |
@@ -346,6 +348,21 @@ Choosing where games install in SETTINGS ([settings.md](formats/settings.md), [A
 | 5 | Hardware, F: partition | Install a game | "Install <name> to F:\Games?"; it installs into `F:\Games\<title>` and verifies. The free space the install checks is F:'s |
 | 6 | Hardware, F: partition | Leave for the dashboard; launch the app again | Installs still go to `F:\Games`, and the game from step 5 is INSTALLED. Choosing `E:\Games` again marks the games there as before |
 | 7 | Hardware | Over FTP, change `install_dir` in `settings` to `C:\Games`; launch the app | A SETTINGS message: line 3 must start with E:\, F:\ or G:\; games install to E:\Games. Choosing a folder then says the file has a problem and doesn't change it. Delete the file, and it works again |
+
+## M8: authentication
+
+SETTINGS' Authentication page: the servers the map uses and their logins ([ui-style.md](ui-style.md#library), [credentials.md §8](formats/credentials.md#8-handling-secrets)). Copy `app/bin/` as above. Use a map with entries on archive.org and on at least one other server, for example a PC on the LAN (`http://192.168.x.y:port/...`). Keep a copy of `E:\Apps\xcat\credentials` (FTP), and add a section for the LAN server by hand if it has none, as in credentials.md §1 (any header will do for this test).
+
+| Step | Where | How | Pass |
+|---|---|---|---|
+| 1 | xemu, then hardware | Left, Down three times, Right, Down | SETTINGS lists Install location and Authentication. Authentication's details say archive.org LOGGED IN or NOT LOGGED IN |
+| 2 | Hardware | A | archive.org first, then the map's other servers, each once, in the map's order; a plain-http one is shown as `http://host:port`. archive.org's details say how many games come from it, LOGGED IN or NOT LOGGED IN, and A logs in or out as in "M8: on-box login" |
+| 3 | Hardware | Down to the LAN server | Its details say how many games come from it and LOGIN [the section's name] |
+| 4 | Hardware | A; CANCEL. A; REMOVE | CANCEL changes nothing. REMOVE says LOGIN REMOVED, and the server now says NO LOGIN. Over FTP, `credentials` has no such section, and every other section (and `[archive]`) is as it was |
+| 5 | Hardware | A on a server with NO LOGIN | A message says it has no login and that logins for other servers are added by hand to `E:\Apps\xcat\credentials`. Nothing changes |
+| 6 | Hardware | B; then install a game | B goes back to SETTINGS' lines. The install screen's WRITING line says "Writing the game's files to" the install folder chosen in SETTINGS (`F:\Games` if that's the one), not always `E:\Games` |
+
+Afterwards, put the kept `credentials` back over FTP.
 
 ## FATX probe (M2)
 

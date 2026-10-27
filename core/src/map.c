@@ -768,3 +768,49 @@ const xc_map_entry *xc_map_find_name(const xc_map *map, const char *name)
     }
     return NULL;
 }
+
+/* Counts u's server in out[0, *n), adding it if it's new and there's room. */
+static void count_host(const xc_url *u, bool entry, xc_map_host *out, size_t max, size_t *n)
+{
+    for (size_t i = 0; i < *n && i < max; i++) {
+        xc_map_host *h = &out[i];
+        if (h->scheme == u->scheme && h->port == u->port && strcmp(h->host, u->host) == 0) {
+            h->entries += entry ? 1U : 0U;
+            h->maps += entry ? 0U : 1U;
+            return;
+        }
+    }
+    if (*n < max) {
+        xc_map_host *h = &out[*n];
+        memset(h, 0, sizeof *h);
+        h->scheme = u->scheme;
+        h->port = u->port;
+        h->is_ipv4 = u->is_ipv4;
+        memcpy(h->host, u->host, sizeof h->host);
+        h->entries = entry ? 1U : 0U;
+        h->maps = entry ? 0U : 1U;
+        (*n)++;
+    }
+}
+
+size_t xc_map_hosts(const xc_map *map, xc_map_host *out, size_t max)
+{
+    if (map == NULL || (out == NULL && max > 0)) {
+        return 0;
+    }
+    xc_url u;
+    size_t n = 0;
+    for (size_t i = 0; i < map->entry_count; i++) {
+        const char *url = map->entries[i].url;
+        if (url != NULL && xc_url_parse(url, strlen(url), &u) == XC_OK) {
+            count_host(&u, true, out, max, &n);
+        }
+    }
+    for (size_t i = 1; i < map->source_count; i++) {
+        const char *loc = map->sources[i];
+        if (loc != NULL && is_http_url(loc) && xc_url_parse(loc, strlen(loc), &u) == XC_OK) {
+            count_host(&u, false, out, max, &n);
+        }
+    }
+    return n;
+}

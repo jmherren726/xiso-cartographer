@@ -12,7 +12,8 @@
  *   - every entry has a valid key, a URL the HTTP client accepts, and a source;
  *   - keys are unique (§4.3) and xc_map_find returns each entry for its key;
  *     generated entries have a unique name, which xc_map_find_name returns;
- *   - every problem names a loaded source.
+ *   - every problem names a loaded source;
+ *   - xc_map_hosts lists each server once, and every entry is on one of them.
  *
  * Seeds are in core/tests/fuzz-seeds/map/. Built like fuzz_http.c.
  */
@@ -130,6 +131,21 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
                   strcmp(map.entries[k].variant, e->variant) != 0);
         }
     }
+    /* The servers: each once, each used, and every entry on one of them (all parse, above). */
+    static xc_map_host hosts[64];
+    size_t nh = xc_map_hosts(&map, hosts, 64);
+    check(nh <= 64);
+    size_t on_hosts = 0;
+    for (size_t i = 0; i < nh; i++) {
+        check(hosts[i].entries + hosts[i].maps >= 1);
+        check(memchr(hosts[i].host, '\0', sizeof hosts[i].host) != NULL);
+        for (size_t k = 0; k < i; k++) {
+            check(hosts[k].scheme != hosts[i].scheme || hosts[k].port != hosts[i].port ||
+                  strcmp(hosts[k].host, hosts[i].host) != 0);
+        }
+        on_hosts += hosts[i].entries;
+    }
+    check(nh == 64 || on_hosts == map.entry_count);
     xc_map_free(&map);
     return 0;
 }

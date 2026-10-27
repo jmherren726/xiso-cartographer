@@ -391,6 +391,42 @@ static void test_include_paths(void)
     TEST_ASSERT_TRUE_MESSAGE(found, "../up.txt in the remote map is reported there");
 }
 
+/* The servers a map uses, each once, entries first: what the Authentication page lists. */
+static void test_hosts(void)
+{
+    static const ffile fs[] = {
+        {"http://nas.lan:8080/maps/remote.txt", HDR "00000004 = http://h.lan/4.iso\n"},
+    };
+    set_files(fs, sizeof fs / sizeof fs[0]);
+    TEST_ASSERT_EQUAL_INT(XC_OK, load(HDR "00000001 = https://Archive.org/download/x/a b.iso\n"
+                                          "00000002 = http://192.168.1.20:8080/b.iso\n"
+                                          "00000003 = https://archive.org:443/download/y/c.iso\n"
+                                          "00000005 = http://archive.org/download/z/d.iso\n"
+                                          "@include http://nas.lan:8080/maps/remote.txt\n"
+                                          "@include missing.txt\n"));
+    xc_map_host h[8];
+    TEST_ASSERT_EQUAL_size_t(5, xc_map_hosts(&map, h, 8));
+    TEST_ASSERT_EQUAL_STRING("archive.org", h[0].host);
+    TEST_ASSERT_EQUAL_INT(XC_URL_HTTPS, h[0].scheme);
+    TEST_ASSERT_EQUAL_UINT16(443, h[0].port);
+    TEST_ASSERT_EQUAL_size_t(2, h[0].entries); /* the port written or not */
+    TEST_ASSERT_EQUAL_STRING("192.168.1.20", h[1].host);
+    TEST_ASSERT_TRUE(h[1].is_ipv4);
+    TEST_ASSERT_EQUAL_UINT16(8080, h[1].port);
+    TEST_ASSERT_EQUAL_STRING("archive.org", h[2].host); /* plain http is another server */
+    TEST_ASSERT_EQUAL_INT(XC_URL_HTTP, h[2].scheme);
+    TEST_ASSERT_EQUAL_STRING("h.lan", h[3].host); /* the included map's entry */
+    TEST_ASSERT_EQUAL_size_t(1, h[3].entries);
+    TEST_ASSERT_EQUAL_STRING("nas.lan", h[4].host); /* where the map came from */
+    TEST_ASSERT_EQUAL_size_t(0, h[4].entries);
+    TEST_ASSERT_EQUAL_size_t(1, h[4].maps);
+    /* No room for more: the first ones, still counted right. */
+    TEST_ASSERT_EQUAL_size_t(2, xc_map_hosts(&map, h, 2));
+    TEST_ASSERT_EQUAL_size_t(2, h[0].entries);
+    TEST_ASSERT_EQUAL_size_t(0, xc_map_hosts(&map, NULL, 0));
+    TEST_ASSERT_EQUAL_size_t(0, xc_map_hosts(NULL, h, 8));
+}
+
 static void test_include_failures(void)
 {
     static const ffile fs[] = {
@@ -614,6 +650,7 @@ int main(void)
     RUN_TEST(test_entry_limit);
     RUN_TEST(test_problem_cap);
     RUN_TEST(test_include_paths);
+    RUN_TEST(test_hosts);
     RUN_TEST(test_include_failures);
     RUN_TEST(test_file_limit);
     RUN_TEST(test_find);

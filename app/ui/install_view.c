@@ -98,15 +98,17 @@ static const char *phase_name(ui_inst_phase p)
     return "";
 }
 
-static const char *phase_hint(ui_inst_phase p)
+static const char *phase_hint(const ui_install_view *v, char *buf, size_t size)
 {
-    switch (p) {
+    switch (v->phase) {
     case UI_INST_CONNECTING:
         return "Reaching the server and opening the file.";
     case UI_INST_CHECKING:
         return "Reading the image's folders, and checking the names and the free space.";
     case UI_INST_WRITING:
-        return "Writing the game's files to E:\\Games.";
+        (void)snprintf(buf, size, "Writing the game's files to %s.",
+                       v->dir != NULL ? v->dir : "E:\\Games");
+        return buf;
     case UI_INST_VERIFYING:
         return "Reading every file back to check it.";
     }
@@ -136,7 +138,8 @@ static void draw_screen(const ui_draw *d, const ui_install_view *v, int pan)
     y += 8;
     (void)ui_text_fit(d, UI_FONT_LABEL, x, y, w, ui_col_text, phase_name(v->phase));
     y += d->line_height(d->ctx, UI_FONT_LABEL);
-    (void)ui_text_fit(d, UI_FONT_SMALL, x, y, w, ui_col_dim, phase_hint(v->phase));
+    char hint[128];
+    (void)ui_text_fit(d, UI_FONT_SMALL, x, y, w, ui_col_dim, phase_hint(v, hint, sizeof hint));
     y += sh + 10;
 
     char pct[16] = "";
