@@ -27,6 +27,7 @@ Newest first. "Build" is the commit or CI artifact tested.
 
 | Date | Milestone | Build | Where | Result | Notes |
 |---|---|---|---|---|---|
+| 2026-10-27 | M8 install location in xemu | branch `feat/install-location` | xemu, stock drive (no F: or G:) | ✅ xemu | Steps 1–3 of "M8: install location", with timed presses: SETTINGS lists Install location and archive.org; the folders are `E:\Games` (5.11 GB free, CURRENT) and Other folder, since the drive has no F: or G:; choosing `E:\Games` saved it; typing `qq` was refused with "must start with E:\, F:\ or G:\". Steps 4–7 need hardware with an F: partition. |
 | 2026-10-27 | M8 log in again on hardware | `main` at `6c29b83` (#89) | Hardware: main console, internet (owner) | ✅ Hardware | Steps 1–5 of "M8: log in again" (owner: "worked great"): with `logged-in-sig` spoiled over FTP, installing a login-required item ended with LOG IN; after logging in on the console the stopped install carried on and finished. archive.org answered the bad session in a way the app treats as a refused login (401/403). With the on-box login rows, this meets the login part of the M8 exit test: log in on the Xbox with no PC, the token is saved and the password isn't, a login-required item installs, and an expired or revoked session offers "log in again" and then resumes the install. |
 | 2026-10-27 | M8 on-box login on hardware (try 2) | `feat/onbox-login` at `224b5e9` (#88) | Hardware: main console, internet (owner) | ✅ Hardware | "Tried the login again on the box and it works" (owner): logged in to archive.org on the Xbox with the email and password, after logging out in try 1. Steps 5–7 passed too (owner): neither the password nor the email is in `credentials` or `install.log`; an item that needs the login installed; after a restart SETTINGS still said LOGGED IN. This meets the login parts of the M8 exit test (the token is saved, the password isn't, a login-required item installs); the expired-session part ("log in again", then resume) is still to come. |
 | 2026-10-27 | M8 on-box login on hardware (try 1) | `feat/onbox-login` at `fdda051` (#88) | Hardware: main console, internet (owner) | ❌ Fail | Logging out worked ("[archive] removed", then 0 sections). Two logins ended "The login didn't get through", logged as `Login failed: The image is damaged or invalid (HTTP 200)`: archive.org answered, but the answer was refused as corrupt. The official tooling cuts each cookie at its first `;`, so the answer gives them in Set-Cookie form (`value; path=/; domain=...`), and the `;` and spaces failed the cookie-octet check. Fixed: only the value before the first `;` is kept (login.md §3). The log and the message now say what was wrong with an answer, and no longer use the image error's words. |
@@ -312,7 +313,7 @@ Logging in to archive.org on the Xbox ([login.md](formats/login.md), [ADR 0010](
 
 | Step | Where | How | Pass |
 |---|---|---|---|
-| 1 | xemu, then hardware | Left, Down three times, Right | SETTINGS lists archive.org. The details say LOGGED IN if the credentials file has an `[archive]` section, otherwise NOT LOGGED IN, and that the password is never stored. The footer says "A log in" or "A log out" |
+| 1 | xemu, then hardware | Left, Down three times, Right, Down (since M8: install location, archive.org is SETTINGS' second line) | SETTINGS lists archive.org. The details say LOGGED IN if the credentials file has an `[archive]` section, otherwise NOT LOGGED IN, and that the password is never stored. The footer says "A log in" or "A log out" |
 | 2 | Hardware | If LOGGED IN: A, LOG OUT | "LOGGED OUT", then NOT LOGGED IN. Over FTP, `credentials` has no `[archive]` section, and every other section and comment is unchanged. There's no `credentials.tmp` |
 | 3 | xemu, then hardware | A; type part of an email; Start; type a few letters; B | The keyboards say ARCHIVE.ORG EMAIL, then ARCHIVE.ORG PASSWORD, which shows only dots. B closes it, and nothing logs in |
 | 4 | Hardware, internet | A; the account's email (kept from step 3, finish it); Start; a wrong password; Start | "Logging in to archive.org..." in the footer, then a message: "The password is wrong. Try again." Still NOT LOGGED IN |
@@ -331,6 +332,20 @@ An expired or revoked session asks for a new login, then the install carries on 
 | 3 | Hardware, internet | Launch the app; install the same item | NOT INSTALLED: "Access denied by the server", "The login for [archive] is missing or expired", "Log in again, and the install carries on where it stopped", with **LOG IN** and BACK. The log has the same, and the HTTP status. Nothing was retried. (If the dialog says something else, such as RETRY with another error, write down the log lines: archive.org answered a bad session differently from 401/403) |
 | 4 | Hardware | LOG IN; B on the email keyboard | Back in the library, nothing installs. Installing the item again gives the same LOG IN dialog |
 | 5 | Hardware, internet | LOG IN; the email; Start; the password; Start | "Logging in to archive.org...", then the install screen for the same item at once, carrying on from where step 1 stopped (the log says files were kept or continued from a checkpoint). It installs and verifies. `credentials` has the new `[archive]` section; the password and email aren't in it or in the log |
+
+## M8: install location
+
+Choosing where games install in SETTINGS ([settings.md](formats/settings.md), [ADR 0016](adr/0016-settings-file-and-install-location.md)). Copy `app/bin/` as above. Steps 4–6 need a drive with an F: (or G:) partition; on a stock drive, step 3 shows that F: isn't offered.
+
+| Step | Where | How | Pass |
+|---|---|---|---|
+| 1 | xemu, then hardware | Left, Down three times, Right | SETTINGS lists Install location and archive.org. Install location's details show `E:\Games` (or the folder chosen before) |
+| 2 | xemu, then hardware | A | The list shows `E:\Games` (and `F:\Games`, `G:\Games` for the partitions the drive has), then Other folder. The current folder is highlighted, its details say CURRENT, and each folder shows its free space. B goes back |
+| 3 | xemu, then hardware | A, Down to Other folder, A; DELETE it all, type `qq`, Start | NOT CHANGED: "qq" must start with E:\, F:\ or G:\. Nothing is written: `E:\Apps\xcat\settings` is as it was (or still not there) |
+| 4 | Hardware, F: partition | A on `F:\Games` | "Games install to F:\Games from now on". Over FTP, `F:\Games` exists and `E:\Apps\xcat\settings` has `install_dir = F:\Games`. INSTALLED lists what's in `F:\Games` (likely nothing), and GAMES no longer marks the games in `E:\Games` |
+| 5 | Hardware, F: partition | Install a game | "Install <name> to F:\Games?"; it installs into `F:\Games\<title>` and verifies. The free space the install checks is F:'s |
+| 6 | Hardware, F: partition | Leave for the dashboard; launch the app again | Installs still go to `F:\Games`, and the game from step 5 is INSTALLED. Choosing `E:\Games` again marks the games there as before |
+| 7 | Hardware | Over FTP, change `install_dir` in `settings` to `C:\Games`; launch the app | A SETTINGS message: line 3 must start with E:\, F:\ or G:\; games install to E:\Games. Choosing a folder then says the file has a problem and doesn't change it. Delete the file, and it works again |
 
 ## FATX probe (M2)
 

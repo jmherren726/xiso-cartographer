@@ -25,6 +25,11 @@ static const ui_rect list_in = {218, 90, 196, 300};
 /* The search's panel, right of the title tab, while GAMES is searched. */
 static const ui_rect search_box = {280, 24, 328, 46};
 
+static char lower(char c)
+{
+    return c >= 'A' && c <= 'Z' ? (char)(c - 'A' + 'a') : c;
+}
+
 void ui_library_open(ui_library *lib, const ui_lib_item *items, int count, int *shown)
 {
     *lib = (ui_library){0};
@@ -35,16 +40,46 @@ void ui_library_open(ui_library *lib, const ui_lib_item *items, int count, int *
         shown[i] = i;
     }
     lib->list.count = count;
+    static const ui_lib_folder games = {"E:\\Games", NULL};
+    lib->install_dir = games.path;
+    lib->folders = &games;
+    lib->folder_count = 1;
+    lib->settings_list.count = UI_LIB_SETTING_COUNT_;
+}
+
+void ui_library_set_folders(ui_library *lib, const char *install_dir, const ui_lib_folder *folders,
+                            int count)
+{
+    lib->install_dir = install_dir;
+    lib->folders = folders;
+    lib->folder_count = count;
+    lib->choosing = false;
+}
+
+static bool same_folder(const char *a, const char *b)
+{
+    for (; *a != '\0' && lower(*a) == lower(*b); a++, b++) {
+    }
+    return *a == *b;
+}
+
+/* Lists the folders, the one games install to highlighted (or "Other folder" if it's none of
+   them). */
+static void choose_folder(ui_library *lib, int rows)
+{
+    int cur = lib->folder_count;
+    for (int i = 0; i < lib->folder_count; i++) {
+        if (same_folder(lib->folders[i].path, lib->install_dir)) {
+            cur = i;
+        }
+    }
+    lib->folder_list = (ui_list){lib->folder_count + 1, cur, cur >= rows ? cur - rows + 1 : 0};
+    lib->choosing = true;
 }
 
 int ui_library_game(const ui_library *lib)
 {
     return lib->list.count > 0 ? lib->shown[lib->list.cur] : -1;
-}
-
-static char lower(char c)
-{
-    return c >= 'A' && c <= 'Z' ? (char)(c - 'A' + 'a') : c;
 }
 
 /* True if s holds w[0, n), ASCII case-insensitive. */
@@ -158,8 +193,8 @@ static void ask(ui_library *lib, ui_lib_action what)
 {
     if (what == UI_LIB_INSTALL) {
         (void)snprintf(lib->message, sizeof lib->message,
-                       "Install %s to E:\\Games? It can be stopped with B and resumed later.",
-                       lib->items[ui_library_game(lib)].name);
+                       "Install %s to %s? It can be stopped with B and resumed later.",
+                       lib->items[ui_library_game(lib)].name, lib->install_dir);
         lib->dialog = (ui_dialog){"INSTALL", lib->message, {"INSTALL", "CANCEL", NULL}, 0, 1};
     } else if (what == UI_LIB_LOGOUT) {
         lib->dialog = (ui_dialog){"LOG OUT",
@@ -182,6 +217,9 @@ static void open_kbd(ui_library *lib, ui_lib_typing what)
         ui_kbd_open(&lib->kbd, "SEARCH", lib->typing, sizeof lib->typing, false);
     } else if (what == UI_LIB_TYPING_EMAIL) {
         ui_kbd_open(&lib->kbd, "ARCHIVE.ORG EMAIL", lib->email, sizeof lib->email, false);
+    } else if (what == UI_LIB_TYPING_FOLDER) {
+        (void)snprintf(lib->folder, sizeof lib->folder, "%s", lib->install_dir);
+        ui_kbd_open(&lib->kbd, "INSTALL FOLDER", lib->folder, sizeof lib->folder, false);
     } else {
         ui_library_forget_password(lib);
         ui_kbd_open(&lib->kbd, "ARCHIVE.ORG PASSWORD", lib->password, sizeof lib->password, true);
@@ -211,11 +249,42 @@ static ui_lib_action typed(ui_library *lib, ui_kbd_result r, int rows)
         ui_library_forget_password(lib);
     } else if (r == UI_KBD_DONE && what == UI_LIB_TYPING_EMAIL && lib->email[0] != '\0') {
         open_kbd(lib, UI_LIB_TYPING_PASSWORD);
+    } else if (r == UI_KBD_DONE && what == UI_LIB_TYPING_FOLDER && lib->folder[0] != '\0') {
+        lib->choosing = false;
+        return UI_LIB_FOLDER; /* the caller checks it */
     } else if (r == UI_KBD_DONE && what == UI_LIB_TYPING_SEARCH) {
         (void)snprintf(lib->query, sizeof lib->query, "%s", lib->typing);
         lib->section = UI_LIB_GAMES;
         lib->in_sections = false;
         search(lib, rows);
+    }
+    return UI_LIB_NONE;
+}
+
+/* A press in SETTINGS' list, or in its list of folders. */
+static ui_lib_action settings_input(ui_library *lib, ui_button b, int rows)
+{
+    if (lib->choosing) {
+        int cur = lib->folder_list.cur;
+        if (b == UI_BTN_B) {
+            lib->choosing = false;
+        } else if (b == UI_BTN_A && cur < lib->folder_count) {
+            (void)snprintf(lib->folder, sizeof lib->folder, "%s", lib->folders[cur].path);
+            lib->choosing = false;
+            return UI_LIB_FOLDER;
+        } else if (b == UI_BTN_A) {
+            open_kbd(lib, UI_LIB_TYPING_FOLDER);
+        } else {
+            (void)ui_list_input(&lib->folder_list, b, rows);
+        }
+    } else if (b != UI_BTN_A) {
+        (void)ui_list_input(&lib->settings_list, b, rows);
+    } else if (lib->settings_list.cur == UI_LIB_SETTING_FOLDER) {
+        choose_folder(lib, rows);
+    } else if (lib->logged_in) {
+        ask(lib, UI_LIB_LOGOUT);
+    } else {
+        open_kbd(lib, UI_LIB_TYPING_EMAIL);
     }
     return UI_LIB_NONE;
 }
@@ -249,6 +318,7 @@ ui_lib_action ui_library_input(ui_library *lib, ui_button b, int rows)
         }
     } else if (b == UI_BTN_LEFT) {
         lib->in_sections = true;
+        lib->choosing = false;
     } else if (lib->section == UI_LIB_GAMES) {
         if (b == UI_BTN_A && lib->list.count > 0) {
             ask(lib, UI_LIB_INSTALL);
@@ -260,12 +330,8 @@ ui_lib_action ui_library_input(ui_library *lib, ui_button b, int rows)
         }
     } else if (lib->section == UI_LIB_INSTALLED_GAMES && b != UI_BTN_A) {
         (void)ui_list_input(&lib->installed_list, b, rows);
-    } else if (lib->section == UI_LIB_SETTINGS && b == UI_BTN_A) {
-        if (lib->logged_in) {
-            ask(lib, UI_LIB_LOGOUT);
-        } else {
-            open_kbd(lib, UI_LIB_TYPING_EMAIL);
-        }
+    } else if (lib->section == UI_LIB_SETTINGS) {
+        return settings_input(lib, b, rows);
     }
     return UI_LIB_NONE;
 }
@@ -369,14 +435,67 @@ static void draw_detail(const ui_draw *d, const ui_lib_item *it)
 static const char *setting_name(void *ctx, int i)
 {
     (void)ctx;
-    (void)i;
-    return "archive.org";
+    return i == UI_LIB_SETTING_FOLDER ? "Install location" : "archive.org";
+}
+
+static const char *folder_name(void *ctx, int i)
+{
+    const ui_library *lib = ctx;
+    return i < lib->folder_count ? lib->folders[i].path : "Other folder";
+}
+
+/* SETTINGS' details for the install folder, or for the folder highlighted in the list. */
+static void draw_folder(const ui_draw *d, ui_library *lib)
+{
+    int x = detail.x + PAD + 4;
+    int w = detail.w - 2 * PAD - 4;
+    int y = detail.y + PAD;
+    int bottom = detail.y + detail.h - PAD;
+    int bh = d->line_height(d->ctx, UI_FONT_BOLD);
+    int lh = d->line_height(d->ctx, UI_FONT_LABEL);
+    int sh = d->line_height(d->ctx, UI_FONT_SMALL);
+    if (!lib->choosing) {
+        (void)ui_text_fit(d, UI_FONT_BOLD, x, y, w, ui_col_accent, "Install location");
+        y += bh + 6;
+        (void)ui_text_fit(d, UI_FONT_LABEL, x, y, w, ui_col_accent, lib->install_dir);
+        y += lh;
+        y += ui_text_wrap(d, UI_FONT_SMALL, (ui_rect){x, y, w, 2 * sh}, ui_col_text,
+                          "A chooses where games install.") *
+             sh;
+        y += 6;
+        (void)ui_text_wrap(d, UI_FONT_SMALL, (ui_rect){x, y, w, bottom - y}, ui_col_dim,
+                           "Games already installed stay where they are. INSTALLED lists the "
+                           "folder chosen here.");
+        return;
+    }
+    int cur = lib->folder_list.cur;
+    y += ui_text_wrap(d, UI_FONT_BOLD, (ui_rect){x, y, w, 2 * bh}, ui_col_accent,
+                      folder_name(lib, cur)) *
+         bh;
+    if (cur == lib->folder_count) {
+        (void)ui_text_wrap(d, UI_FONT_SMALL, (ui_rect){x, y + 6, w, bottom - y - 6}, ui_col_text,
+                           "A types a folder on E:, F: or G:, like F:\\Games\\Xbox. It's made if "
+                           "it isn't there.");
+        return;
+    }
+    const char *note = lib->folders[cur].note;
+    if (note != NULL && note[0] != '\0') {
+        (void)ui_text_fit(d, UI_FONT_SMALL, x, y, w, ui_col_dim, note);
+        y += sh;
+    }
+    y += 6;
+    bool here = same_folder(lib->folders[cur].path, lib->install_dir);
+    if (here) {
+        (void)ui_text_fit(d, UI_FONT_LABEL, x, y, w, ui_col_accent, "CURRENT");
+        y += lh;
+    }
+    (void)ui_text_wrap(d, UI_FONT_SMALL, (ui_rect){x, y, w, bottom - y}, ui_col_text,
+                       here ? "Games install here now." : "A installs games here from now on.");
 }
 
 /* SETTINGS' details: the account, logged in or not, and what happens to the password. */
 static void draw_account(const ui_draw *d, const ui_library *lib)
 {
-    ui_panel(d, detail, UI_CHAMFER, ui_col_panel, ui_col_border);
     int x = detail.x + PAD + 4;
     int w = detail.w - 2 * PAD - 4;
     int y = detail.y + PAD;
@@ -404,15 +523,19 @@ static void draw_list(const ui_draw *d, ui_library *lib)
     if (lib->section == UI_LIB_INSTALLED_GAMES) {
         if (lib->installed_count == 0) {
             (void)ui_text_wrap(d, UI_FONT_BODY, list_in, ui_col_dim,
-                               "Nothing installed yet. Games go to E:\\Games.");
+                               "Nothing installed yet. Games go to the install location in "
+                               "SETTINGS.");
         } else {
             ui_list_draw(d, &lib->installed_list, list_in, installed_name, lib);
         }
         return;
     }
     if (lib->section == UI_LIB_SETTINGS) {
-        static const ui_list one = {1, 0, 0};
-        ui_list_draw(d, &one, list_in, setting_name, NULL);
+        if (lib->choosing) {
+            ui_list_draw(d, &lib->folder_list, list_in, folder_name, lib);
+        } else {
+            ui_list_draw(d, &lib->settings_list, list_in, setting_name, NULL);
+        }
         return;
     }
     if (lib->section != UI_LIB_GAMES) {
@@ -462,6 +585,12 @@ static const char *hints(const ui_library *lib)
     if (lib->in_sections) {
         return "Up Down section  Right or A list  Y search  Back exit";
     }
+    if (lib->section == UI_LIB_SETTINGS && lib->choosing) {
+        return "A choose  B back  Left sections  Y search  Back exit";
+    }
+    if (lib->section == UI_LIB_SETTINGS && lib->settings_list.cur == UI_LIB_SETTING_FOLDER) {
+        return "A change  Left sections  Y search  Back exit";
+    }
     if (lib->section == UI_LIB_SETTINGS) {
         return lib->logged_in ? "A log out  Left sections  Y search  Back exit"
                               : "A log in  Left sections  Y search  Back exit";
@@ -491,7 +620,12 @@ static void draw_screen(const ui_draw *d, ui_library *lib, int pan, const char *
     draw_summary(d, lib);
     draw_list(d, lib);
     if (lib->section == UI_LIB_SETTINGS) {
-        draw_account(d, lib);
+        ui_panel(d, detail, UI_CHAMFER, ui_col_panel, ui_col_border);
+        if (lib->choosing || lib->settings_list.cur == UI_LIB_SETTING_FOLDER) {
+            draw_folder(d, lib);
+        } else {
+            draw_account(d, lib);
+        }
     } else {
         draw_detail(d, current(lib));
     }

@@ -89,6 +89,8 @@ const char *xc_err_str(xc_err err)
         return "The file isn't the size its listing gives (a different file?)";
     case XC_ERR_CATALOG:
         return "The catalog file is damaged or invalid";
+    case XC_ERR_SETTINGS:
+        return "The settings file is invalid";
     case XC_ERR_COUNT_:
         break;
     }

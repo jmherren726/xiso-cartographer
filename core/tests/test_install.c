@@ -417,6 +417,18 @@ static void test_fresh_install(void)
     TEST_ASSERT_TRUE(res.bytes_read >= res.bytes_written);
 }
 
+/* ADR 0008: the FATX path limit counts the install location chosen in SETTINGS. */
+static void test_deep_games_dir(void)
+{
+    req.games_dir_len = XC_FATX_MAX_PATH - 1U - strlen("Small Game");
+    TEST_ASSERT_EQUAL_INT(XC_ERR_NOT_INSTALLABLE, xc_install(&req, &res));
+    TEST_ASSERT_TRUE(res.problem_count > 0);
+    TEST_ASSERT_EQUAL_INT(XC_FATX_PROBLEM_PATH_TOO_LONG, res.problems[0].kind);
+    TEST_ASSERT_NULL(find("E:/Games/Small Game/.xcat-installed"));
+    req.games_dir_len = strlen("\\Games\\Xbox"); /* a few more bytes are fine */
+    TEST_ASSERT_EQUAL_INT(XC_OK, xc_install(&req, &res));
+}
+
 /* archiveorg.md §8: a listing's size that isn't the source's stops the install at once. */
 static void test_expected_size(void)
 {
@@ -1026,6 +1038,7 @@ int main(int argc, char **argv)
     }
     UNITY_BEGIN();
     RUN_TEST(test_fresh_install);
+    RUN_TEST(test_deep_games_dir);
     RUN_TEST(test_expected_size);
     RUN_TEST(test_title_from_default_xbe);
     RUN_TEST(test_no_space);

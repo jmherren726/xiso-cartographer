@@ -497,13 +497,14 @@ static xc_err write_marker(job *j)
     return j->io->write_all(j->io->ctx, j->path, text, len);
 }
 
-/* ADR 0008: the paths are what they'd be under \Games\<folder> on the console. */
+/* ADR 0008: the paths are what they'd be under <games dir>\<folder> on the console. */
 static xc_err check_fatx(job *j, const xc_xdvdfs_listing *listing)
 {
     xc_install_result *res = j->res;
     const char *name = strrchr(res->folder, j->io->separator);
     name = name != NULL ? name + 1 : res->folder;
-    xc_err err = xc_fatx_check_listing(listing, strlen("\\Games\\") + strlen(name), res->problems,
+    size_t dir_len = j->req->games_dir_len != 0 ? j->req->games_dir_len : strlen("\\Games");
+    xc_err err = xc_fatx_check_listing(listing, dir_len + 1U + strlen(name), res->problems,
                                        XC_INSTALL_MAX_PROBLEMS, &res->problem_count);
     if (err == XC_OK && res->problem_count > 0) {
         for (size_t i = 0; i < res->problem_count && i < XC_INSTALL_MAX_PROBLEMS; i++) {

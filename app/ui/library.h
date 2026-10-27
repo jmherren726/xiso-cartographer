@@ -5,11 +5,11 @@
  * The library screen (M8, docs/ui-style.md#library): the sections on the left, the games in a
  * list, the highlighted game's details beside it, and a footer. A asks before installing the
  * highlighted game (the map is a catalog: nothing installs unasked), and Back asks before
- * leaving for the dashboard. GAMES lists what can be installed, INSTALLED what's in E:\Games,
- * and SETTINGS the archive.org account (log in and out, ADR 0010); DOWNLOADS says it isn't
- * here yet. Y searches GAMES with the on-screen keyboard (keyboard.h), which also takes the
- * email and password. Plain C over ui_draw like the widgets, tested on the PC
- * (test_ui_library).
+ * leaving for the dashboard. GAMES lists what can be installed, INSTALLED what's in the install
+ * folder, and SETTINGS where games install (docs/formats/settings.md) and the archive.org account
+ * (log in and out, ADR 0010); DOWNLOADS says it isn't here yet. Y searches GAMES with the on-screen
+ * keyboard (keyboard.h), which also takes the email and password. Plain C over ui_draw like the
+ * widgets, tested on the PC (test_ui_library).
  */
 
 #include <stdbool.h>
@@ -55,6 +55,7 @@ typedef enum ui_lib_action {
     UI_LIB_LOGIN,   /* log in with email and password, then ui_library_forget_password */
     UI_LIB_LOGOUT,  /* log out of archive.org: the user said yes */
     UI_LIB_TELL,    /* (internal: a message with OK is open) */
+    UI_LIB_FOLDER,  /* install to lib->folder from now on: the user chose it */
 } ui_lib_action;
 
 typedef enum ui_lib_typing {
@@ -62,11 +63,26 @@ typedef enum ui_lib_typing {
     UI_LIB_TYPING_SEARCH,
     UI_LIB_TYPING_EMAIL,
     UI_LIB_TYPING_PASSWORD,
+    UI_LIB_TYPING_FOLDER,
 } ui_lib_typing;
+
+/* SETTINGS' lines. */
+typedef enum ui_lib_setting {
+    UI_LIB_SETTING_FOLDER,  /* where games install */
+    UI_LIB_SETTING_ACCOUNT, /* the archive.org account */
+    UI_LIB_SETTING_COUNT_
+} ui_lib_setting;
+
+/* A folder SETTINGS offers to install to, as the caller describes it. */
+typedef struct ui_lib_folder {
+    const char *path; /* "F:\Games" */
+    const char *note; /* under it, small: how much is free; may be NULL */
+} ui_lib_folder;
 
 #define UI_LIB_QUERY_MAX 64     /* a search's size, with the NUL */
 #define UI_LIB_EMAIL_MAX 255    /* with the NUL: xcat/login.h's 254 bytes */
 #define UI_LIB_PASSWORD_MAX 129 /* with the NUL: xcat/login.h's 128 bytes */
+#define UI_LIB_FOLDER_MAX 67    /* with the NUL: xcat/settings.h's XC_SETTINGS_DIR_SIZE */
 
 typedef struct ui_library {
     const ui_lib_item *items; /* GAMES: every game */
@@ -81,7 +97,14 @@ typedef struct ui_library {
     char email[UI_LIB_EMAIL_MAX];       /* kept for the next login */
     char password[UI_LIB_PASSWORD_MAX]; /* wiped when the login is done or cancelled */
     char tell_title[32];                /* an open message's */
-    const ui_lib_item *installed;       /* INSTALLED: the folders in E:\Games */
+    const char *install_dir;            /* where games install: the caller's */
+    const ui_lib_folder *folders;       /* the folders SETTINGS offers: the caller's */
+    int folder_count;
+    ui_list settings_list;          /* SETTINGS' lines (ui_lib_setting) */
+    bool choosing;                  /* SETTINGS lists the folders, then "Other folder" */
+    ui_list folder_list;            /* over them */
+    char folder[UI_LIB_FOLDER_MAX]; /* UI_LIB_FOLDER's, and the keyboard's for "Other folder" */
+    const ui_lib_item *installed;   /* INSTALLED: the folders in install_dir */
     int installed_count;
     ui_list installed_list;
     ui_lib_section section;
@@ -106,6 +129,11 @@ bool ui_library_matches(const ui_lib_item *it, const char *query);
 /* Gives INSTALLED its list (again, after an install), keeping its place where it can. */
 void ui_library_set_installed(ui_library *lib, const ui_lib_item *items, int count);
 
+/* Says where games install, and which folders SETTINGS offers (the strings stay the caller's).
+   Until then games install to E:\Games and SETTINGS offers just that. */
+void ui_library_set_folders(ui_library *lib, const char *install_dir, const ui_lib_folder *folders,
+                            int count);
+
 /* Says whether the archive.org account is logged in (SETTINGS). */
 void ui_library_set_account(ui_library *lib, bool logged_in);
 
@@ -127,7 +155,10 @@ int ui_library_rows(const ui_draw *d);
    game again, and Back asks to leave. In the sections, Up and Down choose one, and Right or A go
    back to the list. Y, anywhere but a dialog, opens the keyboard on the search: DONE searches
    GAMES and shows it, keeping the highlighted game if it still matches; B there changes nothing.
-   A in SETTINGS asks for the email, then the password (dots only), and DONE on a password gives
+   In SETTINGS, Up and Down choose a line. A on the install folder lists the folders to choose
+   from, the current one highlighted: A on one gives UI_LIB_FOLDER, A on "Other folder" opens
+   the keyboard on the current folder and DONE gives UI_LIB_FOLDER; B goes back. A on
+   the account asks for the email, then the password (dots only), and DONE on a password gives
    UI_LIB_LOGIN; B wipes it. Logged in, A asks before UI_LIB_LOGOUT. In a dialog or the
    keyboard, their buttons. */
 ui_lib_action ui_library_input(ui_library *lib, ui_button b, int rows);

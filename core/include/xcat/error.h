@@ -49,6 +49,7 @@ typedef enum xc_err {
     XC_ERR_ZIP_CRC,         /* the image in the zip failed its CRC-32 check (zip.md §9) */
     XC_ERR_SOURCE_SIZE,     /* the file isn't the size its listing gives (archiveorg.md §8) */
     XC_ERR_CATALOG,         /* the catalog file breaks docs/formats/catalog.md (§7) */
+    XC_ERR_SETTINGS,        /* the settings file is invalid (docs/formats/settings.md §5) */
     XC_ERR_COUNT_           /* number of codes; not an error */
 } xc_err;
 

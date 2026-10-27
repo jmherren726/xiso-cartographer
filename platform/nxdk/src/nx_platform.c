@@ -276,6 +276,22 @@ bool xc_nx_mount_e(void)
     return nxIsDriveMounted('E') || nxMountDrive('E', "\\Device\\Harddisk0\\Partition1\\");
 }
 
+/* Mounting only links the letter to the partition; a partition that isn't there fails on
+   the first look at its root. */
+static bool mount(char letter, const char *partition)
+{
+    char root[4] = {letter, ':', '\\', '\0'};
+    uint64_t free_bytes;
+    return (nxIsDriveMounted(letter) || nxMountDrive(letter, partition)) &&
+           xc_nx_free_space(root, &free_bytes) == XC_OK;
+}
+
+void xc_nx_mount_fg(bool *has_f, bool *has_g)
+{
+    *has_f = mount('F', "\\Device\\Harddisk0\\Partition6\\");
+    *has_g = mount('G', "\\Device\\Harddisk0\\Partition7\\");
+}
+
 xc_err xc_nx_free_space(const char *path, uint64_t *free_bytes)
 {
     ULARGE_INTEGER avail;
@@ -284,6 +300,18 @@ xc_err xc_nx_free_space(const char *path, uint64_t *free_bytes)
     }
     *free_bytes = avail.QuadPart;
     return XC_OK;
+}
+
+uint32_t xc_nx_cluster_size(const char *root)
+{
+    DWORD sectors = 0;
+    DWORD bytes = 0;
+    DWORD free_clusters = 0;
+    DWORD clusters = 0;
+    if (!GetDiskFreeSpaceA(root, &sectors, &bytes, &free_clusters, &clusters)) {
+        return 0;
+    }
+    return (uint32_t)(sectors * bytes);
 }
 
 bool xc_nx_exists(const char *path)

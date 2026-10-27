@@ -112,7 +112,10 @@ typedef struct xc_install_req {
     const char *last_modified;
     const char *source_name; /* URL or path, for the journal and messages */
     const char *games_dir;   /* e.g. "E:\\Games" */
-    const char *title;       /* the install folder is named after it (ADR 0008) */
+    /* games_dir's length on the console from the '\' after the drive ("\Games": 6), for the
+       FATX path limit (ADR 0008); 0 means 6. On the PC games_dir is any path, so it can't say. */
+    size_t games_dir_len;
+    const char *title; /* the install folder is named after it (ADR 0008) */
     const xc_install_io *io;
     uint8_t *buf; /* I/O buffer, at least 64 KiB; 1 MiB recommended */
     size_t buf_size;
