@@ -18,6 +18,8 @@ static ui_lib_item items[3] = {
     {"Third game", "2002", NULL, UI_LIB_FAILED, "No space left"},
 };
 
+static int shown[8]; /* the library's list of what GAMES shows */
+
 static int count_kind(char kind)
 {
     int n = 0;
@@ -39,7 +41,7 @@ static int count_text(const char *s)
 static void test_open(void)
 {
     ui_library lib;
-    ui_library_open(&lib, items, 3);
+    ui_library_open(&lib, items, 3, shown);
     TEST_ASSERT_EQUAL_INT(0, lib.list.cur);
     TEST_ASSERT_EQUAL_INT(3, lib.list.count);
     TEST_ASSERT_EQUAL_INT(UI_LIB_GAMES, lib.section);
@@ -53,7 +55,7 @@ static void test_open(void)
 static void test_install_asks_first(void)
 {
     ui_library lib;
-    ui_library_open(&lib, items, 3);
+    ui_library_open(&lib, items, 3, shown);
     TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_DOWN, 5));
     TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
     TEST_ASSERT_EQUAL_INT(UI_LIB_INSTALL, lib.asking);
@@ -72,7 +74,7 @@ static void test_install_asks_first(void)
 static void test_back_asks_before_leaving(void)
 {
     ui_library lib;
-    ui_library_open(&lib, items, 3);
+    ui_library_open(&lib, items, 3, shown);
     TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_BACK, 5));
     TEST_ASSERT_EQUAL_INT(UI_LIB_EXIT, lib.asking);
     TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_B, 5)); /* STAY */
@@ -83,7 +85,7 @@ static void test_back_asks_before_leaving(void)
 static void test_sections(void)
 {
     ui_library lib;
-    ui_library_open(&lib, items, 3);
+    ui_library_open(&lib, items, 3, shown);
     (void)ui_library_input(&lib, UI_BTN_LEFT, 5);
     TEST_ASSERT_TRUE(lib.in_sections);
     (void)ui_library_input(&lib, UI_BTN_UP, 5); /* stops at the top */
@@ -108,7 +110,7 @@ static void test_sections(void)
 static void test_empty(void)
 {
     ui_library lib;
-    ui_library_open(&lib, items, 0);
+    ui_library_open(&lib, items, 0, shown);
     TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
     TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, lib.asking);
     ui_library_draw(&fake_draw, &lib, 0, "status");
@@ -118,7 +120,7 @@ static void test_empty(void)
 static void test_draw(void)
 {
     ui_library lib;
-    ui_library_open(&lib, items, 3);
+    ui_library_open(&lib, items, 3, shown);
     ui_library_draw(&fake_draw, &lib, 0, "Ready");
     TEST_ASSERT_TRUE(fake_find_text("LIBRARY") >= 0);
     TEST_ASSERT_TRUE(fake_find_text("GAMES") >= 0);
@@ -147,7 +149,7 @@ static void test_stopped(void)
 {
     const ui_lib_item stopped[1] = {{"Game", "", NULL, UI_LIB_STOPPED, "Stopped."}};
     ui_library lib;
-    ui_library_open(&lib, stopped, 1);
+    ui_library_open(&lib, stopped, 1, shown);
     ui_library_draw(&fake_draw, &lib, 0, NULL);
     TEST_ASSERT_TRUE(fake_find_text("STOPPED") >= 0);
     TEST_ASSERT_TRUE(fake_find_text("1 unfinished") >= 0);
@@ -158,7 +160,7 @@ static void test_unfinished(void)
 {
     const ui_lib_item half[1] = {{"Game", "", NULL, UI_LIB_UNFINISHED, "In E:/Games/Game"}};
     ui_library lib;
-    ui_library_open(&lib, half, 1);
+    ui_library_open(&lib, half, 1, shown);
     ui_library_draw(&fake_draw, &lib, 0, NULL);
     TEST_ASSERT_TRUE(fake_find_text("UNFINISHED") >= 0);
     TEST_ASSERT_TRUE(fake_find_text("1 unfinished") >= 0);
@@ -174,7 +176,7 @@ static const ui_lib_item found[2] = {
 static void test_installed_section(void)
 {
     ui_library lib;
-    ui_library_open(&lib, items, 3);
+    ui_library_open(&lib, items, 3, shown);
     ui_library_set_installed(&lib, found, 2);
     (void)ui_library_input(&lib, UI_BTN_LEFT, 5);
     (void)ui_library_input(&lib, UI_BTN_DOWN, 5);
@@ -214,7 +216,7 @@ static void test_installed_section(void)
 static void test_dialog_over_backdrop(void)
 {
     ui_library lib;
-    ui_library_open(&lib, items, 3);
+    ui_library_open(&lib, items, 3, shown);
     (void)ui_library_input(&lib, UI_BTN_A, 5);
     ui_library_draw(&fake_draw, &lib, 0, NULL);
     TEST_ASSERT_EQUAL_INT(1, count_kind('s'));
@@ -238,6 +240,140 @@ static void test_dialog_over_backdrop(void)
     TEST_ASSERT_TRUE(fake_find_text("LEAVE") >= 0);
 }
 
+static void type(ui_library *lib, const char *word)
+{
+    /* The keyboard's small letters: q-p, a-l, z-m on rows 1-3 (keyboard.c); Y types a space. */
+    static const char *const rows[] = {"qwertyuiop", "asdfghjkl", "zxcvbnm"};
+    for (const char *c = word; *c != '\0'; c++) {
+        if (*c == ' ') {
+            (void)ui_library_input(lib, UI_BTN_Y, 5);
+            continue;
+        }
+        for (int r = 0; r < 3; r++) {
+            const char *at = strchr(rows[r], *c);
+            if (at != NULL) {
+                lib->kbd.row = r + 1;
+                lib->kbd.col = (int)(at - rows[r]);
+            }
+        }
+        (void)ui_library_input(lib, UI_BTN_A, 5);
+    }
+}
+
+static const ui_lib_item many[4] = {
+    {"Racing One", "2003  |  USA", "By Studio Fast.", UI_LIB_NOT_TRIED, NULL},
+    {"Puzzle Two", "2004", "From E:/xcat/isos.", UI_LIB_NOT_TRIED, NULL},
+    {"Racing Three", "2005  |  Europe", NULL, UI_LIB_INSTALLED, "In E:/Games/Racing Three"},
+    {"Fighter", NULL, "By Studio Fast.", UI_LIB_NOT_TRIED, NULL},
+};
+
+static void test_matches(void)
+{
+    TEST_ASSERT_TRUE(ui_library_matches(&many[0], ""));
+    TEST_ASSERT_TRUE(ui_library_matches(&many[0], "   "));
+    TEST_ASSERT_TRUE(ui_library_matches(&many[0], "racing"));
+    TEST_ASSERT_TRUE(ui_library_matches(&many[0], "RAC"));
+    TEST_ASSERT_TRUE(ui_library_matches(&many[0], " one  racing ")); /* every word, any order */
+    TEST_ASSERT_FALSE(ui_library_matches(&many[0], "racing two"));   /* not every word */
+    TEST_ASSERT_TRUE(ui_library_matches(&many[0], "usa"));           /* the facts */
+    TEST_ASSERT_TRUE(ui_library_matches(&many[3], "fast"));          /* the about */
+    TEST_ASSERT_FALSE(ui_library_matches(&many[3], "2003"));         /* no facts */
+    TEST_ASSERT_FALSE(ui_library_matches(&many[2], "studio"));       /* no about */
+    TEST_ASSERT_FALSE(ui_library_matches(&many[0], "racing onex"));
+}
+
+/* Y, a word, DONE: GAMES lists the games that match, and A installs the one highlighted. */
+static void test_search(void)
+{
+    ui_library lib;
+    ui_library_open(&lib, many, 4, shown);
+    (void)ui_library_input(&lib, UI_BTN_DOWN, 5);
+    (void)ui_library_input(&lib, UI_BTN_DOWN, 5); /* Racing Three */
+    (void)ui_library_input(&lib, UI_BTN_LEFT, 5);
+    (void)ui_library_input(&lib, UI_BTN_DOWN, 5); /* in DOWNLOADS */
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_Y, 5));
+    TEST_ASSERT_TRUE(lib.searching);
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_EQUAL_INT(1, count_kind('s')); /* over the screen behind */
+    TEST_ASSERT_TRUE(fake_find_text("SEARCH") >= 0);
+    type(&lib, "racing");
+    TEST_ASSERT_EQUAL_STRING("", lib.query); /* not searched before DONE */
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_START, 5));
+    TEST_ASSERT_FALSE(lib.searching);
+    TEST_ASSERT_EQUAL_STRING("racing", lib.query);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_GAMES, lib.section);
+    TEST_ASSERT_FALSE(lib.in_sections);
+    TEST_ASSERT_EQUAL_INT(2, lib.list.count);
+    TEST_ASSERT_EQUAL_INT(1, lib.list.cur); /* Racing Three still highlighted */
+    TEST_ASSERT_EQUAL_INT(2, ui_library_game(&lib));
+
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_TRUE(fake_find_text("SEARCH") >= 0);
+    TEST_ASSERT_TRUE(fake_find_text("racing") >= 0);
+    TEST_ASSERT_TRUE(fake_find_text("2 of 4") >= 0);
+    TEST_ASSERT_TRUE(fake_saw("Racing One"));
+    TEST_ASSERT_FALSE(fake_saw("Puzzle Two"));
+    TEST_ASSERT_TRUE(fake_saw("B list all"));
+
+    (void)ui_library_input(&lib, UI_BTN_UP, 5);
+    TEST_ASSERT_EQUAL_INT(0, ui_library_game(&lib));
+    (void)ui_library_input(&lib, UI_BTN_A, 5);
+    TEST_ASSERT_NOT_NULL(strstr(lib.message, "Racing One"));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_INSTALL, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(0, ui_library_game(&lib));
+
+    /* B lists every game again, keeping the place. */
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_B, 5));
+    TEST_ASSERT_EQUAL_STRING("", lib.query);
+    TEST_ASSERT_EQUAL_INT(4, lib.list.count);
+    TEST_ASSERT_EQUAL_INT(0, ui_library_game(&lib));
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_EQUAL_INT(-1, fake_find_text("2 of 4"));
+    TEST_ASSERT_TRUE(fake_saw("Puzzle Two"));
+}
+
+/* The keyboard opens on the last search; B there changes nothing, an empty DONE lists all. */
+static void test_search_again(void)
+{
+    ui_library lib;
+    ui_library_open(&lib, many, 4, shown);
+    (void)ui_library_input(&lib, UI_BTN_Y, 5);
+    type(&lib, "fast");
+    (void)ui_library_input(&lib, UI_BTN_START, 5);
+    TEST_ASSERT_EQUAL_INT(2, lib.list.count);
+    TEST_ASSERT_EQUAL_INT(3, shown[1]);
+
+    (void)ui_library_input(&lib, UI_BTN_Y, 5);
+    TEST_ASSERT_EQUAL_STRING("fast", lib.typing);
+    type(&lib, "x");
+    (void)ui_library_input(&lib, UI_BTN_B, 5); /* cancel */
+    TEST_ASSERT_FALSE(lib.searching);
+    TEST_ASSERT_EQUAL_STRING("fast", lib.query);
+    TEST_ASSERT_EQUAL_INT(2, lib.list.count);
+
+    (void)ui_library_input(&lib, UI_BTN_Y, 5);
+    type(&lib, "x");
+    (void)ui_library_input(&lib, UI_BTN_START, 5);
+    TEST_ASSERT_EQUAL_INT(0, lib.list.count);
+    TEST_ASSERT_EQUAL_INT(-1, ui_library_game(&lib));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, lib.asking); /* nothing to install */
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_TRUE(fake_saw("No game matches"));
+    TEST_ASSERT_TRUE(fake_find_text("0 of 4") >= 0);
+
+    (void)ui_library_input(&lib, UI_BTN_Y, 5);
+    for (int i = 0; i < 5; i++) {
+        (void)ui_library_input(&lib, UI_BTN_X, 5); /* delete it all */
+    }
+    (void)ui_library_input(&lib, UI_BTN_START, 5);
+    TEST_ASSERT_EQUAL_STRING("", lib.query);
+    TEST_ASSERT_EQUAL_INT(4, lib.list.count);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -251,5 +387,8 @@ int main(void)
     RUN_TEST(test_unfinished);
     RUN_TEST(test_installed_section);
     RUN_TEST(test_dialog_over_backdrop);
+    RUN_TEST(test_matches);
+    RUN_TEST(test_search);
+    RUN_TEST(test_search_again);
     return UNITY_END();
 }

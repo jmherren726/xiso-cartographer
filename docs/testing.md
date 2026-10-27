@@ -27,6 +27,7 @@ Newest first. "Build" is the commit or CI artifact tested.
 
 | Date | Milestone | Build | Where | Result | Notes |
 |---|---|---|---|---|---|
+| 2026-10-26 | M8 search, steps 1 and 2 in xemu | `feat/ui-search`, and a scratch build pressing Y, s, m, Start on a timer (not committed) | xemu v0.8.139 on the owner's PC, run by the agent | ✅ xemu; hardware to be run | Read from the guest's framebuffer over QMP, on the HDD image used for the earlier tests. Y opened the keyboard over the library, with SEARCH and "s" in the field after the first key. After Start, the SEARCH panel said "sm" and "1 of 1", GAMES listed the sample (still INSTALLED), and the footer said "A install  B list all  Y search". The image lists one game, so narrowing a longer list is left to hardware. |
 | 2026-10-26 | M8 installed games on hardware | `feat/ui-installed` at `92a5f7f` (#85) | Hardware: main console, internet (owner) | ✅ Hardware | "Works" (owner): games installed in earlier visits keep their INSTALLED mark after a restart, and the INSTALLED section lists them. |
 | 2026-10-26 | M8 installed games, steps 1 and 2 in xemu | `feat/ui-installed`, and a scratch build pressing Left, Down, Down, Right on a timer (not committed) | xemu v0.8.139 on the owner's PC, run by the agent | ✅ xemu; hardware to be run | Read from the guest's framebuffer over QMP, on the HDD image used for the earlier tests. GAMES marked the bundled sample INSTALLED, "In E:\Games\small", from an install in an earlier session; SUMMARY said "1 game listed, 1 installed". INSTALLED listed "small" and "small (2)" (both earlier installs of the sample): "197 KB \| 9 files", INSTALLED, "E:\Games\small", "Checked: every file's CRC-32. From E:\xcat\isos\small.iso." The synthetic sample has no title ID. |
 | 2026-10-26 | M8 library and install screens, step 5 again on hardware | `feat/ui-library` at `3054ff3` (#84) | Hardware: main console, internet (owner) | ✅ Hardware | "Flawless" (owner): with the buttons read on the install screen's own thread, stopping and retrying answers every press. Noted for later: after a restart the library no longer marks games installed in an earlier visit. As designed for now (the marks and THIS VISIT cover one visit); finding installed games in E:\Games belongs to the INSTALLED GAMES section, a later M8 change. |
@@ -287,6 +288,18 @@ The library finds what's already in `E:\Games` ([ui-style.md](ui-style.md#librar
 | 2 | Hardware | Left, Down twice, Right; move in the list | INSTALLED lists the folders this app installed, by name, with the size, the number of files, INSTALLED, the folder, the title and title ID, "Checked: every file's CRC-32" (and the published hash for archive.org images), and the server's name or the file's path. Folders other tools made aren't there. A does nothing; Left, Up twice, Right goes back to GAMES where it was |
 | 3 | Hardware, internet | Install a game and STOP part way (B, STOP, BACK); leave for the dashboard and launch the app again | The game says UNFINISHED: "Started in an earlier visit, in E:\Games\<folder>", and SUMMARY counts 1 unfinished. INSTALLED lists the folder as UNFINISHED |
 | 4 | Hardware, internet | Install that game again and let it finish | It carries on from where it stopped. Back in the library it says INSTALLED, and INSTALLED shows its folder as INSTALLED at once, without a restart |
+
+## M8: search
+
+Y searches GAMES ([ui-style.md](ui-style.md#library)). Copy `app/bin/` as above, with a map listing several games.
+
+| Step | Where | How | Pass |
+|---|---|---|---|
+| 1 | xemu, then hardware | Y; type part of a game's name; Start | The keyboard opens over the library, labelled SEARCH. After Start, GAMES lists only the games whose name, year, region, maker or origin has every word typed; the SEARCH panel by the title shows the words and "N of M"; the highlighted game stays highlighted if it matches |
+| 2 | xemu, then hardware | A on a game found | "Install <that game>?" names the game highlighted in the searched list; CANCEL |
+| 3 | Hardware | B | Every game is listed again, the SEARCH panel goes, and the highlight stays on the same game |
+| 4 | Hardware | Y; type a word no game has; Start; then Y, DELETE it all, Start | "No game matches" with "0 of M", and A does nothing. Searching for nothing lists every game. Y then B in the keyboard leaves the list as it was |
+| 5 | Hardware | Left to INSTALLED; Y; type; Start | The search applies to GAMES, which is shown; INSTALLED keeps its list |
 
 ## FATX probe (M2)
 
