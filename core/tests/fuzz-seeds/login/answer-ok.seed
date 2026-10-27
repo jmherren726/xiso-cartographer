@@ -1,0 +1,1 @@
+a{"success": true, "values": {"cookies": {"logged-in-user": "someone@example.org", "logged-in-sig": "PLACEHOLDER%20SIG"}, "s3": {"access": "X", "secret": "Y"}, "screenname": "someone"}, "version": 1}

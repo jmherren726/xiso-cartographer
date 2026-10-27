@@ -113,6 +113,7 @@ xcat_add_test(test_catalog)
 xcat_add_test(test_journal)
 xcat_add_test(test_install ARGS ${XCAT_FIXTURES_DIR})
 xcat_add_test(test_installed)
+xcat_add_test(test_login)
 add_dependencies(test_install xcat_fixtures xcat_zip_fixtures)
 xcat_add_test(test_xdvdfs ARGS ${XCAT_FIXTURES_DIR} ${XCAT_FIXTURES})
 add_dependencies(test_xdvdfs xcat_fixtures)
@@ -267,6 +268,10 @@ xcat_add_fuzzer(fuzz_xbe SEEDS ${_xbe_seeds})
 # Install marker seeds are committed: synthetic markers with placeholder names.
 file(GLOB _installed_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/installed/*.seed)
 xcat_add_fuzzer(fuzz_installed SEEDS ${_installed_seeds})
+
+# Login seeds are committed: synthetic answers and credentials files with placeholder values.
+file(GLOB _login_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/login/*.seed)
+xcat_add_fuzzer(fuzz_login SEEDS ${_login_seeds})
 
 # Catalog seeds are committed, written by tools/fixtures/catalog_seeds.py with the pipeline's
 # writer (tools/catalog/catalog_bin.py), so the reader is checked against it on every build.

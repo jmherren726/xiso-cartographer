@@ -1,0 +1,4 @@
+s# xcat-credentials v1
+[ia]
+hosts = *.archive.org
+cookie = a=b

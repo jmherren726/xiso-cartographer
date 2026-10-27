@@ -28,6 +28,7 @@ SRCS = $(CURDIR)/main.c \
        $(CORE_DIR)/src/installed.c \
        $(CORE_DIR)/src/journal.c \
        $(CORE_DIR)/src/json.c \
+       $(CORE_DIR)/src/login.c \
        $(CORE_DIR)/src/map.c \
        $(CORE_DIR)/src/source.c \
        $(CORE_DIR)/src/text.c \
