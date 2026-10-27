@@ -623,6 +623,9 @@ static bool append(char **buf, size_t *n, size_t *cap, const char *s, size_t len
     if (len > *cap - *n) {
         return false;
     }
+    if (len == 0) {
+        return true; /* s may be NULL (no section, when logging out): memcpy must not see it */
+    }
     memcpy(*buf + *n, s, len);
     *n += len;
     return true;
