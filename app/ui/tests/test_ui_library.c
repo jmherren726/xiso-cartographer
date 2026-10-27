@@ -387,12 +387,77 @@ static void to_settings(ui_library *lib)
     TEST_ASSERT_EQUAL_INT(UI_LIB_SETTINGS, lib->section);
 }
 
-/* SETTINGS' second line, the archive.org account. */
+/* The archive.org account: first on SETTINGS' second line, Authentication. */
 static void to_account(ui_library *lib)
 {
     to_settings(lib);
     (void)ui_library_input(lib, UI_BTN_DOWN, 5);
-    TEST_ASSERT_EQUAL_INT(UI_LIB_SETTING_ACCOUNT, lib->settings_list.cur);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_SETTING_LOGINS, lib->settings_list.cur);
+    (void)ui_library_input(lib, UI_BTN_A, 5);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_PAGE_LOGINS, lib->page);
+    TEST_ASSERT_TRUE(lib->hosts[ui_library_host(lib)].archive);
+}
+
+/* Authentication: archive.org, then the map's servers with their logins. A on one with a login
+   asks before UI_LIB_FORGET; on one without, a message; B goes back. */
+static void test_logins(void)
+{
+    static const ui_lib_host hosts[] = {
+        {"archive.org", true, NULL, "3 games in the map", NULL},
+        {"192.168.1.20:8080", false, "nas", "12 games in the map", "Plain http, on the LAN."},
+        {"games.example", false, NULL, "1 game in the map", NULL},
+    };
+    ui_library lib;
+    ui_library_open(&lib, items, 3, shown);
+    TEST_ASSERT_EQUAL_INT(1, lib.host_count); /* archive.org until the caller says */
+    ui_library_set_hosts(&lib, hosts, 3);
+    to_settings(&lib);
+    (void)ui_library_input(&lib, UI_BTN_DOWN, 5);
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_TRUE(fake_find_text("Authentication") >= 0);
+    TEST_ASSERT_TRUE(fake_find_text("NOT LOGGED IN") >= 0);
+    TEST_ASSERT_TRUE(fake_saw("A servers and logins"));
+
+    (void)ui_library_input(&lib, UI_BTN_A, 5);
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_TRUE(fake_find_text("192.168.1.20:8080") >= 0);
+    TEST_ASSERT_TRUE(fake_find_text("games.example") >= 0);
+    TEST_ASSERT_TRUE(fake_find_text("NOT LOGGED IN") >= 0);
+    TEST_ASSERT_TRUE(fake_saw("3 games in the")); /* cut to the panel's width */
+    TEST_ASSERT_TRUE(fake_saw("A log in"));
+
+    (void)ui_library_input(&lib, UI_BTN_DOWN, 5);
+    TEST_ASSERT_EQUAL_INT(1, ui_library_host(&lib));
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_TRUE(fake_find_text("LOGIN [nas]") >= 0);
+    TEST_ASSERT_TRUE(fake_saw("Plain http, on the LAN."));
+    TEST_ASSERT_TRUE(fake_saw("A remove login"));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_FORGET, lib.asking);
+    TEST_ASSERT_NOT_NULL(strstr(lib.message, "[nas]"));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5)); /* CANCEL first */
+    (void)ui_library_input(&lib, UI_BTN_A, 5);
+    (void)ui_library_input(&lib, UI_BTN_LEFT, 5);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_FORGET, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_PAGE_LOGINS, lib.page); /* still on the page */
+
+    /* After it's removed, the caller says so; the place is kept. */
+    static const ui_lib_host after[] = {
+        {"archive.org", true, NULL, NULL, NULL},
+        {"192.168.1.20:8080", false, NULL, NULL, NULL},
+    };
+    ui_library_set_hosts(&lib, after, 2);
+    TEST_ASSERT_EQUAL_INT(1, ui_library_host(&lib));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_TELL, lib.asking);
+    TEST_ASSERT_EQUAL_STRING("NO LOGIN", lib.tell_title);
+    TEST_ASSERT_NOT_NULL(strstr(lib.message, "credentials"));
+    (void)ui_library_input(&lib, UI_BTN_A, 5);
+    (void)ui_library_input(&lib, UI_BTN_B, 5);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_PAGE_NONE, lib.page);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_SETTING_LOGINS, lib.settings_list.cur);
 }
 
 /* SETTINGS' first line: where games install. A lists the folders, the current one first
@@ -409,12 +474,12 @@ static void test_install_folder(void)
     TEST_ASSERT_EQUAL_INT(UI_LIB_SETTING_FOLDER, lib.settings_list.cur);
     ui_library_draw(&fake_draw, &lib, 0, NULL);
     TEST_ASSERT_TRUE(fake_find_text("Install location") >= 0);
-    TEST_ASSERT_TRUE(fake_find_text("archive.org") >= 0);
+    TEST_ASSERT_TRUE(fake_find_text("Authentication") >= 0);
     TEST_ASSERT_TRUE(fake_find_text("f:\\games") >= 0);
     TEST_ASSERT_TRUE(fake_saw("A change"));
 
     TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
-    TEST_ASSERT_TRUE(lib.choosing);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_PAGE_FOLDERS, lib.page);
     TEST_ASSERT_EQUAL_INT(3, lib.folder_list.count);
     TEST_ASSERT_EQUAL_INT(1, lib.folder_list.cur); /* F:\Games, whatever its case */
     fake_reset();
@@ -425,12 +490,12 @@ static void test_install_folder(void)
     TEST_ASSERT_TRUE(fake_saw("A choose"));
 
     (void)ui_library_input(&lib, UI_BTN_B, 5);
-    TEST_ASSERT_FALSE(lib.choosing);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_PAGE_NONE, lib.page);
     (void)ui_library_input(&lib, UI_BTN_A, 5);
     (void)ui_library_input(&lib, UI_BTN_UP, 5);
     TEST_ASSERT_EQUAL_INT(UI_LIB_FOLDER, ui_library_input(&lib, UI_BTN_A, 5));
     TEST_ASSERT_EQUAL_STRING("E:\\Games", lib.folder);
-    TEST_ASSERT_FALSE(lib.choosing);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_PAGE_NONE, lib.page);
 
     /* Other folder: the keyboard on the current one. X deletes; B changes nothing. */
     (void)ui_library_input(&lib, UI_BTN_A, 5);
@@ -440,7 +505,7 @@ static void test_install_folder(void)
     TEST_ASSERT_EQUAL_INT(UI_LIB_TYPING_FOLDER, lib.typing_for);
     TEST_ASSERT_EQUAL_STRING("f:\\games", lib.folder);
     (void)ui_library_input(&lib, UI_BTN_B, 5);
-    TEST_ASSERT_TRUE(lib.choosing);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_PAGE_FOLDERS, lib.page);
     (void)ui_library_input(&lib, UI_BTN_A, 5);
     for (int i = 0; i < 5; i++) {
         (void)ui_library_input(&lib, UI_BTN_X, 5);
@@ -448,7 +513,7 @@ static void test_install_folder(void)
     type(&lib, "xbox");
     TEST_ASSERT_EQUAL_INT(UI_LIB_FOLDER, ui_library_input(&lib, UI_BTN_START, 5));
     TEST_ASSERT_EQUAL_STRING("f:\\xbox", lib.folder);
-    TEST_ASSERT_FALSE(lib.choosing);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_PAGE_NONE, lib.page);
 
     /* The install question names the folder. */
     (void)ui_library_input(&lib, UI_BTN_LEFT, 5);
@@ -597,5 +662,6 @@ int main(void)
     RUN_TEST(test_login_again);
     RUN_TEST(test_logout_and_tell);
     RUN_TEST(test_install_folder);
+    RUN_TEST(test_logins);
     return UNITY_END();
 }

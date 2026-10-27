@@ -6,8 +6,9 @@
  * list, the highlighted game's details beside it, and a footer. A asks before installing the
  * highlighted game (the map is a catalog: nothing installs unasked), and Back asks before
  * leaving for the dashboard. GAMES lists what can be installed, INSTALLED what's in the install
- * folder, and SETTINGS where games install (docs/formats/settings.md) and the archive.org account
- * (log in and out, ADR 0010); DOWNLOADS says it isn't here yet. Y searches GAMES with the on-screen
+ * folder, and SETTINGS where games install (docs/formats/settings.md) and Authentication: the
+ * servers the map uses and their logins, with the archive.org account (log in and out, ADR
+ * 0010); DOWNLOADS says it isn't here yet. Y searches GAMES with the on-screen
  * keyboard (keyboard.h), which also takes the email and password. Plain C over ui_draw like the
  * widgets, tested on the PC (test_ui_library).
  */
@@ -56,6 +57,7 @@ typedef enum ui_lib_action {
     UI_LIB_LOGOUT,  /* log out of archive.org: the user said yes */
     UI_LIB_TELL,    /* (internal: a message with OK is open) */
     UI_LIB_FOLDER,  /* install to lib->folder from now on: the user chose it */
+    UI_LIB_FORGET,  /* remove the login of hosts[ui_library_host()]: the user said yes */
 } ui_lib_action;
 
 typedef enum ui_lib_typing {
@@ -68,10 +70,26 @@ typedef enum ui_lib_typing {
 
 /* SETTINGS' lines. */
 typedef enum ui_lib_setting {
-    UI_LIB_SETTING_FOLDER,  /* where games install */
-    UI_LIB_SETTING_ACCOUNT, /* the archive.org account */
+    UI_LIB_SETTING_FOLDER, /* where games install */
+    UI_LIB_SETTING_LOGINS, /* Authentication: the servers and their logins */
     UI_LIB_SETTING_COUNT_
 } ui_lib_setting;
+
+/* What SETTINGS shows in its list. */
+typedef enum ui_lib_page {
+    UI_LIB_PAGE_NONE,    /* its lines */
+    UI_LIB_PAGE_FOLDERS, /* the folders to install to, then "Other folder" */
+    UI_LIB_PAGE_LOGINS,  /* Authentication's servers */
+} ui_lib_page;
+
+/* A server on the Authentication page, as the caller describes it. */
+typedef struct ui_lib_host {
+    const char *name;  /* "archive.org", "192.168.1.20:8080" */
+    bool archive;      /* archive.org: A logs in or out (logged_in says which) */
+    const char *login; /* else the credentials section that logs in to it, or NULL */
+    const char *note;  /* under it, small: what the map gets from it; may be NULL */
+    const char *about; /* wrapped below it; may be NULL */
+} ui_lib_host;
 
 /* A folder SETTINGS offers to install to, as the caller describes it. */
 typedef struct ui_lib_folder {
@@ -100,9 +118,12 @@ typedef struct ui_library {
     const char *install_dir;            /* where games install: the caller's */
     const ui_lib_folder *folders;       /* the folders SETTINGS offers: the caller's */
     int folder_count;
-    ui_list settings_list;          /* SETTINGS' lines (ui_lib_setting) */
-    bool choosing;                  /* SETTINGS lists the folders, then "Other folder" */
-    ui_list folder_list;            /* over them */
+    ui_list settings_list;    /* SETTINGS' lines (ui_lib_setting) */
+    ui_lib_page page;         /* what SETTINGS lists */
+    ui_list folder_list;      /* UI_LIB_PAGE_FOLDERS: over folders, then "Other folder" */
+    const ui_lib_host *hosts; /* UI_LIB_PAGE_LOGINS: the caller's */
+    int host_count;
+    ui_list host_list;
     char folder[UI_LIB_FOLDER_MAX]; /* UI_LIB_FOLDER's, and the keyboard's for "Other folder" */
     const ui_lib_item *installed;   /* INSTALLED: the folders in install_dir */
     int installed_count;
@@ -134,6 +155,13 @@ void ui_library_set_installed(ui_library *lib, const ui_lib_item *items, int cou
 void ui_library_set_folders(ui_library *lib, const char *install_dir, const ui_lib_folder *folders,
                             int count);
 
+/* Gives Authentication its servers (the strings stay the caller's), keeping its place where it
+   can. Until then it lists archive.org alone. */
+void ui_library_set_hosts(ui_library *lib, const ui_lib_host *hosts, int count);
+
+/* The index in hosts of the server highlighted on the Authentication page. */
+int ui_library_host(const ui_library *lib);
+
 /* Says whether the archive.org account is logged in (SETTINGS). */
 void ui_library_set_account(ui_library *lib, bool logged_in);
 
@@ -158,9 +186,11 @@ int ui_library_rows(const ui_draw *d);
    In SETTINGS, Up and Down choose a line. A on the install folder lists the folders to choose
    from, the current one highlighted: A on one gives UI_LIB_FOLDER, A on "Other folder" opens
    the keyboard on the current folder and DONE gives UI_LIB_FOLDER; B goes back. A on
-   the account asks for the email, then the password (dots only), and DONE on a password gives
-   UI_LIB_LOGIN; B wipes it. Logged in, A asks before UI_LIB_LOGOUT. In a dialog or the
-   keyboard, their buttons. */
+   Authentication lists the servers. A on archive.org asks for the email, then the password
+   (dots only), and DONE on a password gives UI_LIB_LOGIN; B wipes it. Logged in, A asks before
+   UI_LIB_LOGOUT. A on another server with a login asks before UI_LIB_FORGET; without one, a
+   message says how logins are added. B goes back. In a dialog or the keyboard, their
+   buttons. */
 ui_lib_action ui_library_input(ui_library *lib, ui_button b, int rows);
 
 /* Draws the screen with the background at pan (ui_pan_x), and `status` (may be NULL) in the

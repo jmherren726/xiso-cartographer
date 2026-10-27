@@ -14,6 +14,7 @@
 
 #include "xcat/error.h"
 #include "xcat/hash.h"
+#include "xcat/url.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -107,6 +108,23 @@ const xc_map_entry *xc_map_find(const xc_map *map, uint32_t title_id, const char
 
 /* The entry generated with this name (§5.2), compared ASCII case-insensitively, or NULL. */
 const xc_map_entry *xc_map_find_name(const xc_map *map, const char *name);
+
+/* One server a map gets games or maps from: what a login is for (credentials.md §5). */
+typedef struct xc_map_host {
+    xc_url_scheme scheme;
+    uint16_t port; /* explicit, or the scheme's default */
+    bool is_ipv4;
+    char host[XC_URL_MAX_HOST + 1]; /* lowercased */
+    size_t entries;                 /* entries whose URL is on it */
+    size_t maps;                    /* maps included from it (§5.1) */
+} xc_map_host;
+
+/*
+ * The servers of the map's entries, then of the maps it included from URLs, each scheme, host
+ * and port once, in the order first seen. Stores up to `max` in out[] and returns how many it
+ * stored; servers past `max` are left out. A URL that doesn't parse (http.md §2) is left out.
+ */
+size_t xc_map_hosts(const xc_map *map, xc_map_host *out, size_t max);
 
 #ifdef __cplusplus
 }

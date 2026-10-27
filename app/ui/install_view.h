@@ -36,6 +36,7 @@ typedef enum ui_inst_action {
 
 typedef struct ui_install_view {
     const char *name; /* the game: any UTF-8, the caller's */
+    const char *dir;  /* the install folder it goes to, the caller's; NULL: E:\Games */
     ui_inst_phase phase;
     uint64_t done, total; /* bytes of the phase's whole; total 0: not known yet */
     uint32_t file, files; /* the file being worked on (1-based) of how many; files 0: unknown */
