@@ -39,10 +39,10 @@ A JSON object ([archiveorg.md §6](archiveorg.md#6-json-subset) applies), with t
 | Member | Meaning |
 |---|---|
 | `success` | `true` for a login. Anything else, or no `success` at all, means no login. |
-| `values.cookies.logged-in-user`, `values.cookies.logged-in-sig` | The session. A login **must** have both. Each is a string of **1–1024** cookie-octets ([RFC 6265 §4.1.1](https://www.rfc-editor.org/rfc/rfc6265#section-4.1.1): printable ASCII except space, `"`, `,`, `;` and `\`). |
+| `values.cookies.logged-in-user`, `values.cookies.logged-in-sig` | The session. A login **must** have both. Each is a string in Set-Cookie form: the value, optionally followed by `;` and attributes (`expires=…; path=/; domain=.archive.org`), which are ignored. The value is what comes before the first `;`, with spaces and tabs around it removed. It **must** be **1–1024** cookie-octets ([RFC 6265 §4.1.1](https://www.rfc-editor.org/rfc/rfc6265#section-4.1.1): printable ASCII except space, `"`, `,`, `;` and `\`), already percent-encoded where needed. It is kept as it is, never decoded. |
 | `values.reason`, else `error` | Why there was no login, when there wasn't. `account_not_found` and `account_bad_password` get their own messages. Any other reason is shown and logged as given: printable ASCII only, cut at the first other character and at **64** bytes. |
 
-- An answer that isn't JSON is rejected (`XC_ERR_CORRUPT`, "not a login answer"). So is a `success: true` without both cookies, or a cookie that isn't cookie-octets.
+- An answer that isn't JSON is rejected (`XC_ERR_CORRUPT`). So is a `success: true` without both cookies, or a cookie value that isn't cookie-octets. The log and the message then say which of these it was ("it isn't JSON", "a cookie has characters a cookie can't have", and so on), never a value.
 - The answer may hold other secrets, such as `values.s3`. They are never read or kept.
 
 ## 4. The section written
@@ -54,7 +54,7 @@ hosts = archive.org, *.archive.org
 cookie = logged-in-user=<logged-in-user>; logged-in-sig=<logged-in-sig>
 ```
 
-The values go in exactly as received. That is the form the `internetarchive` tooling sends them in, and the form [credentials.md §1](credentials.md#1-example) shows.
+The values (§3, without their attributes) go in exactly as received, still percent-encoded. That is the form a browser sends them in, and the form [credentials.md §1](credentials.md#1-example) shows.
 
 ## 5. Writing the credentials file
 

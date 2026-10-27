@@ -67,6 +67,20 @@ static void test_parse_ok(void)
     TEST_ASSERT_EQUAL_INT(XC_LOGIN_OK, r.outcome);
     TEST_ASSERT_EQUAL_STRING("someone@example.org", r.user);
     TEST_ASSERT_EQUAL_STRING("SIG%20123", r.sig);
+    TEST_ASSERT_NULL(r.problem);
+
+    /* The cookies in Set-Cookie form, as archive.org gives them: only the values are kept. */
+    TEST_ASSERT_EQUAL_INT(
+        XC_OK,
+        parse("{\"success\": true, \"values\": {\"cookies\": {\"logged-in-user\": "
+              "\"someone%40example.org; expires=Fri, 01-Jan-2027 00:00:00 GMT; Max-Age=31536000; "
+              "path=/; domain=.archive.org\", \"logged-in-sig\": \" 1700000000%201800000000%20"
+              "abc%2Bdef%3D ; expires=Fri, 01-Jan-2027 00:00:00 GMT; path=/; domain=.archive.org;"
+              " secure\"}}}",
+              &r));
+    TEST_ASSERT_EQUAL_INT(XC_LOGIN_OK, r.outcome);
+    TEST_ASSERT_EQUAL_STRING("someone%40example.org", r.user);
+    TEST_ASSERT_EQUAL_STRING("1700000000%201800000000%20abc%2Bdef%3D", r.sig);
 
     char sec[3 * XC_LOGIN_MAX_COOKIE];
     size_t len = 0;
@@ -74,8 +88,8 @@ static void test_parse_ok(void)
     TEST_ASSERT_EQUAL_STRING("[archive]\n"
                              "# Written by the on-box login. Log out in SETTINGS.\n"
                              "hosts = archive.org, *.archive.org\n"
-                             "cookie = logged-in-user=someone@example.org; "
-                             "logged-in-sig=SIG%20123\n",
+                             "cookie = logged-in-user=someone%40example.org; "
+                             "logged-in-sig=1700000000%201800000000%20abc%2Bdef%3D\n",
                              sec);
     TEST_ASSERT_EQUAL_size_t(strlen(sec), len);
 }
@@ -124,7 +138,9 @@ static void test_parse_rejects(void)
         "{\"success\": true}", /* no session */
         "{\"success\": true, \"values\": {\"cookies\": {\"logged-in-user\": \"u\"}}}",
         "{\"success\": true, \"values\": {\"cookies\": {\"logged-in-user\": \"u\", "
-        "\"logged-in-sig\": \"a;b\"}}}",
+        "\"logged-in-sig\": \" ; path=/\"}}}",
+        "{\"success\": true, \"values\": {\"cookies\": {\"logged-in-user\": \"u\", "
+        "\"logged-in-sig\": \"a\\\"b; path=/\"}}}",
         "{\"success\": true, \"values\": {\"cookies\": {\"logged-in-user\": \"u v\", "
         "\"logged-in-sig\": \"s\"}}}",
         "{\"success\": true, \"values\": {\"cookies\": {\"logged-in-user\": \"\", "
@@ -137,7 +153,17 @@ static void test_parse_rejects(void)
     for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
         TEST_ASSERT_EQUAL_INT_MESSAGE(XC_ERR_CORRUPT, parse(bad[i], &r), bad[i]);
         TEST_ASSERT_EQUAL_STRING("", r.sig);
+        TEST_ASSERT_NOT_NULL_MESSAGE(r.problem, bad[i]);
     }
+    TEST_ASSERT_EQUAL_INT(XC_ERR_CORRUPT, parse("<html>", &r));
+    TEST_ASSERT_EQUAL_STRING("it isn't JSON", r.problem);
+    TEST_ASSERT_EQUAL_INT(XC_ERR_CORRUPT, parse("{\"success\": true}", &r));
+    TEST_ASSERT_EQUAL_STRING("it says logged in, but without both cookies", r.problem);
+    TEST_ASSERT_EQUAL_INT(
+        XC_ERR_CORRUPT, parse("{\"success\": true, \"values\": {\"cookies\": {\"logged-in-user\": "
+                              "\"u v\", \"logged-in-sig\": \"s\"}}}",
+                              &r));
+    TEST_ASSERT_EQUAL_STRING("a cookie has characters a cookie can't have", r.problem);
     char *big = malloc(XC_LOGIN_MAX_RESPONSE + 1);
     TEST_ASSERT_NOT_NULL(big);
     memset(big, ' ', XC_LOGIN_MAX_RESPONSE + 1);

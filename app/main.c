@@ -663,7 +663,8 @@ static void login(ui_library *lib)
                        XC_LOGIN_MAX_RESPONSE, to_mem, &m);
     xc_login_wipe(login_body, sizeof login_body);
     xc_login_wipe(recv_buf, RECV_BUF_SIZE); /* the answer, with the session, came through it */
-    if (err == XC_OK) {
+    bool answered = err == XC_OK;
+    if (answered) {
         err = xc_login_parse(m.buf, m.len, &login_result);
     }
     if (m.buf != NULL) {
@@ -671,11 +672,21 @@ static void login(ui_library *lib)
         free(m.buf);
     }
     char msg[256];
-    if (err != XC_OK) {
+    if (err != XC_OK && !answered) {
         out("Login failed: %s (HTTP %d)\n", xc_err_str(err), client.last_status);
         (void)snprintf(msg, sizeof msg,
                        "The login didn't get through: %s. Check the network and try again.",
                        xc_err_str(err));
+        ui_library_tell(lib, "LOG IN", msg);
+        return;
+    }
+    if (err != XC_OK) {
+        /* login.md §3: the problem names no value, so it can be logged and shown */
+        out("Login failed: archive.org's answer can't be read: %s\n", login_result.problem);
+        (void)snprintf(msg, sizeof msg,
+                       "archive.org answered, but the answer can't be read (%s). Nothing was "
+                       "saved.",
+                       login_result.problem);
         ui_library_tell(lib, "LOG IN", msg);
         return;
     }

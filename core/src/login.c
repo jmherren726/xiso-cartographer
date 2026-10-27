@@ -132,8 +132,41 @@ typedef struct seen {
     int success; /* -1 missing, 0 false, 1 true */
     bool user;
     bool sig;
-    bool reason; /* values.reason, which wins over error */
+    bool reason;         /* values.reason, which wins over error */
+    const char *problem; /* why the answer isn't one, if a check below says so */
 } seen;
+
+/* §3: a cookie as the answer gives it, "value" or "value; path=/; domain=...": the value
+   before the first ';', without spaces around it, into out. */
+static xc_err take_cookie(const xc_json_tok *t, char *out, seen *s)
+{
+    char buf[XC_LOGIN_MAX_COOKIE + 512];
+    xc_err err =
+        t->type == XC_JSON_STRING ? xc_json_string(t, buf, sizeof buf, NULL) : XC_ERR_CORRUPT;
+    if (err != XC_OK) {
+        s->problem = err == XC_ERR_LIMIT ? "a cookie is too long" : "a cookie isn't text";
+        xc_login_wipe(buf, sizeof buf);
+        return XC_ERR_CORRUPT;
+    }
+    char *v = buf;
+    v[strcspn(v, ";")] = '\0';
+    while (*v == ' ' || *v == '\t') {
+        v++;
+    }
+    size_t n = strlen(v);
+    while (n > 0 && (v[n - 1] == ' ' || v[n - 1] == '\t')) {
+        v[--n] = '\0';
+    }
+    if (n > XC_LOGIN_MAX_COOKIE) {
+        s->problem = "a cookie is too long";
+    } else if (!cookie_ok(v)) {
+        s->problem = n == 0 ? "a cookie is empty" : "a cookie has characters a cookie can't have";
+    } else {
+        memcpy(out, v, n + 1);
+    }
+    xc_login_wipe(buf, sizeof buf);
+    return s->problem == NULL ? XC_OK : XC_ERR_CORRUPT;
+}
 
 /* values.cookies: the two cookies, everything else skipped. */
 static xc_err read_cookies(xc_json *j, xc_login_result *out, seen *s)
@@ -151,11 +184,9 @@ static xc_err read_cookies(xc_json *j, xc_login_result *out, seen *s)
             return err;
         }
         if (user || sig) {
-            char *buf = user ? out->user : out->sig;
-            if (t.type != XC_JSON_STRING ||
-                xc_json_string(&t, buf, XC_LOGIN_MAX_COOKIE + 1, NULL) != XC_OK ||
-                !cookie_ok(buf)) {
-                return XC_ERR_CORRUPT;
+            err = take_cookie(&t, user ? out->user : out->sig, s);
+            if (err != XC_OK) {
+                return err;
             }
             *(user ? &s->user : &s->sig) = true;
         } else {
@@ -204,6 +235,7 @@ static xc_err read_answer(xc_json *j, xc_login_result *out, seen *s)
         return err;
     }
     if (t.type != XC_JSON_OBJECT) {
+        s->problem = "it isn't a JSON object";
         return XC_ERR_CORRUPT;
     }
     for (;;) {
@@ -248,17 +280,20 @@ xc_err xc_login_parse(const char *data, size_t len, xc_login_result *out)
     }
     memset(out, 0, sizeof *out);
     if (len > XC_LOGIN_MAX_RESPONSE) {
+        out->problem = "it's too long";
         return XC_ERR_LIMIT;
     }
     xc_json j;
     xc_json_init(&j, data, len);
-    seen s = {-1, false, false, false};
+    seen s = {-1, false, false, false, NULL};
     xc_err err = read_answer(&j, out, &s);
     if (err == XC_OK && s.success == 1 && !(s.user && s.sig)) {
-        err = XC_ERR_CORRUPT; /* §3: logged in, but without a session */
+        s.problem = "it says logged in, but without both cookies"; /* §3 */
+        err = XC_ERR_CORRUPT;
     }
     if (err != XC_OK) {
         xc_login_wipe(out, sizeof *out);
+        out->problem = s.problem != NULL ? s.problem : "it isn't JSON";
         return err == XC_ERR_LIMIT ? XC_ERR_CORRUPT : err;
     }
     if (s.success == 1) {

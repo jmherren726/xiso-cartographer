@@ -46,11 +46,14 @@ typedef struct xc_login_result {
     char user[XC_LOGIN_MAX_COOKIE + 1]; /* the logged-in-user cookie's value */
     char sig[XC_LOGIN_MAX_COOKIE + 1];  /* the logged-in-sig cookie's value: a secret */
     char reason[XC_LOGIN_MAX_REASON + 1];
+    const char *problem; /* on XC_ERR_CORRUPT or XC_ERR_LIMIT: why, with no value in it */
 } xc_login_result;
 
-/* §3: reads the login API's answer. XC_ERR_CORRUPT if it isn't one (not JSON, or success
-   without both cookies, or a cookie that isn't cookie-octets), XC_ERR_LIMIT if it's longer
-   than XC_LOGIN_MAX_RESPONSE. The caller wipes `out` once the section is written. */
+/* §3: reads the login API's answer. A cookie may come as "value; path=/; ...": only the value
+   is kept. XC_ERR_CORRUPT if it isn't an answer (not JSON, or success without both cookies,
+   or a cookie value that isn't cookie-octets), XC_ERR_LIMIT if it's longer than
+   XC_LOGIN_MAX_RESPONSE; `problem` says which, for the log. The caller wipes `out` once the
+   section is written. */
 xc_err xc_login_parse(const char *data, size_t len, xc_login_result *out);
 
 /* §4: the [archive] section for a successful login, into out[0, cap) with a NUL. */

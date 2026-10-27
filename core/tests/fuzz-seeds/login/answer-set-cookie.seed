@@ -1,0 +1,1 @@
+a{"success": true, "values": {"cookies": {"logged-in-user": "someone%40example.org; expires=Fri, 01-Jan-2027 00:00:00 GMT; Max-Age=31536000; path=/; domain=.archive.org", "logged-in-sig": "1700000000%201800000000%20PLACEHOLDER%3D; expires=Fri, 01-Jan-2027 00:00:00 GMT; path=/; domain=.archive.org; secure"}}}
