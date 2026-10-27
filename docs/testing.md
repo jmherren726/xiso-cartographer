@@ -319,6 +319,18 @@ Logging in to archive.org on the Xbox ([login.md](formats/login.md), [ADR 0010](
 | 6 | Hardware, internet | Install an item that needs the login | It installs (M8 exit test: "a login-required item installs") |
 | 7 | Hardware | Leave for the dashboard and launch the app again | SETTINGS still says LOGGED IN |
 
+## M8: log in again
+
+An expired or revoked session asks for a new login, then the install carries on ([login.md §7](formats/login.md#7-logging-in-again), ADR 0010 decision 4). archive.org sessions last a long time, so the test spoils the saved session instead of waiting: to archive.org, a wrong signature looks the same as an expired or revoked one. Start logged in (M8: on-box login).
+
+| Step | Where | How | Pass |
+|---|---|---|---|
+| 1 | Hardware, internet | Install an item that needs the login, and STOP it part way (B, STOP, BACK). Leave for the dashboard | The folder is UNFINISHED |
+| 2 | Hardware | Over FTP, keep a copy of `E:\Apps\xcat\credentials`, then change a few characters in the middle of the `logged-in-sig=` value (keep the same kinds of characters: letters for letters, digits for digits) | — |
+| 3 | Hardware, internet | Launch the app; install the same item | NOT INSTALLED: "Access denied by the server", "The login for [archive] is missing or expired", "Log in again, and the install carries on where it stopped", with **LOG IN** and BACK. The log has the same, and the HTTP status. Nothing was retried. (If the dialog says something else, such as RETRY with another error, write down the log lines: archive.org answered a bad session differently from 401/403) |
+| 4 | Hardware | LOG IN; B on the email keyboard | Back in the library, nothing installs. Installing the item again gives the same LOG IN dialog |
+| 5 | Hardware, internet | LOG IN; the email; Start; the password; Start | "Logging in to archive.org...", then the install screen for the same item at once, carrying on from where step 1 stopped (the log says files were kept or continued from a checkpoint). It installs and verifies. `credentials` has the new `[archive]` section; the password and email aren't in it or in the log |
+
 ## FATX probe (M2)
 
 No authoritative list of FATX naming rules exists, and a game's files can't be renamed on install, because the game opens them by name. So the rules in `core/src/fatx.c` ([fatx-names.md](formats/fatx-names.md)) come from the console's own kernel, measured by `app/fatx-probe`.

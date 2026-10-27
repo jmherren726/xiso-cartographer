@@ -637,8 +637,9 @@ static char login_section[2 * XC_LOGIN_MAX_COOKIE + 256];
 
 /* The email and password typed in SETTINGS: one POST over HTTPS, then the session into the
    credentials file. The password is wiped as soon as the body is made, and the body once
-   it's sent; neither is logged. */
-static void login(ui_library *lib)
+   it's sent; neither is logged. True if logged in; with `resuming` (an install waits for the
+   login) there's no LOGGED IN message. */
+static bool login(ui_library *lib, bool resuming)
 {
     size_t body_len = 0;
     xc_err err = xc_login_body(lib->email, lib->password, login_body, sizeof login_body, &body_len);
@@ -648,7 +649,7 @@ static void login(ui_library *lib)
         ui_library_tell(lib, "LOG IN",
                         "The email or the password is too long, or has a character it can't "
                         "have.");
-        return;
+        return false;
     }
     out("Logging in to archive.org\n");
     if (!network() || !https_ready()) {
@@ -656,7 +657,7 @@ static void login(ui_library *lib)
         ui_library_tell(lib, "LOG IN",
                         "No network, or HTTPS couldn't start. The reason is in "
                         "E:\\xcat\\install.log.");
-        return;
+        return false;
     }
     mem_ctx m = {NULL, 0, 0};
     err = xc_http_post(&client, XC_LOGIN_URL, XC_LOGIN_CONTENT_TYPE, login_body, body_len,
@@ -678,7 +679,7 @@ static void login(ui_library *lib)
                        "The login didn't get through: %s. Check the network and try again.",
                        xc_err_str(err));
         ui_library_tell(lib, "LOG IN", msg);
-        return;
+        return false;
     }
     if (err != XC_OK) {
         /* login.md §3: the problem names no value, so it can be logged and shown */
@@ -688,7 +689,7 @@ static void login(ui_library *lib)
                        "saved.",
                        login_result.problem);
         ui_library_tell(lib, "LOG IN", msg);
-        return;
+        return false;
     }
     if (login_result.outcome != XC_LOGIN_OK) {
         out("Login refused: %s\n",
@@ -703,7 +704,7 @@ static void login(ui_library *lib)
                                                           : "no reason given");
         }
         ui_library_tell(lib, "LOG IN", msg);
-        return;
+        return false;
     }
     err = xc_login_section(&login_result, login_section, sizeof login_section, NULL);
     xc_login_wipe(&login_result, sizeof login_result);
@@ -711,14 +712,17 @@ static void login(ui_library *lib)
     xc_login_wipe(login_section, sizeof login_section);
     if (!ok) {
         ui_library_tell(lib, "LOG IN", err == XC_OK ? msg : "The session can't be saved.");
-        return;
+        return false;
     }
     out("Logged in to archive.org: [%s] written to %s\n", XC_LOGIN_SECTION, CRED_FILE);
     reload_credentials();
     ui_library_set_account(lib, logged_in());
-    ui_library_tell(lib, "LOGGED IN",
-                    "You're logged in to archive.org. The session is saved in "
-                    "E:\\Apps\\xcat\\credentials; the password isn't.");
+    if (!resuming) { /* else the install it was for carries on at once */
+        ui_library_tell(lib, "LOGGED IN",
+                        "You're logged in to archive.org. The session is saved in "
+                        "E:\\Apps\\xcat\\credentials; the password isn't.");
+    }
+    return true;
 }
 
 static void logout(ui_library *lib)
@@ -967,6 +971,7 @@ static void check_catalog_title(size_t release, uint32_t title_id)
 /* What the last install attempt came to, for the install screen's closing dialog. */
 static char why[400];
 static xc_err why_err; /* XC_OK if it installed */
+static bool why_login; /* it was refused a login that logging in again can fix (refused()) */
 
 /* Adds a sentence to `why`. */
 __attribute__((format(printf, 1, 2))) static void explain(const char *fmt, ...)
@@ -987,6 +992,7 @@ static void fail(xc_err err)
 {
     out("  NOT INSTALLED: %s\n", xc_err_str(err));
     why_err = err;
+    why_login = false;
     why[0] = '\0';
     if (err == XC_ERR_CANCELLED) {
         explain("Stopped. What's written is kept: install the game again to carry on from "
@@ -1006,6 +1012,34 @@ __attribute__((format(printf, 1, 2))) static void detail(const char *fmt, ...)
     va_end(ap);
     out("   %s\n", line);
     explain("%s.", line);
+}
+
+static bool archive_host(const char *host)
+{
+    size_t n = strlen(host);
+    return strcmp(host, "archive.org") == 0 ||
+           (n > 12 && strcmp(host + n - 12, ".archive.org") == 0);
+}
+
+/* After a 401/403 (ADR 0010 decision 4): whose login was refused, in `why`, and whether
+   logging in to archive.org again can help, which sets why_login. Nothing is retried. */
+static void refused(void)
+{
+    const xc_cred_section *ia = have_creds ? xc_cred_section_named(&creds, XC_LOGIN_SECTION) : NULL;
+    if (client.last_section != NULL) {
+        detail("The login for [%s] is missing or expired", client.last_section);
+        why_login = ia != NULL && client.last_section == ia->name;
+    } else if (ia == NULL && archive_host(res.effective.host)) {
+        detail("You aren't logged in to archive.org");
+        why_login = true;
+    } else if (!have_creds) {
+        detail("No login was sent: no credentials were loaded from %s", CRED_FILE);
+    } else {
+        detail("HTTP %d", client.last_status);
+    }
+    if (why_login) {
+        explain("Log in again, and the install carries on where it stopped.");
+    }
 }
 
 /* Installs one image; true if it ended installed and verified. `listing` is the map entry
@@ -1123,12 +1157,10 @@ static bool install(const xc_source *src, const char *name, const char *etag,
         detail("It needs %s; %s is free", need, free_now);
     } else if (err == XC_ERR_VERIFY) {
         detail("%s was removed; install again to rewrite it", result.bad_file);
-    } else if (err == XC_ERR_HTTP_DENIED && client.last_section != NULL) {
-        detail("The login for [%s] is missing or expired", client.last_section);
-    } else if (err == XC_ERR_HTTP_DENIED && !have_creds) {
-        detail("No login was sent: no credentials were loaded from %s", CRED_FILE);
-    } else if (client.last_status != 0 && (err == XC_ERR_HTTP_STATUS || err == XC_ERR_HTTP_DENIED ||
-                                           err == XC_ERR_HTTP_NOT_FOUND)) {
+    } else if (err == XC_ERR_HTTP_DENIED) {
+        refused();
+    } else if (client.last_status != 0 &&
+               (err == XC_ERR_HTTP_STATUS || err == XC_ERR_HTTP_NOT_FOUND)) {
         detail("HTTP %d", client.last_status);
     }
     if (result.files_written + result.files_skipped > 0) {
@@ -1166,7 +1198,9 @@ static bool install_url(const xc_map_entry *e, size_t release)
     }
     if (err != XC_OK) {
         fail(err);
-        if (client.last_status != 0) {
+        if (err == XC_ERR_HTTP_DENIED) {
+            refused();
+        } else if (client.last_status != 0) {
             detail("HTTP %d", client.last_status);
         }
         return false;
@@ -1525,8 +1559,10 @@ static void mark_games(game *games, ui_lib_item *items, int count)
 }
 
 /* Installs g on the install screen until it's installed, or the user goes back: RETRY tries
-   again. Leaves what the last attempt came to in `item`. */
-static void run_install(game *g, ui_lib_item *item)
+   again. Leaves what the last attempt came to in `item`. True if the server refused the
+   login and the user chose LOG IN (ADR 0010 decision 4): the caller logs in, then installs g
+   again, which carries on where it stopped. */
+static bool run_install(game *g, ui_lib_item *item)
 {
     for (;;) {
         out("\nPicked: %s%s%s\n", g->name, g->key[0] != '\0' ? " " : "", g->key);
@@ -1541,7 +1577,11 @@ static void run_install(game *g, ui_lib_item *item)
                                                     : UI_LIB_FAILED;
         item->note = g->note;
         ui_install_status(&view, "%s", "");
-        ui_install_end(&view, ok, why);
+        if (!ok && why_login) {
+            ui_install_end_login(&view, why);
+        } else {
+            ui_install_end(&view, ok, why);
+        }
         ui_inst_action a = UI_INST_NONE;
         bool dirty = true;
         while (a == UI_INST_NONE) {
@@ -1563,9 +1603,27 @@ static void run_install(game *g, ui_lib_item *item)
             }
         }
         if (a != UI_INST_RETRY) {
-            return;
+            return a == UI_INST_LOGIN;
         }
     }
+}
+
+/* Installs games[i] from the library, then marks the library with how it went. True if it
+   waits for a login (run_install). */
+static bool install_game(ui_library *lib, game *games, ui_lib_item *items, int i, char *status,
+                         size_t size)
+{
+    game *g = &games[i];
+    bool login_wanted = run_install(g, &items[i]);
+    scan_games();
+    ui_library_set_installed(lib, found_items, found_count);
+    ui_lib_state st = items[i].state;
+    snprintf(status, size, "%s: %s", g->name,
+             login_wanted             ? "log in, and it carries on"
+             : st == UI_LIB_INSTALLED ? "installed"
+             : st == UI_LIB_STOPPED   ? "stopped; install it again to carry on"
+                                      : "not installed");
+    return login_wanted;
 }
 
 /* The library screen, until the user leaves for the dashboard. */
@@ -1586,6 +1644,7 @@ static void library(game *games, ui_lib_item *items, int count)
     snprintf(status, sizeof status, "%s",
              "Pick a game and press A. Nothing installs until you say so.");
     bool dirty = true;
+    int resume = -1; /* the game whose install waits for a login, or -1 */
     for (;;) {
         if (exit_combo()) {
             to_dashboard();
@@ -1594,27 +1653,30 @@ static void library(game *games, ui_lib_item *items, int count)
         while ((b = ui_sdl_button()) != UI_BTN_NONE) {
             dirty = true;
             ui_lib_action a = ui_library_input(&lib, b, rows);
+            int install_now = -1;
             if (a == UI_LIB_EXIT) {
                 to_dashboard();
             } else if (a == UI_LIB_INSTALL) {
-                int i = ui_library_game(&lib);
-                game *g = &games[i];
-                run_install(g, &items[i]);
-                scan_games();
-                ui_library_set_installed(&lib, found_items, found_count);
-                ui_lib_state st = items[i].state;
-                snprintf(status, sizeof status, "%s: %s", g->name,
-                         st == UI_LIB_INSTALLED ? "installed"
-                         : st == UI_LIB_STOPPED ? "stopped; install it again to carry on"
-                                                : "not installed");
+                install_now = ui_library_game(&lib);
             } else if (a == UI_LIB_LOGIN) {
                 /* Say so first: starting HTTPS and logging in take a few seconds. */
                 ui_sdl_begin(ui_col_bg);
                 ui_library_draw(&screen, &lib, pan_now, "Logging in to archive.org...");
                 ui_sdl_present();
-                login(&lib);
+                if (login(&lib, resume >= 0) && resume >= 0) {
+                    out("Carrying on with the install that waited for the login\n");
+                    install_now = resume;
+                }
+                resume = -1;
             } else if (a == UI_LIB_LOGOUT) {
                 logout(&lib);
+            } else if (resume >= 0 && lib.typing_for == UI_LIB_TYPING_NONE) {
+                resume = -1; /* the keyboard was cancelled: nothing carries on */
+            }
+            if (install_now >= 0 &&
+                install_game(&lib, games, items, install_now, status, sizeof status)) {
+                resume = install_now;
+                ui_library_login(&lib);
             }
         }
         int pan = ui_pan_x(SDL_GetTicks(), range);

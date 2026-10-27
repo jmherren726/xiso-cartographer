@@ -31,6 +31,7 @@ typedef enum ui_inst_action {
     UI_INST_STOP,  /* the user said to stop the install */
     UI_INST_RETRY, /* after a failure: try again */
     UI_INST_DONE,  /* after the end: back to the library */
+    UI_INST_LOGIN, /* after a refused login: log in again, then carry on (ADR 0010) */
 } ui_inst_action;
 
 typedef struct ui_install_view {
@@ -42,6 +43,7 @@ typedef struct ui_install_view {
     char status[160];     /* under the details: retries, the server's steps; may be "" */
     bool stopping;        /* the "stop?" dialog is open */
     bool ended;           /* the result dialog is open */
+    bool login;           /* ... and offers LOG IN instead of RETRY */
     bool backdrop;        /* the screen behind the dialog is saved (ui_backdrop_save) */
     ui_dialog dialog;
     char message[320]; /* the dialog's */
@@ -60,6 +62,10 @@ void ui_install_status(ui_install_view *v, const char *fmt, ...)
 /* Ends the install: a dialog titled INSTALLED or NOT INSTALLED with `message` (copied), and
    OK, or RETRY and BACK. */
 void ui_install_end(ui_install_view *v, bool ok, const char *message);
+
+/* Ends a failed install whose server refused the login: NOT INSTALLED with `message` (copied),
+   and LOG IN and BACK. LOG IN returns UI_INST_LOGIN. */
+void ui_install_end_login(ui_install_view *v, const char *message);
 
 /* One button press: while installing, B opens the "stop?" dialog, which returns UI_INST_STOP
    if the user confirms; after the end, the result dialog's choice. */

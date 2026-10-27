@@ -95,6 +95,20 @@ static void test_end(void)
     /* While it shows, B doesn't ask to stop. */
     (void)ui_install_input(&v, UI_BTN_B);
     TEST_ASSERT_FALSE(v.stopping);
+
+    /* A refused login: LOG IN instead of RETRY, and B still goes back. */
+    ui_install_end_login(&v, "The login for [archive] is missing or expired.");
+    TEST_ASSERT_EQUAL_STRING("NOT INSTALLED", v.dialog.title);
+    TEST_ASSERT_EQUAL_STRING("LOG IN", v.dialog.choices[0]);
+    TEST_ASSERT_EQUAL_STRING("BACK", v.dialog.choices[1]);
+    TEST_ASSERT_EQUAL_INT(UI_INST_LOGIN, ui_install_input(&v, UI_BTN_A));
+    TEST_ASSERT_EQUAL_INT(UI_INST_DONE, ui_install_input(&v, UI_BTN_B));
+    fake_reset();
+    ui_install_draw(&fake_draw, &v, 0);
+    TEST_ASSERT_TRUE(fake_find_text("LOG IN") >= 0);
+    /* The next ending is an ordinary one again. */
+    ui_install_end(&v, false, "No space left on the hard disk.");
+    TEST_ASSERT_EQUAL_INT(UI_INST_RETRY, ui_install_input(&v, UI_BTN_A));
 }
 
 static void test_draw(void)

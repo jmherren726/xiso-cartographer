@@ -190,6 +190,12 @@ static void open_kbd(ui_library *lib, ui_lib_typing what)
     lib->backdrop = false;
 }
 
+void ui_library_login(ui_library *lib)
+{
+    lib->asking = UI_LIB_NONE;
+    open_kbd(lib, UI_LIB_TYPING_EMAIL);
+}
+
 /* The keyboard closed with DONE or B, or is still open. */
 static ui_lib_action typed(ui_library *lib, ui_kbd_result r, int rows)
 {
