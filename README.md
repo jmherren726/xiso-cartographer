@@ -6,22 +6,21 @@ Homebrew game catalog and installer for the modded original Xbox. Browse the ful
 
 ## Status
 
-**Pre-alpha, installing real games on hardware.** The install engine is done and has been tested on a real console. The catalog UI isn't built yet: for now the app shows a plain text list. Milestones M0–M7 are met. What works on the Xbox today:
+**Beta: [0.9.0](https://github.com/jmherren726/xiso-cartographer/releases), the first release.** The installer and its screens are done and have been tested in xemu and on a real console. The beta's last tests on hardware (other console revisions, hard disks, 64/128 MB and dashboards, and a login on a console that has never had one) are under way ([roadmap](docs/HANDOFF.md#41-roadmap), M9). Bug reports are welcome in [issues](https://github.com/jmherren726/xiso-cartographer/issues).
 
-- **Installs from your map, over HTTP or HTTPS:** TLS 1.2 with certificate checks against built-in roots, the clock set from NTP, and archive.org logins from a [credentials file](docs/formats/credentials.md). Files are stream-extracted straight into `E:\Games\<title>` (or a folder on F: or G: chosen in SETTINGS), with no temporary copy, so full-disc images of 7+ GB install too.
-- **Images and zips:** trimmed xisos, full-disc `.iso` dumps, and `.zip` files holding one image, stored or Deflate (including Zip64). Deflate zips are decompressed as they download.
-- **Resumable and verified:** a pulled cable is retried, and a power cut resumes where it stopped, even in the middle of a Deflate zip. Every file is read back and checked against its CRC-32, and trimmed xisos against their MD5 and SHA-1.
-- **archive.org items:** `@archiveorg <item>` in the map lists every game the item holds, with the size and hashes it publishes.
-- **You choose:** the map is a catalog. The app lists it, and installs only the game you pick with A.
+## What it does
 
-The game catalog (M7) is built: about 1,070 games and 2,200 releases from Wikidata and Redump, text only, which the app uses to name the games it lists. The first screens (M8) are in: a library to pick games from and an install screen with progress. Not there yet: search, settings and logging in on the console (M8). See the [roadmap](docs/HANDOFF.md#41-roadmap) for the milestones, [docs/testing.md](docs/testing.md#results-log) for what was tested on hardware, and [CHANGELOG.md](CHANGELOG.md) for what has landed. To try it, see [What the app does](docs/build-xbox.md#what-the-app-does).
+- **Runs on a soft- or hard-modded Xbox**, started from a dashboard such as XBMC4Gamers or UnleashX. The XBE carries the app's logo for dashboards to show.
+- **Lists your games with names and details.** You write a **map** that says where your disc images are: an archive.org item you have access to, a plain HTTP(S) server on your LAN, or images already on the hard disk. A built-in catalog of about 1,070 games and 2,200 releases (from Wikidata and Redump, text only) names them and shows their year, region, maker and genres. Search by name, year, region, maker or origin on the on-screen keyboard.
+- **You choose:** the map is a catalog. Nothing installs until you pick a game and press A.
+- **Installs on the console, no PC:** files are stream-extracted straight into `E:\Games\<title>` (or a folder on F: or G:, chosen in SETTINGS), with no temporary copy, so full-disc images of 7+ GB install too. Trimmed xisos, full-disc `.iso` dumps, and `.zip` files holding one image (stored or Deflate, Zip64) all work.
+- **HTTPS and archive.org logins:** TLS 1.2 with certificate checks against built-in roots, the clock set from NTP. Log in to archive.org on the Xbox with the on-screen keyboard: only the session is saved, never the password. `@archiveorg <item>` in the map lists every game the item holds, with its published size and hashes.
+- **Resumable and verified:** a pulled cable is retried, a power cut resumes where it stopped, and every file is read back and checked against its CRC-32 (and trimmed xisos against their MD5 and SHA-1).
+- **Clear messages:** every error says what went wrong and what to do, with RETRY, or LOG IN when a session has expired.
 
-## What it will do
+## Installing
 
-- Run on a soft- or hard-modded Xbox (64 or 128 MB), launched from common dashboards such as XBMC4Gamers or UnleashX.
-- Show a catalog of original Xbox titles (title, region, genre, description, cover art, size) built from openly licensed metadata.
-- Read a **map** that you write, which says where each of your disc images lives: an archive.org item you have access to, or a plain HTTP server on your LAN.
-- Download a disc image (a trimmed xiso, a full-disc `.iso` dump, or a `.zip` holding one) and **stream-extract** it straight into `<drive>:\Games\`, with no temporary copy and no PC. Installs are resumable and verified by hash when the source provides one.
+Download `xiso-cartographer-X.Y.Z.zip` and `catalog.bin` from the [latest release](https://github.com/jmherren726/xiso-cartographer/releases/latest). Copy what's in the zip's `xiso-cartographer` folder to `E:\Apps\xcat\` on the console, put `catalog.bin` in the same folder, and start `default.xbe` from your dashboard. The zip's `README.txt` has the details; [What the app does](docs/build-xbox.md#what-the-app-does) explains each screen and file. Check the download against its `.sha256` file.
 
 ## Legal stance
 
