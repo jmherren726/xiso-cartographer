@@ -332,7 +332,9 @@ def build(inputs: Inputs, overrides: dict, report: Report) -> tuple[bytes, dict]
 
 
 def credits(info: dict) -> str:
-    return f"""xiso-cartographer catalog: sources and credits
+    return f"""xiso-cartographer: credits
+
+CATALOG
 Snapshot: {info['snapshot']}
 
 Game data (titles, developers, publishers, genres, years) comes from Wikidata
@@ -344,6 +346,15 @@ original discs. Only these facts are used; Redump's database isn't redistributed
 
 The catalog's own content (joins and corrections) is released under CC0 1.0.
 Details: tools/catalog/SOURCES.md in the xiso-cartographer repository.
+
+SOFTWARE
+The app draws its text with FreeType 2.4.12, built into nxdk's SDL_ttf, under the
+FreeType License (FTL):
+Portions of this software are copyright (C) 1996-2013 The FreeType Project
+(www.freetype.org). All rights reserved.
+
+Every other component in the release, and its licence, is listed in THIRD_PARTY.md
+in the xiso-cartographer repository.
 """
 
 

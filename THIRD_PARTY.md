@@ -25,7 +25,7 @@ nxdk brings its own submodules. Licences per nxdk's README and `LICENSES/` folde
 | lwIP (network stack) | Modified BSD | Yes (from M3) |
 | SDL2 | zlib | Yes: the controller (from M4) and the UI (from M8, [ADR 0015](docs/adr/0015-ui-sdl2-own-widgets.md)) |
 | SDL_ttf | zlib | Yes, from M8 (ADR 0015) |
-| FreeType 2.4.12 (inside SDL_ttf) | FreeType License (FTL), credit required in the documentation | Yes, from M8; loads only the bundled font (ADR 0015) |
+| FreeType 2.4.12 (inside SDL_ttf) | FreeType License (FTL), credit required in the documentation: given in the release's `CREDITS.txt` ([tools/catalog/build.py](tools/catalog/build.py)) | Yes, from M8; loads only the bundled font (ADR 0015) |
 | SDL2_image | zlib | Only if used |
 | libpng, libjpeg-turbo, zlib | libpng / IJG + BSD / zlib | Only if used |
 | libc++ | Apache-2.0 WITH LLVM-exception / NCSA | Only for C++ builds |

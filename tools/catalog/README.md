@@ -1,6 +1,6 @@
 # Catalog pipeline
 
-Builds `catalog.bin` ([catalog.md](../../docs/formats/catalog.md)) and `CREDITS.txt` from Wikidata and Redump ([ADR 0014](../../docs/adr/0014-catalog-sources-and-format.md), [SOURCES.md](SOURCES.md)). Python 3.11 or newer, standard library only.
+Builds `catalog.bin` ([catalog.md](../../docs/formats/catalog.md)) and `CREDITS.txt` from Wikidata and Redump ([ADR 0014](../../docs/adr/0014-catalog-sources-and-format.md), [SOURCES.md](SOURCES.md)). `CREDITS.txt` is the release's credits file: it also carries the FreeType credit the app's text needs ([ADR 0015](../../docs/adr/0015-ui-sdl2-own-widgets.md#consequences)). Python 3.11 or newer, standard library only.
 
 | File | Does |
 |---|---|
