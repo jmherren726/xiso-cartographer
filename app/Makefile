@@ -58,8 +58,9 @@ SRCS += $(ROOT_DIR)/app/ui/script.c $(ROOT_DIR)/app/ui/startup_view.c
 
 NXDK_DIR ?= $(ROOT_DIR)/third_party/nxdk
 
-# The walkthrough's disc (below) goes with `make clean` too; set before nxdk's Makefile reads it.
-CLEANRULES += clean-walkthrough
+# The walkthrough's disc and the title image's stamp (below) go with `make clean` too; set
+# before nxdk's Makefile reads it.
+CLEANRULES += clean-walkthrough clean-title-image
 
 # TCP tuning shared by every XBE (lwIP options).
 include $(ROOT_DIR)/app/lwip.mk
@@ -80,6 +81,26 @@ $(SAMPLE_ISO): $(ROOT_DIR)/tools/fixtures/fixtures.py $(ROOT_DIR)/tools/fixtures
 
 all: $(SAMPLE_ISO)
 $(GEN_XISO): $(SAMPLE_ISO)
+
+# The XBE's title image, which dashboards show (docs/formats/xbe-title-image.md): cxbe can't add
+# one, so tools/ui/xbe_title_image.py puts app/assets/title-image.png into default.xbe after cxbe
+# made it. The stamp says this default.xbe has it; a new image or tool makes cxbe run again
+# first, since the tool refuses an XBE that already has one.
+TITLE_IMAGE = $(ROOT_DIR)/app/assets/title-image.png
+TITLE_TOOL = $(ROOT_DIR)/tools/ui/xbe_title_image.py $(ROOT_DIR)/tools/ui/png2bmp.py
+TITLE_STAMP = $(CURDIR)/title-image.stamp
+$(OUTPUT_DIR)/default.xbe: $(TITLE_IMAGE) $(TITLE_TOOL)
+$(TITLE_STAMP): $(OUTPUT_DIR)/default.xbe
+	@echo "[ TITLE    ] $(TITLE_IMAGE) into default.xbe"
+	$(VE)python3 -I $(ROOT_DIR)/tools/ui/xbe_title_image.py $(OUTPUT_DIR)/default.xbe $(TITLE_IMAGE)
+	@touch $@
+
+all: $(TITLE_STAMP)
+$(GEN_XISO): $(TITLE_STAMP)
+
+.PHONY: clean-title-image
+clean-title-image:
+	$(VE)rm -f $(TITLE_STAMP)
 
 # The M8 exit test's scripted walkthrough (docs/testing.md): the same disc with
 # tools/ui/walkthrough.txt next to the XBE as ui-script.txt, which the app plays

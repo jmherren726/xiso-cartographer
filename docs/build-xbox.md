@@ -46,7 +46,7 @@ The first image build compiles nxdk's tools and libraries. Docker caches it afte
 
 | File | Use |
 |---|---|
-| `app/bin/default.xbe` | The program. Copy all of `app/bin/` to the console: the XBE needs `fonts\` and `ui\` next to it. |
+| `app/bin/default.xbe` | The program. Copy all of `app/bin/` to the console: the XBE needs `fonts\` and `ui\` next to it. It carries the app's logo as its title image, which dashboards show ([xbe-title-image.md](formats/xbe-title-image.md)). |
 | `app/bin/samples/small.iso` | Bundled synthetic test image (the `small` fixture: dummy data, never a game). The app installs it when `E:\xcat\isos\` is empty. |
 | `app/xiso-cartographer.iso` | Disc image containing `app/bin/` (the XBE, `fonts\`, `ui\` and `samples\`). Boots directly in xemu. |
 | `app/xiso-cartographer-walkthrough.iso` | The same disc with [`tools/ui/walkthrough.txt`](../tools/ui/walkthrough.txt) next to the XBE as `ui-script.txt`: the app plays it, the M8 exit test's scripted walkthrough ([ui-script.md](formats/ui-script.md), [testing.md](testing.md#m8-scripted-walkthrough)). For testing only; never shipped. |
@@ -55,6 +55,8 @@ The first image build compiles nxdk's tools and libraries. Docker caches it afte
 | `app/ui-test/bin/` (`default.xbe`, `fonts\` and `ui\`), `app/ui-test/xcat-ui-test.iso` | The UI test (M8): one screen in the UI's look ([ui-style.md](ui-style.md)), with the panning background, the bundled fonts, the text helpers and the widgets (list, progress bar, a dialog on A, the on-screen keyboard on Y and, as a password field, on X), drawn through SDL; shows the time to draw a frame and frames per second. Copy the whole `bin\` folder: the XBE needs `fonts\` and `ui\` next to it. See [testing.md](testing.md#m8-ui-test-rendering). |
 
 XBEs with a UI include [`app/ui/ui.mk`](../app/ui/ui.mk) and [`app/ui/ui-assets.mk`](../app/ui/ui-assets.mk) ([ADR 0015](adr/0015-ui-sdl2-own-widgets.md)): the UI sources, nxdk's SDL2 and SDL_ttf, Noto Sans from [`third_party/fonts/`](../third_party/fonts/README.md), checked against its `SHA256SUMS` and copied to `bin/fonts/` (the build stops if a font file doesn't match), and the images from [`app/ui/assets/`](../app/ui/assets/README.md), converted from PNG to BMP in `bin/ui/` by `tools/ui/png2bmp.py` (needs `python3`, which the image has).
+
+The app's XBE gets its title image after `cxbe` makes it: `tools/ui/xbe_title_image.py` turns [`app/assets/title-image.png`](../app/assets/README.md) into a 128 × 128 DXT1 texture and adds it as the section `$$XTIMAGE` ([xbe-title-image.md](formats/xbe-title-image.md)), since `cxbe` can't. It needs `python3`, which the image has. A dashboard may keep the image it saw before (UnleashX and XBMC cache them), so a new one can take a cache reset to show.
 
 XBEs with HTTPS include [`app/tls.mk`](../app/tls.mk): BearSSL, `core/src/tls.c`, `core/src/sntp.c`, `core/src/hash.c`, the CA bundle (embedded at build time, so the build needs `python3`, which the image has) and `platform/nxdk/src/nx_tls.c`. nxdk compiles without optimisation by default; `tls.mk` builds BearSSL and `tls.c` with `-O2`, since unoptimised crypto would understate the TLS speed several times over. BearSSL's object files land in its submodule folder, which git is told to ignore (`ignore = untracked` in `.gitmodules`).
 

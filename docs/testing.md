@@ -27,6 +27,7 @@ Newest first. "Build" is the commit or CI artifact tested.
 
 | Date | Milestone | Build | Where | Result | Notes |
 |---|---|---|---|---|---|
+| 2026-10-28 | M9 title image | branch `feat/title-image` | PC; xemu, no map, run by the agent | ✅ PC, xemu; dashboard ⏳ | `xbe_title_image.py` added `$$XTIMAGE` to the app's `default.xbe` (headers 0x5F9 → 0x75A bytes, 5 → 6 sections, 10,240 bytes at the end). pyxbe, an independent reader, listed the section and decoded a 128 × 128 DXT1 image that matches the logo. The walkthrough disc with this XBE booted in xemu and passed ("Script passed: 63 commands, 19 screens checked"). Not yet seen in a dashboard: step 1 of "M9: title image". |
 | 2026-10-28 | M9 dim highlight in xemu | branch `feat/dim-unfocused-highlight` | xemu, no map, run by the agent | ✅ xemu | A scratch UI script (not committed) pressed Left: GAMES had the bright border, and the games list's highlighted line ("small") was drawn dim, its text in `dim`. |
 | 2026-10-28 | M8 startup screen in xemu | branch `feat/startup-screen` | xemu, no map, run by the agent | ✅ xemu | No debug console text at startup: the screen is black while the screens open (fonts and images), then the library. Startup with no map takes too little time to see, so a scratch build (not committed) waited 4 s, then stopped: the STARTING screen showed the version and the startup lines, newest bright, with the dashboard shortcut in the footer; then STOPPED, CAN'T GO ON with the reason above them. The walkthrough disc of this build still passed ("Script passed: 63 commands, 19 screens checked"). |
 | 2026-10-28 | M8 scripted walkthrough in xemu | branch `feat/ui-script` | xemu, no map (the bundled test image), run by the agent | ✅ xemu | Step 1 of "M8: scripted walkthrough": `app/xiso-cartographer-walkthrough.iso` played the whole walkthrough untouched in about 25 s and ended with "Script passed: 63 commands, 19 screens checked" (read from the guest's framebuffer over QMP). On the way: the search keyboard typing `sma…`, the test image installed, DOWNLOADS, the LEAVE question and SETTINGS' pages. It wrote only what the walkthrough does: the test image's install and `install.log`. With "M8: error messages", the exit test's walkthrough and error messages are met. |
@@ -410,6 +411,15 @@ The M8 exit test's walkthrough ([HANDOFF §4.1](HANDOFF.md#41-roadmap)): the app
 | 2 | Hardware (optional) | Copy `app/bin/` as usual, plus `tools/ui/walkthrough.txt` as `ui-script.txt` next to `default.xbe`, and `app/bin/samples/small.iso` to `E:\xcat\isos\` if it isn't there; launch | As step 1. Then delete `ui-script.txt` (and the test image's folder in the install folder, if wanted) |
 
 A failed check stops the script there, and the footer says which line, the screen expected and the one shown (`Script FAILED at line …`). The controller works throughout, so the app can be left with Back or LT + RT + Back + Black either way.
+
+## M9: title image
+
+The app's logo as its XBE's title image ([xbe-title-image.md](formats/xbe-title-image.md)). On the PC, `ui_xbe_title_image` checks the encoding and the added section; these steps check that dashboards show it.
+
+| Step | Where | How | Pass |
+|---|---|---|---|
+| 1 | Hardware | Copy `app/bin/` as usual, over the old `default.xbe`; open the folder in the dashboard you use (UnleashX, XBMC, XBMC4Gamers) | The app's entry shows the green logo. If it still shows the old picture or none, reset the dashboard's thumbnail cache (or rename the folder) and look again |
+| 2 | Hardware | Launch the app | It starts as before |
 
 ## FATX probe (M2)
 
