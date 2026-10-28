@@ -26,6 +26,7 @@ nxdk brings its own submodules. Licences per nxdk's README and `LICENSES/` folde
 | SDL2 | zlib | Yes: the controller (from M4) and the UI (from M8, [ADR 0015](docs/adr/0015-ui-sdl2-own-widgets.md)) |
 | SDL_ttf | zlib | Yes, from M8 (ADR 0015) |
 | FreeType 2.4.12 (inside SDL_ttf) | FreeType License (FTL), credit required in the documentation: given in the release's `CREDITS.txt` ([tools/catalog/build.py](tools/catalog/build.py)) | Yes, from M8; loads only the bundled font (ADR 0015) |
+| libusbohci (USB host, Nuvoton; with nxdk's `libusbohci_xbox` glue) | Apache-2.0, with Nuvoton's disclaimer | Yes: every nxdk XBE links it for the controllers (found in the release audit, ADR 0017) |
 | SDL2_image | zlib | Only if used |
 | libpng, libjpeg-turbo, zlib | libpng / IJG + BSD / zlib | Only if used |
 | libc++ | Apache-2.0 WITH LLVM-exception / NCSA | Only for C++ builds |
@@ -33,4 +34,4 @@ nxdk brings its own submodules. Licences per nxdk's README and `LICENSES/` folde
 | NVIDIA Cg compiler (`cgc`) | Proprietary | No: build-time tool, shaders only |
 | extract-xiso | BSD | No: build-time tool (creates the test ISO) |
 
-Release zips must include the licence notices for every component marked "Yes", starting with the first release (M9).
+Release zips include the licence notices for every component marked "Yes" ([ADR 0017](docs/adr/0017-release-packaging.md)): `tools/release/package.py` copies each one into the zip's `licenses\` folder and lists them in `THIRD_PARTY.txt`, and refuses to pack if one is missing. A new linked component needs a row here and an entry in its list.

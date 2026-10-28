@@ -263,6 +263,7 @@ xiso-cartographer/
 
 - SemVer tags `vX.Y.Z`. Before 1.0, minor bumps may break things.
 - CI on a tag builds the release zip: `default.xbe`, `catalog.bin`, artwork, `README`, `CREDITS.txt`, `LICENSE`.
+  *Since M9 ([ADR 0017](adr/0017-release-packaging.md), [release.md](release.md)):* CI on a `v*.*.*` tag builds the zip (the XBE with `fonts\` and `ui\`, a README, `LICENSE` and every third-party licence) as a draft release; `catalog.bin` and `CREDITS.txt` are attached to it from the locked cache, and the owner publishes it.
 - The map, catalog and journal formats each carry their own version number, documented in `docs/formats/`.
 
 ### 6.3 Legal hygiene

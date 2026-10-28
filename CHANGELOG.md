@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Releases (M9, ADR 0017, docs/release.md): a `v*.*.*` tag makes CI build the XBE and the release zip and create a draft GitHub release, which the owner completes with `catalog.bin` and `CREDITS.txt` and publishes. The zip (`tools/release/package.py`) holds `xiso-cartographer\` with the XBE, its fonts and images, a README, the MIT licence, and every third-party licence the XBE needs (`licenses\`, `THIRD_PARTY.txt`, FreeType's credit); not the test image. It's reproducible, refuses a tag that doesn't match `version.h` or a missing licence, and is packed on every PR as part of the `xbe` artifact. Tested on the PC (`release_package`).
+- THIRD_PARTY.md lists nxdk's USB host library, `libusbohci` (Apache-2.0), which every nxdk XBE links for the controllers; the release audit found it missing.
 - The app has a logo: the XBE carries it as its title image, so dashboards such as UnleashX and XBMC show it (M9, docs/formats/xbe-title-image.md). The owner's art, released under the project's MIT licence (`app/assets/`). `cxbe` can't add a title image, so the build adds one to `default.xbe` after it: `tools/ui/xbe_title_image.py`, standard library only, encodes the 128 × 128 image as DXT1 in an XPR0 resource and adds the section `$$XTIMAGE` in the headers' unused room, changing nothing else. Tested on the PC (`ui_xbe_title_image`), with an independent reader (pyxbe decodes it), and in xemu (the XBE still boots and the walkthrough passes).
 - Repository scaffold: README, contributing guide, agent guide, handoff and plan documents, ADR process, MR template, code owners and Dependabot config.
 - MIT licence (ADR 0002).

@@ -36,3 +36,9 @@ We record every hard-to-reverse decision as an Architecture Decision Record (ADR
 | 0009 | Install from zip archives by streaming the zip itself | Accepted, amended 2026-10-19 (adaptive spool); implemented in M5b |
 | 0010 | Logging in on the Xbox is required for the beta | Accepted; built in M8, verified in M9 |
 | 0011 | Resume inside large files from checkpoints (amends 0004 §4) | Accepted; M4 |
+| 0012 | TLS trust: CA bundle, time source and randomness | Accepted; M5 |
+| 0013 | The archive.org source: entries keyed by file name | Accepted; M6 |
+| 0014 | The catalog: Wikidata and Redump data, no art, a checked binary file | Accepted; M7 |
+| 0015 | The UI: SDL2 and SDL_ttf, with our own controller-first widgets | Accepted; M8 |
+| 0016 | A settings file, and the install location in it | Accepted; M8 |
+| 0017 | Releases: a tagged zip with every licence, built by CI as a draft | Proposed; M9 |

@@ -324,6 +324,12 @@ add_test(NAME catalog_pipeline
           --cli $<TARGET_FILE:xcat-cli> --work ${CMAKE_BINARY_DIR}/catalog-tests)
 xcat_test_env(catalog_pipeline)
 
+# The release zip (tools/release/package.py, docs/release.md) from a made-up repo and app/bin:
+# its contents and licences, the same bytes every time, the version check.
+add_test(NAME release_package
+  COMMAND ${Python3_EXECUTABLE} -I ${PROJECT_SOURCE_DIR}/tools/release/test_package.py)
+xcat_test_env(release_package)
+
 # Journal seeds are committed, without their line CRCs (fuzz_journal.c adds them).
 file(GLOB _journal_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/journal/*.seed)
 xcat_add_fuzzer(fuzz_journal SEEDS ${_journal_seeds})
