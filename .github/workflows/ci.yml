@@ -128,6 +128,8 @@ jobs:
           test "$(head -c 2 app/ui-test/bin/ui/background.bmp)" = "BM"
           # Every XBE starts with the "XBEH" magic.
           test "$(head -c 4 app/bin/default.xbe)" = "XBEH"
+          # The title image (docs/formats/xbe-title-image.md) is in the app's XBE.
+          grep -c '\$\$XTIMAGE' app/bin/default.xbe
           test "$(head -c 4 app/fatx-probe/bin/default.xbe)" = "XBEH"
           test "$(head -c 4 app/net-test/bin/default.xbe)" = "XBEH"
           test "$(head -c 4 app/ui-test/bin/default.xbe)" = "XBEH"

@@ -28,4 +28,10 @@ if(XCAT_BUILD_TESTS)
   add_test(NAME ui_png2bmp
     COMMAND ${Python3_EXECUTABLE} -I ${PROJECT_SOURCE_DIR}/tools/ui/test_png2bmp.py)
   xcat_test_env(ui_png2bmp)
+
+  # The title image the XBE build puts into default.xbe (tools/ui/xbe_title_image.py,
+  # docs/formats/xbe-title-image.md), on a small made-up XBE and on app/assets/title-image.png.
+  add_test(NAME ui_xbe_title_image
+    COMMAND ${Python3_EXECUTABLE} -I ${PROJECT_SOURCE_DIR}/tools/ui/test_xbe_title_image.py)
+  xcat_test_env(ui_xbe_title_image)
 endif()
