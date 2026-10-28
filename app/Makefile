@@ -30,6 +30,7 @@ SRCS = $(CURDIR)/main.c \
        $(CORE_DIR)/src/json.c \
        $(CORE_DIR)/src/login.c \
        $(CORE_DIR)/src/map.c \
+       $(CORE_DIR)/src/map_edit.c \
        $(CORE_DIR)/src/settings.c \
        $(CORE_DIR)/src/source.c \
        $(CORE_DIR)/src/text.c \

@@ -3,6 +3,7 @@
 #include "library.h"
 #include "unity.h"
 
+#include <stdio.h>
 #include <string.h>
 
 void setUp(void)
@@ -415,7 +416,8 @@ static void test_logins(void)
     (void)ui_library_input(&lib, UI_BTN_DOWN, 5);
     ui_library_draw(&fake_draw, &lib, 0, NULL);
     TEST_ASSERT_TRUE(fake_find_text("Authentication") >= 0);
-    TEST_ASSERT_TRUE(fake_find_text("NOT LOGGED IN") >= 0);
+    TEST_ASSERT_EQUAL_INT(-1, fake_find_text("NOT LOGGED IN")); /* it explains the page */
+    TEST_ASSERT_TRUE(fake_saw("The logins for"));
     TEST_ASSERT_TRUE(fake_saw("A servers and logins"));
 
     (void)ui_library_input(&lib, UI_BTN_A, 5);
@@ -524,6 +526,130 @@ static void test_install_folder(void)
     (void)ui_library_input(&lib, UI_BTN_A, 5);
     TEST_ASSERT_EQUAL_INT(UI_LIB_INSTALL, lib.asking);
     TEST_ASSERT_NOT_NULL(strstr(lib.message, "to f:\\games?"));
+}
+
+/* Map sources: "Add source" asks what kind, then the keyboard (and for an image, the title ID
+   too) gives UI_LIB_ADD_SOURCE; A on a line asks before UI_LIB_REMOVE_SOURCE. */
+static void test_sources(void)
+{
+    static const ui_lib_source sources[] = {
+        {"archive.org: my-item", "archive.org item, line 3", "@archiveorg my-item"},
+        {"Map: http://192.168.1.20/map.txt", "Included map, line 4",
+         "@include http://192.168.1.20/map.txt. Line 4: it can't be fetched."},
+    };
+    ui_library lib;
+    ui_library_open(&lib, items, 3, shown);
+    TEST_ASSERT_EQUAL_INT(1, lib.source_list.count); /* "Add source" until the caller says */
+    ui_library_set_sources(&lib, sources, 2);
+    to_settings(&lib);
+    (void)ui_library_input(&lib, UI_BTN_DOWN, 5);
+    (void)ui_library_input(&lib, UI_BTN_DOWN, 5);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_SETTING_SOURCES, lib.settings_list.cur);
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_TRUE(fake_find_text("Map sources") >= 0);
+    TEST_ASSERT_TRUE(fake_saw("A list, add, remove"));
+
+    (void)ui_library_input(&lib, UI_BTN_A, 5);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_PAGE_SOURCES, lib.page);
+    TEST_ASSERT_EQUAL_INT(-1, ui_library_source(&lib));
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_TRUE(fake_find_text("Add source") >= 0);
+    TEST_ASSERT_TRUE(fake_saw("archive.org: my"));
+    TEST_ASSERT_TRUE(fake_saw("A add"));
+
+    /* B in the question adds nothing. */
+    (void)ui_library_input(&lib, UI_BTN_A, 5);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_SOURCE_KIND, lib.asking);
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_TRUE(fake_find_text("ARCHIVE.ORG") >= 0);
+    TEST_ASSERT_TRUE(fake_find_text("IMAGE") >= 0);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_B, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, lib.asking);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_TYPING_NONE, lib.typing_for);
+
+    /* An archive.org item: its identifier. */
+    (void)ui_library_input(&lib, UI_BTN_A, 5);
+    (void)ui_library_input(&lib, UI_BTN_A, 5);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_TYPING_SOURCE, lib.typing_for);
+    TEST_ASSERT_EQUAL_STRING("ARCHIVE.ORG ITEM IDENTIFIER", lib.kbd.label);
+    TEST_ASSERT_EQUAL_STRING("", lib.add_url);
+    type(&lib, "myitem");
+    TEST_ASSERT_EQUAL_INT(UI_LIB_ADD_SOURCE, ui_library_input(&lib, UI_BTN_START, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_SOURCE_ARCHIVE, lib.add_kind);
+    TEST_ASSERT_EQUAL_STRING("myitem", lib.add_url);
+
+    /* One image: its address, then its title ID. */
+    (void)ui_library_input(&lib, UI_BTN_A, 5);
+    (void)ui_library_input(&lib, UI_BTN_RIGHT, 5);
+    (void)ui_library_input(&lib, UI_BTN_RIGHT, 5);
+    (void)ui_library_input(&lib, UI_BTN_A, 5);
+    TEST_ASSERT_EQUAL_STRING("IMAGE ADDRESS", lib.kbd.label);
+    TEST_ASSERT_EQUAL_STRING("http://", lib.add_url);
+    type(&lib, "h");
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_START, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_TYPING_TITLE_ID, lib.typing_for);
+    type(&lib, "deadbeef");
+    TEST_ASSERT_EQUAL_INT(UI_LIB_ADD_SOURCE, ui_library_input(&lib, UI_BTN_START, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_SOURCE_IMAGE, lib.add_kind);
+    TEST_ASSERT_EQUAL_STRING("http://h", lib.add_url);
+    TEST_ASSERT_EQUAL_STRING("deadbeef", lib.add_key);
+
+    /* The same kind again keeps what was typed (to fix it); another kind starts afresh. */
+    (void)ui_library_input(&lib, UI_BTN_A, 5);
+    (void)ui_library_input(&lib, UI_BTN_RIGHT, 5);
+    (void)ui_library_input(&lib, UI_BTN_RIGHT, 5);
+    (void)ui_library_input(&lib, UI_BTN_A, 5);
+    TEST_ASSERT_EQUAL_STRING("http://h", lib.add_url);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_B, 5));
+    (void)ui_library_input(&lib, UI_BTN_A, 5);
+    (void)ui_library_input(&lib, UI_BTN_RIGHT, 5);
+    (void)ui_library_input(&lib, UI_BTN_A, 5);
+    TEST_ASSERT_EQUAL_STRING("MAP ADDRESS", lib.kbd.label);
+    TEST_ASSERT_EQUAL_STRING("https://", lib.add_url);
+    (void)ui_library_input(&lib, UI_BTN_B, 5);
+
+    /* A line: its details, and A asks before removing it, CANCEL first. */
+    (void)ui_library_input(&lib, UI_BTN_DOWN, 5);
+    (void)ui_library_input(&lib, UI_BTN_DOWN, 5);
+    TEST_ASSERT_EQUAL_INT(1, ui_library_source(&lib));
+    fake_reset();
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_TRUE(fake_saw("Included map"));
+    TEST_ASSERT_TRUE(fake_saw("A remove"));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_REMOVE_SOURCE, lib.asking);
+    TEST_ASSERT_NOT_NULL(strstr(lib.message, "Map: http://192.168.1.20/map.txt"));
+    TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_A, 5)); /* CANCEL */
+    (void)ui_library_input(&lib, UI_BTN_A, 5);
+    (void)ui_library_input(&lib, UI_BTN_LEFT, 5);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_REMOVE_SOURCE, ui_library_input(&lib, UI_BTN_A, 5));
+
+    /* Fewer lines after it's gone: the place stays in range. */
+    ui_library_set_sources(&lib, sources, 1);
+    TEST_ASSERT_EQUAL_INT(0, ui_library_source(&lib));
+    (void)ui_library_input(&lib, UI_BTN_B, 5);
+    TEST_ASSERT_EQUAL_INT(UI_LIB_PAGE_NONE, lib.page);
+}
+
+/* After the map changed: a new list of games, every one shown, the search gone. */
+static void test_set_items(void)
+{
+    static ui_lib_item two[2] = {
+        {"Alpha", "", NULL, UI_LIB_NOT_TRIED, NULL},
+        {"Beta", "", NULL, UI_LIB_NOT_TRIED, NULL},
+    };
+    static int shown2[2];
+    ui_library lib;
+    ui_library_open(&lib, items, 3, shown);
+    (void)snprintf(lib.query, sizeof lib.query, "%s", "third");
+    lib.list = (ui_list){1, 0, 0};
+    ui_library_set_items(&lib, two, 2, shown2);
+    TEST_ASSERT_EQUAL_INT(2, lib.list.count);
+    TEST_ASSERT_EQUAL_STRING("", lib.query);
+    TEST_ASSERT_EQUAL_INT(1, ui_library_game(&lib) + 1);
+    TEST_ASSERT_EQUAL_INT(1, shown2[1]);
 }
 
 static bool all_zero(const char *p, size_t n)
@@ -663,5 +789,7 @@ int main(void)
     RUN_TEST(test_logout_and_tell);
     RUN_TEST(test_install_folder);
     RUN_TEST(test_logins);
+    RUN_TEST(test_sources);
+    RUN_TEST(test_set_items);
     return UNITY_END();
 }

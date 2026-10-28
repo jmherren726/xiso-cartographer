@@ -49,6 +49,7 @@
 #include "xcat/installed.h"
 #include "xcat/login.h"
 #include "xcat/map.h"
+#include "xcat/map_edit.h"
 #include "xcat/nxdk.h"
 #include "xcat/settings.h"
 #include "xcat/version.h"
@@ -1850,6 +1851,257 @@ static bool install_game(ui_library *lib, game *games, ui_lib_item *items, int i
     return login_wanted;
 }
 
+/* --- Map sources: the map's own lines (SETTINGS, map.md §9) ------------------------------ */
+
+#define MAX_SOURCES 64 /* lines listed; more are left out */
+
+static char local_files[MAX_LOCAL][XC_NX_PATH_MAX]; /* E:\xcat\isos */
+static int local_count;
+static size_t source_line_no[MAX_SOURCES];
+static char source_names[MAX_SOURCES][96];
+static char source_notes[MAX_SOURCES][40];
+static char source_abouts[MAX_SOURCES][400];
+static ui_lib_source sources[MAX_SOURCES];
+
+/* What the map reader said about line `line` of E:\xcat\map.txt: its first error, or else its
+   first warning. "" if nothing. */
+static void line_problem(size_t line, char *out_text, size_t size)
+{
+    out_text[0] = '\0';
+    for (int pass = 0; pass < 2 && out_text[0] == '\0'; pass++) {
+        for (size_t i = 0; have_map && i < map.problem_count; i++) {
+            const xc_map_problem *p = &map.problems[i];
+            bool want = pass == 0 ? p->severity == XC_MAP_ERROR : p->severity == XC_MAP_WARNING;
+            if (want && p->source == 0 && p->line == line) {
+                snprintf(out_text, size, "%s: %s", pass == 0 ? "Problem" : "Note", p->message);
+                break;
+            }
+        }
+    }
+}
+
+static void describe_source(const xc_map_line *l, int i)
+{
+    int tl = (int)l->text_len;
+    int al = (int)l->arg_len;
+    unsigned line = (unsigned)l->line;
+    source_line_no[i] = l->line;
+    const char *kind = "Directive";
+    if (l->kind == XC_MAP_LINE_ARCHIVEORG) {
+        kind = "archive.org item";
+        snprintf(source_names[i], sizeof source_names[i], "archive.org: %.*s", al, l->arg);
+    } else if (l->kind == XC_MAP_LINE_INCLUDE) {
+        kind = "Included map";
+        snprintf(source_names[i], sizeof source_names[i], "Map: %.*s", al, l->arg);
+    } else if (l->kind == XC_MAP_LINE_ENTRY) {
+        kind = "Image";
+        const char *file = l->arg;
+        for (const char *p = l->arg; p < l->arg + l->arg_len; p++) {
+            file = *p == '/' ? p + 1 : file;
+        }
+        int fl = (int)(l->arg + l->arg_len - file);
+        snprintf(source_names[i], sizeof source_names[i], "%.*s: %.*s", (int)l->key_len, l->text,
+                 fl, file);
+    } else {
+        snprintf(source_names[i], sizeof source_names[i], "%.*s", tl, l->text);
+    }
+    snprintf(source_notes[i], sizeof source_notes[i], "%s, line %u", kind, line);
+    char problem[sizeof map.problems[0].message + 16];
+    line_problem(l->line, problem, sizeof problem);
+    snprintf(source_abouts[i], sizeof source_abouts[i], "%.*s%s%s", tl > 250 ? 250 : tl, l->text,
+             problem[0] != '\0' ? ". " : "", problem);
+    sources[i] = (ui_lib_source){source_names[i], source_notes[i], source_abouts[i]};
+}
+
+/* The map file's bytes, or none if there is no map. False, with msg saying why, if it can't be
+   read. */
+static bool read_map(char **data, size_t *len, char *msg, size_t size)
+{
+    *data = NULL;
+    *len = 0;
+    if (!xc_nx_exists(MAP_FILE)) {
+        return true;
+    }
+    xc_err err = read_local(MAP_FILE, XC_MAP_MAX_FILE, data, len);
+    if (err != XC_OK) {
+        snprintf(msg, size, "E:\\xcat\\map.txt can't be read: %s.",
+                 err == XC_ERR_LIMIT ? "it's larger than 1 MiB" : xc_err_str(err));
+        return false;
+    }
+    return true;
+}
+
+/* The lines of E:\xcat\map.txt that Map sources lists. */
+static int list_sources(void)
+{
+    char *data = NULL;
+    size_t len = 0;
+    char msg[160];
+    static xc_map_line lines[MAX_SOURCES];
+    size_t count = 0;
+    if (!read_map(&data, &len, msg, sizeof msg) ||
+        xc_map_lines(data, len, lines, MAX_SOURCES, &count) != XC_OK) {
+        free(data);
+        return 0;
+    }
+    int n = count < MAX_SOURCES ? (int)count : MAX_SOURCES;
+    for (int i = 0; i < n; i++) {
+        describe_source(&lines[i], i);
+    }
+    free(data);
+    return n;
+}
+
+/* Says why the map wasn't changed: xc_map_add_line's or xc_map_remove_line's error. */
+static void map_error(xc_err err, char *msg, size_t size)
+{
+    if (err == XC_ERR_MAP) {
+        snprintf(msg, size, "%s",
+                 "E:\\xcat\\map.txt doesn't start with \"# xcat-map v1\", so it isn't changed. "
+                 "Fix it, or delete it to start a new one.");
+    } else if (err == XC_ERR_LIMIT) {
+        snprintf(msg, size, "%s", "The map would be larger than 1 MiB.");
+    } else {
+        snprintf(msg, size, "The map can't be changed: %s.", xc_err_str(err));
+    }
+}
+
+/* Replaces E:\xcat\map.txt with text[0, len), atomically. */
+static bool write_map(const char *text, size_t len, char *msg, size_t size)
+{
+    (void)xc_nx_mkdirs(XCAT_DIR);
+    xc_err err = xc_nx_replace_file(MAP_FILE, text, len);
+    if (err != XC_OK) {
+        out("%s: %s; not changed\n", MAP_FILE, xc_err_str(err));
+        snprintf(msg, size, "E:\\xcat\\map.txt couldn't be written: %s.", xc_err_str(err));
+        return false;
+    }
+    return true;
+}
+
+/* UI_LIB_ADD_SOURCE: builds the line from what was typed and adds it to the map. On success,
+   done says what was added; else msg says why not, and nothing changed. */
+static bool add_source(ui_library *lib, char *done, size_t done_size, char *msg, size_t size)
+{
+    static const xc_map_line_kind kinds[] = {XC_MAP_LINE_ARCHIVEORG, XC_MAP_LINE_INCLUDE,
+                                             XC_MAP_LINE_ENTRY};
+    static char line[XC_MAP_MAX_LINE + 1];
+    char why[200];
+    xc_err err = xc_map_new_line(kinds[lib->add_kind], lib->add_key, lib->add_url, line,
+                                 sizeof line, why, sizeof why);
+    if (err != XC_OK) {
+        snprintf(msg, size, "Not added: %s.", why);
+        return false;
+    }
+    char *old = NULL;
+    size_t old_len = 0;
+    if (!read_map(&old, &old_len, msg, size)) {
+        return false;
+    }
+    char *text = NULL;
+    size_t len = 0;
+    err = xc_map_add_line(old, old_len, line, &text, &len);
+    free(old);
+    if (err != XC_OK) {
+        map_error(err, msg, size);
+        return false;
+    }
+    bool ok = write_map(text, len, msg, size);
+    free(text);
+    if (ok) {
+        out("Map: added \"%s\"\n", line);
+        snprintf(done, done_size, "Added to the map: %.150s.", line);
+        lib->add_url[0] = '\0';
+        lib->add_key[0] = '\0';
+    }
+    return ok;
+}
+
+/* UI_LIB_REMOVE_SOURCE: removes the highlighted line from the map. */
+static bool remove_source(ui_library *lib, char *done, size_t done_size, char *msg, size_t size)
+{
+    int i = ui_library_source(lib);
+    if (i < 0 || i >= MAX_SOURCES) {
+        snprintf(msg, size, "%s", "No line is highlighted.");
+        return false;
+    }
+    char *old = NULL;
+    size_t old_len = 0;
+    if (!read_map(&old, &old_len, msg, size)) {
+        return false;
+    }
+    char *text = NULL;
+    size_t len = 0;
+    xc_err err = xc_map_remove_line(old, old_len, source_line_no[i], &text, &len);
+    free(old);
+    if (err != XC_OK) {
+        map_error(err, msg, size);
+        return false;
+    }
+    bool ok = write_map(text, len, msg, size);
+    free(text);
+    if (ok) {
+        out("Map: removed line %u\n", (unsigned)source_line_no[i]);
+        snprintf(done, done_size, "Removed from the map: %.150s.", source_names[i]);
+    }
+    return ok;
+}
+
+/* The library's games: the map's and E:\xcat\isos', marked with what's installed. */
+static bool build_list(game **out_games, ui_lib_item **out_items, int *out_count)
+{
+    int count = 0;
+    game *games = list_games(&map, local_files, local_count, &count);
+    ui_lib_item *items = calloc(count > 0 ? (size_t)count : 1, sizeof *items);
+    if (games == NULL || items == NULL) {
+        free(games);
+        free(items);
+        return false;
+    }
+    for (int i = 0; i < count; i++) {
+        items[i] =
+            (ui_lib_item){games[i].name, games[i].facts, games[i].about, UI_LIB_NOT_TRIED, NULL};
+    }
+    mark_games(games, items, count);
+    *out_games = games;
+    *out_items = items;
+    *out_count = count;
+    return true;
+}
+
+/* After the map changed: loads it again, with its includes and archive.org items, and gives
+   the library the new list. The old one is freed once the library no longer shows it. */
+static void reload_map(ui_library *lib, game **games, ui_lib_item **items, int *count, int **shown)
+{
+    ui_sdl_begin(ui_col_bg);
+    ui_library_draw(&screen, lib, pan_now, "Loading the map again...");
+    ui_sdl_present();
+    xc_map_free(&map);
+    have_map = load_map(&map);
+    game *g = NULL;
+    ui_lib_item *it = NULL;
+    int n = 0;
+    if (!build_list(&g, &it, &n)) {
+        out("Out of memory for the list of games\n");
+        halt();
+    }
+    int *s = calloc(n > 0 ? (size_t)n : 1, sizeof *s);
+    if (s == NULL) {
+        out("Out of memory for the list of games\n");
+        halt();
+    }
+    ui_library_set_items(lib, it, n, s);
+    free(*games);
+    free(*items);
+    free(*shown);
+    *games = g;
+    *items = it;
+    *count = n;
+    *shown = s;
+    refresh_logins(lib);
+    ui_library_set_sources(lib, sources, list_sources());
+}
+
 /* --- the install folder (SETTINGS) ------------------------------------------------------ */
 
 static char folder_paths[3][12];
@@ -1932,6 +2184,7 @@ static void library(game *games, ui_lib_item *items, int count)
     ui_library_open(&lib, items, count, shown);
     ui_library_set_installed(&lib, found_items, found_count);
     refresh_logins(&lib);
+    ui_library_set_sources(&lib, sources, list_sources());
     ui_library_set_folders(&lib, settings.install_dir, folder_choices, list_folders());
     if (settings_problem[0] != '\0') {
         ui_library_tell(&lib, "SETTINGS", settings_problem);
@@ -1970,6 +2223,26 @@ static void library(game *games, ui_lib_item *items, int count)
                 logout(&lib);
             } else if (a == UI_LIB_FORGET) {
                 forget(&lib);
+            } else if (a == UI_LIB_ADD_SOURCE || a == UI_LIB_REMOVE_SOURCE) {
+                char done[200];
+                char msg[320];
+                bool added = a == UI_LIB_ADD_SOURCE;
+                bool ok = added ? add_source(&lib, done, sizeof done, msg, sizeof msg)
+                                : remove_source(&lib, done, sizeof done, msg, sizeof msg);
+                if (ok) {
+                    reload_map(&lib, &games, &items, &count, &shown);
+                    resume = -1;
+                    char problem[sizeof map.problems[0].message + 16] = "";
+                    if (added && lib.source_count > 0) {
+                        line_problem(source_line_no[lib.source_count - 1], problem, sizeof problem);
+                    }
+                    snprintf(msg, sizeof msg, "%s %d game%s listed now.%s%s", done, count,
+                             count == 1 ? "" : "s", problem[0] != '\0' ? " " : "", problem);
+                }
+                ui_library_tell(&lib,
+                                ok ? (added ? "SOURCE ADDED" : "SOURCE REMOVED")
+                                   : (added ? "NOT ADDED" : "NOT REMOVED"),
+                                msg);
             } else if (a == UI_LIB_FOLDER) {
                 change_folder(&lib, games, items, count);
             } else if (resume >= 0 && lib.typing_for == UI_LIB_TYPING_NONE) {
@@ -2029,30 +2302,24 @@ int main(void)
     load_catalog();
 
     have_map = load_map(&map);
-    static char local[MAX_LOCAL][XC_NX_PATH_MAX];
-    int nlocal = list_local(local);
-    if ((!have_map || map.entry_count == 0) && nlocal == 0) {
+    local_count = list_local(local_files);
+    if ((!have_map || map.entry_count == 0) && local_count == 0) {
         seed_samples();
-        nlocal = list_local(local);
+        local_count = list_local(local_files);
     }
 
-    int count = 0;
-    game *games = list_games(&map, local, nlocal, &count);
-    ui_lib_item *items = calloc(count > 0 ? (size_t)count : 1, sizeof *items);
-    if (games == NULL || items == NULL) {
-        out("Out of memory for the list of games\n");
-        halt();
-    }
-    for (int i = 0; i < count; i++) {
-        items[i] =
-            (ui_lib_item){games[i].name, games[i].facts, games[i].about, UI_LIB_NOT_TRIED, NULL};
-    }
     founds = malloc(MAX_FOUND * sizeof *founds);
     if (founds == NULL) {
         out("Out of memory for the list of installed games: none are shown\n");
     }
     scan_games();
-    mark_games(games, items, count);
+    int count = 0;
+    game *games = NULL;
+    ui_lib_item *items = NULL;
+    if (!build_list(&games, &items, &count)) {
+        out("Out of memory for the list of games\n");
+        halt();
+    }
     if (!pads_ok) {
         out("No controller support (SDL), so nothing can be picked\n");
         halt();

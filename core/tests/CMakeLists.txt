@@ -106,6 +106,7 @@ xcat_add_test(test_bytes)
 xcat_add_test(test_crc32)
 xcat_add_test(test_credentials)
 xcat_add_test(test_map)
+xcat_add_test(test_map_edit)
 xcat_add_test(test_json)
 xcat_add_test(test_archiveorg)
 xcat_add_test(test_xbe)
@@ -257,6 +258,10 @@ xcat_add_fuzzer(fuzz_credentials SEEDS ${_cred_seeds})
 # Map seeds are committed: NUL-separated parts, see fuzz_map.c.
 file(GLOB _map_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/map/*.seed)
 xcat_add_fuzzer(fuzz_map SEEDS ${_map_seeds})
+
+# Map editing seeds are committed: synthetic maps and typed lines.
+file(GLOB _map_edit_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/map-edit/*.seed)
+xcat_add_fuzzer(fuzz_map_edit SEEDS ${_map_edit_seeds})
 
 # archive.org metadata seeds are committed: synthetic listings with placeholder names.
 file(GLOB _archiveorg_seeds ${CMAKE_CURRENT_SOURCE_DIR}/fuzz-seeds/archiveorg/*.seed)

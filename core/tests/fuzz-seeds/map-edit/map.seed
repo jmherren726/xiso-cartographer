@@ -1,0 +1,8 @@
+m# xcat-map v1
+# mine
+4D530004 = http://192.168.1.20/a.iso
+
+@include http://192.168.1.20:8080/map.txt
+@archiveorg my-item
+@other x
+bad line

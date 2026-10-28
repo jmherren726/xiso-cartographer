@@ -20,6 +20,7 @@ add_library(xcat
   src/login.c
   src/settings.c
   src/map.c
+  src/map_edit.c
   src/seq.c
   src/source.c
   src/sntp.c
