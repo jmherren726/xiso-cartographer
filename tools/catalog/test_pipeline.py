@@ -231,7 +231,10 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(run("--update-lock").returncode, 0, run("--update-lock").stderr)
         first = slurp(os.path.join(out, "catalog.bin"))
         self.assertEqual(run().returncode, 0)
-        self.assertIn(b"Snapshot: wikidata 2026-10-20; redump 2026-10-21", slurp(os.path.join(out, "CREDITS.txt")))
+        credits = slurp(os.path.join(out, "CREDITS.txt"))
+        self.assertIn(b"Snapshot: wikidata 2026-10-20; redump 2026-10-21", credits)
+        # The FreeType License's credit (ADR 0015, Consequences).
+        self.assertIn(b"Portions of this software are copyright (C) 1996-2013 The FreeType Project", credits)
         r = run("--previous", os.path.join(out, "catalog.bin"))
         self.assertEqual(r.returncode, 0, r.stderr)
         # A changed input is a new snapshot, named by its group.
