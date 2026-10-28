@@ -102,7 +102,7 @@ static void test_list_set_count(void)
 static void test_list_draw(void)
 {
     ui_list l = {12, 5, 3};
-    ui_list_draw(&fake_draw, &l, (ui_rect){0, 0, 200, 130}, line_text, NULL);
+    ui_list_draw(&fake_draw, &l, (ui_rect){0, 0, 200, 130}, line_text, NULL, false);
     /* Lines 4 to 8 are shown, the 6th highlighted in bold. */
     TEST_ASSERT_EQUAL_INT(-1, fake_find_text("line 3"));
     TEST_ASSERT_EQUAL_INT(-1, fake_find_text("line 9"));
@@ -120,10 +120,20 @@ static void test_list_draw(void)
     TEST_ASSERT_EQUAL_INT(196, thumb.x);
     TEST_ASSERT_TRUE(thumb.y > 0 && thumb.y + thumb.h < 130);
 
+    /* Idle: the same line highlighted, but dim. */
+    fake_reset();
+    ui_list_draw(&fake_draw, &l, (ui_rect){0, 0, 200, 130}, line_text, NULL, true);
+    int at = fake_find_text("line 6");
+    TEST_ASSERT_EQUAL_INT(UI_FONT_BOLD, fake_log[at].font);
+    TEST_ASSERT_TRUE(same_color(ui_col_dim, fake_log[at].c));
+    TEST_ASSERT_TRUE(same_color(ui_col_text, fake_log[fake_find_text("line 5")].c));
+    TEST_ASSERT_TRUE(fills_in(ui_col_idle, NULL) > 0);
+    TEST_ASSERT_EQUAL_INT(1, fills_in(ui_col_highlight_border, NULL)); /* the thumb alone */
+
     /* All lines fit: no scroll bar. */
     fake_reset();
     ui_list few = {3, 0, 0};
-    ui_list_draw(&fake_draw, &few, (ui_rect){0, 0, 200, 130}, line_text, NULL);
+    ui_list_draw(&fake_draw, &few, (ui_rect){0, 0, 200, 130}, line_text, NULL, false);
     TEST_ASSERT_TRUE(fake_find_text("line 3") >= 0);
     int bars = 0;
     for (int i = 0; i < fake_log_n; i++) {

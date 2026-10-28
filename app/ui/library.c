@@ -748,6 +748,8 @@ static void draw_logins(const ui_draw *d, const ui_library *lib)
     }
 }
 
+/* The list of the section shown. In the sections, the D-pad moves between them, so its
+   highlight is drawn dim. */
 static void draw_list(const ui_draw *d, ui_library *lib)
 {
     ui_panel(d, list, UI_CHAMFER, ui_col_panel, ui_col_border);
@@ -757,19 +759,19 @@ static void draw_list(const ui_draw *d, ui_library *lib)
                                "Nothing installed yet. Games go to the install location in "
                                "SETTINGS.");
         } else {
-            ui_list_draw(d, &lib->installed_list, list_in, installed_name, lib);
+            ui_list_draw(d, &lib->installed_list, list_in, installed_name, lib, lib->in_sections);
         }
         return;
     }
     if (lib->section == UI_LIB_SETTINGS) {
         if (lib->page == UI_LIB_PAGE_FOLDERS) {
-            ui_list_draw(d, &lib->folder_list, list_in, folder_name, lib);
+            ui_list_draw(d, &lib->folder_list, list_in, folder_name, lib, lib->in_sections);
         } else if (lib->page == UI_LIB_PAGE_LOGINS) {
-            ui_list_draw(d, &lib->host_list, list_in, host_name, lib);
+            ui_list_draw(d, &lib->host_list, list_in, host_name, lib, lib->in_sections);
         } else if (lib->page == UI_LIB_PAGE_SOURCES) {
-            ui_list_draw(d, &lib->source_list, list_in, source_name, lib);
+            ui_list_draw(d, &lib->source_list, list_in, source_name, lib, lib->in_sections);
         } else {
-            ui_list_draw(d, &lib->settings_list, list_in, setting_name, NULL);
+            ui_list_draw(d, &lib->settings_list, list_in, setting_name, NULL, lib->in_sections);
         }
         return;
     }
@@ -787,7 +789,7 @@ static void draw_list(const ui_draw *d, ui_library *lib)
         (void)ui_text_wrap(d, UI_FONT_BODY, list_in, ui_col_dim, line);
         return;
     }
-    ui_list_draw(d, &lib->list, list_in, item_name, lib);
+    ui_list_draw(d, &lib->list, list_in, item_name, lib, lib->in_sections);
 }
 
 /* While GAMES is searched: what for, and how many games match. */
