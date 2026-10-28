@@ -152,7 +152,7 @@ int main(void)
         }
     }
     int rows = ui_list_rows(&d, list_in);
-    ui_list l = {LIST_LINES, 0, 0};
+    ui_list l = {LIST_LINES, 0, 0, false};
     mode m = MODE_LIST;
     ui_dialog dialog = {0};
     ui_kbd kbd;

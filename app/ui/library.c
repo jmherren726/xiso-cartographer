@@ -59,7 +59,7 @@ void ui_library_set_items(ui_library *lib, const ui_lib_item *items, int count, 
     for (int i = 0; i < count; i++) {
         shown[i] = i;
     }
-    lib->list = (ui_list){count, 0, 0};
+    lib->list = (ui_list){count, 0, 0, false};
     lib->query[0] = '\0';
 }
 
@@ -125,7 +125,8 @@ static void choose_folder(ui_library *lib, int rows)
             cur = i;
         }
     }
-    lib->folder_list = (ui_list){lib->folder_count + 1, cur, cur >= rows ? cur - rows + 1 : 0};
+    lib->folder_list =
+        (ui_list){lib->folder_count + 1, cur, cur >= rows ? cur - rows + 1 : 0, false};
     lib->page = UI_LIB_PAGE_FOLDERS;
 }
 
@@ -184,7 +185,7 @@ static void search(ui_library *lib, int rows)
             lib->shown[n++] = i;
         }
     }
-    lib->list = (ui_list){n, cur, cur >= rows ? cur - rows + 1 : 0};
+    lib->list = (ui_list){n, cur, cur >= rows ? cur - rows + 1 : 0, false};
 }
 
 void ui_library_set_account(ui_library *lib, bool logged_in)
@@ -937,6 +938,12 @@ const char *ui_library_screen(const ui_library *lib)
 
 void ui_library_draw(const ui_draw *d, ui_library *lib, int pan, const char *status)
 {
+    /* In the sections, the D-pad moves between them: the list's highlight is dim. */
+    ui_list *lists[] = {&lib->list,        &lib->installed_list, &lib->settings_list,
+                        &lib->folder_list, &lib->host_list,      &lib->source_list};
+    for (size_t i = 0; i < sizeof lists / sizeof lists[0]; i++) {
+        lists[i]->idle = lib->in_sections;
+    }
     bool typing = lib->typing_for != UI_LIB_TYPING_NONE;
     if (lib->asking == UI_LIB_NONE && !typing) {
         lib->backdrop = false;

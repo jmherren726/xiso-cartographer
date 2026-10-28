@@ -114,10 +114,12 @@ void ui_list_draw(const ui_draw *d, const ui_list *l, ui_rect r, ui_list_line *l
         ui_rect row = {r.x, r.y + i * row_h, w, row_h - 2};
         bool sel = n == l->cur;
         if (sel) {
-            ui_panel(d, row, 6, ui_col_highlight, ui_col_highlight_border);
+            ui_panel(d, row, 6, l->idle ? ui_col_idle : ui_col_highlight,
+                     l->idle ? ui_col_idle_border : ui_col_highlight_border);
         }
         (void)ui_text_fit(d, sel ? UI_FONT_BOLD : UI_FONT_BODY, row.x + TEXT_IN, row.y + 2,
-                          row.w - 2 * TEXT_IN, ui_col_text, line(ctx, n));
+                          row.w - 2 * TEXT_IN, sel && l->idle ? ui_col_dim : ui_col_text,
+                          line(ctx, n));
     }
     if (bar) {
         ui_rect track = {r.x + r.w - BAR_W, r.y, BAR_W, r.h};

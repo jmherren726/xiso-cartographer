@@ -25,6 +25,7 @@ typedef struct ui_list {
     int count; /* lines */
     int cur;   /* the highlighted line, 0 if count is 0 */
     int top;   /* the first line shown */
+    bool idle; /* the buttons move something else: the highlight is drawn dim */
 } ui_list;
 
 /* The height of a line, and how many lines fit in r (at least 1). */
@@ -43,7 +44,9 @@ bool ui_list_input(ui_list *l, ui_button b, int rows);
 typedef const char *ui_list_line(void *ctx, int i);
 
 /* Draws the lines shown inside r (the inside of a panel), cut with an ellipsis if they're too
-   wide, and a scroll bar at r's right edge when not all lines fit. */
+   wide, and a scroll bar at r's right edge when not all lines fit. The highlighted line is in
+   bold in a small panel: bright, or dim (ui_col_idle, ui_col_idle_border, text in ui_col_dim)
+   while the list is idle. */
 void ui_list_draw(const ui_draw *d, const ui_list *l, ui_rect r, ui_list_line *line, void *ctx);
 
 /* ---- Progress bar. */

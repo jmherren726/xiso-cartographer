@@ -54,7 +54,7 @@ static void test_list_rows(void)
 
 static void test_list_moves_pages_and_stops(void)
 {
-    ui_list l = {12, 0, 0};
+    ui_list l = {12, 0, 0, false};
     TEST_ASSERT_FALSE(ui_list_input(&l, UI_BTN_UP, 5)); /* already at the top */
     for (int i = 0; i < 4; i++) {
         TEST_ASSERT_TRUE(ui_list_input(&l, UI_BTN_DOWN, 5));
@@ -80,14 +80,14 @@ static void test_list_moves_pages_and_stops(void)
     TEST_ASSERT_EQUAL_INT(0, l.cur);
     TEST_ASSERT_EQUAL_INT(0, l.top);
 
-    ui_list empty = {0, 0, 0};
+    ui_list empty = {0, 0, 0, false};
     TEST_ASSERT_FALSE(ui_list_input(&empty, UI_BTN_DOWN, 5));
     TEST_ASSERT_EQUAL_INT(0, empty.cur);
 }
 
 static void test_list_set_count(void)
 {
-    ui_list l = {12, 11, 7};
+    ui_list l = {12, 11, 7, false};
     ui_list_set_count(&l, 3, 5);
     TEST_ASSERT_EQUAL_INT(2, l.cur);
     TEST_ASSERT_EQUAL_INT(0, l.top);
@@ -101,7 +101,7 @@ static void test_list_set_count(void)
 
 static void test_list_draw(void)
 {
-    ui_list l = {12, 5, 3};
+    ui_list l = {12, 5, 3, false};
     ui_list_draw(&fake_draw, &l, (ui_rect){0, 0, 200, 130}, line_text, NULL);
     /* Lines 4 to 8 are shown, the 6th highlighted in bold. */
     TEST_ASSERT_EQUAL_INT(-1, fake_find_text("line 3"));
@@ -120,9 +120,20 @@ static void test_list_draw(void)
     TEST_ASSERT_EQUAL_INT(196, thumb.x);
     TEST_ASSERT_TRUE(thumb.y > 0 && thumb.y + thumb.h < 130);
 
+    /* Idle: the same line highlighted, but dim. */
+    fake_reset();
+    l.idle = true;
+    ui_list_draw(&fake_draw, &l, (ui_rect){0, 0, 200, 130}, line_text, NULL);
+    int at = fake_find_text("line 6");
+    TEST_ASSERT_EQUAL_INT(UI_FONT_BOLD, fake_log[at].font);
+    TEST_ASSERT_TRUE(same_color(ui_col_dim, fake_log[at].c));
+    TEST_ASSERT_TRUE(same_color(ui_col_text, fake_log[fake_find_text("line 5")].c));
+    TEST_ASSERT_TRUE(fills_in(ui_col_idle, NULL) > 0);
+    TEST_ASSERT_EQUAL_INT(1, fills_in(ui_col_highlight_border, NULL)); /* the thumb alone */
+
     /* All lines fit: no scroll bar. */
     fake_reset();
-    ui_list few = {3, 0, 0};
+    ui_list few = {3, 0, 0, false};
     ui_list_draw(&fake_draw, &few, (ui_rect){0, 0, 200, 130}, line_text, NULL);
     TEST_ASSERT_TRUE(fake_find_text("line 3") >= 0);
     int bars = 0;

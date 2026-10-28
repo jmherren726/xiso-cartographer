@@ -87,8 +87,18 @@ static void test_sections(void)
 {
     ui_library lib;
     ui_library_open(&lib, items, 3, shown);
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_FALSE(lib.list.idle);
     (void)ui_library_input(&lib, UI_BTN_LEFT, 5);
     TEST_ASSERT_TRUE(lib.in_sections);
+    /* In the sections, the games' highlight is dim (ui_list idle). */
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_TRUE(lib.list.idle);
+    TEST_ASSERT_TRUE(lib.settings_list.idle);
+    (void)ui_library_input(&lib, UI_BTN_RIGHT, 5);
+    ui_library_draw(&fake_draw, &lib, 0, NULL);
+    TEST_ASSERT_FALSE(lib.list.idle);
+    (void)ui_library_input(&lib, UI_BTN_LEFT, 5);
     (void)ui_library_input(&lib, UI_BTN_UP, 5); /* stops at the top */
     TEST_ASSERT_EQUAL_INT(UI_LIB_GAMES, lib.section);
     for (int i = 0; i < 5; i++) {
@@ -105,6 +115,7 @@ static void test_sections(void)
     (void)ui_library_input(&lib, UI_BTN_A, 5);
     TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, lib.asking);
     TEST_ASSERT_EQUAL_INT(UI_LIB_TYPING_NONE, lib.typing_for);
+    fake_reset();
     ui_library_draw(&fake_draw, &lib, 0, NULL);
     TEST_ASSERT_TRUE(fake_saw("Nothing installed yet"));
     TEST_ASSERT_FALSE(fake_saw("First game"));
@@ -642,7 +653,7 @@ static void test_set_items(void)
     ui_library lib;
     ui_library_open(&lib, items, 3, shown);
     (void)snprintf(lib.query, sizeof lib.query, "%s", "third");
-    lib.list = (ui_list){1, 0, 0};
+    lib.list = (ui_list){1, 0, 0, false};
     ui_library_set_items(&lib, two, 2, shown2);
     TEST_ASSERT_EQUAL_INT(2, lib.list.count);
     TEST_ASSERT_EQUAL_STRING("", lib.query);
