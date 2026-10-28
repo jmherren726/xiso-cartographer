@@ -17,8 +17,9 @@
  * names the listed games and describes them; after an install, the title ID from default.xbe
  * is compared with the catalog's.
  *
- * Startup is shown on nxdk's debug console. Then the screens take over (M8, ADR 0015,
- * docs/ui-style.md): the library lists the games, Y searches them, A asks before installing
+ * The screens open first (M8, ADR 0015, docs/ui-style.md): the startup screen shows what
+ * startup does, or why it can't go on (nxdk's debug console only if the screens can't open).
+ * Then the library lists the games, Y searches them, A asks before installing
  * one, and the install screen shows the progress; B asks before stopping it. The games already in
  * the install folder (a marker, or a journal for an unfinished one: xcat/installed.h) are marked
  * in the list and listed under INSTALLED. SETTINGS chooses the install folder, E:\Games by
@@ -43,6 +44,7 @@
 #include "install_view.h"
 #include "library.h"
 #include "script.h"
+#include "startup_view.h"
 #include "theme.h"
 #include "xcat/catalog.h"
 #include "xcat/credentials.h"
@@ -82,9 +84,13 @@ static uint8_t *io_buf;
 static uint8_t *recv_buf;
 static HANDLE log_file = INVALID_HANDLE_VALUE;
 static ui_draw screen;
-static bool screen_up; /* the screens are drawn: out() goes to the log only */
+static bool screens_open;       /* ui_sdl_open worked: the debug console is never drawn again */
+static bool starting;           /* the startup screen shows what out() writes */
+static ui_startup_view startup; /* the screen before the library (ADR 0015 decision 1) */
 
-/* --- debug console and log ----------------------------------------------------------- */
+static void startup_frame(void);
+
+/* --- log, and the startup screen (or the debug console before the screens open) ---------- */
 
 __attribute__((format(printf, 1, 2))) static void out(const char *fmt, ...)
 {
@@ -99,14 +105,17 @@ __attribute__((format(printf, 1, 2))) static void out(const char *fmt, ...)
     if ((size_t)n >= sizeof line) {
         n = (int)sizeof line - 1;
     }
-    if (!screen_up) {
-        debugPrint("%s", line);
-    }
     if (log_file != INVALID_HANDLE_VALUE) {
         DWORD put = 0;
         (void)WriteFile(log_file, line, (DWORD)n, &put, NULL);
         IO_STATUS_BLOCK io; /* flushed: the run usually ends at the power switch */
         (void)NtFlushBuffersFile(log_file, &io);
+    }
+    if (starting) {
+        ui_startup_add(&startup, line);
+        startup_frame();
+    } else if (!screens_open) {
+        debugPrint("%s", line);
     }
 }
 
@@ -157,23 +166,52 @@ static void close_log(void)
    checkpoints are flushed as they go), so an unfinished install resumes next time. */
 static void to_dashboard(void)
 {
+    starting = false; /* nothing more is drawn */
     out("\nReturning to the dashboard...\n");
     close_log();
-    if (screen_up) {
+    if (screens_open) {
         ui_sdl_close();
     }
     HalReturnToFirmware(HalQuickRebootRoutine);
 }
 
-/* After a startup error on the debug console: waits for the dashboard shortcut. */
-static void halt(void)
+/* One frame of the startup screen. The buttons are read meanwhile, so the dashboard shortcut
+   works while the app starts. */
+static void startup_frame(void)
 {
+    while (pads_ok && ui_sdl_button() != UI_BTN_NONE) {
+    }
+    if (exit_combo()) {
+        to_dashboard();
+    }
+    ui_sdl_begin(ui_col_bg);
+    ui_startup_draw(&screen, &startup, ui_pan_x(SDL_GetTicks(), ui_pan_range(&screen)));
+    ui_sdl_present();
+}
+
+/* The app can't go on: says why, on the startup screen (or on the debug console if the screens
+   never opened), and waits for the dashboard shortcut. */
+static void halt(const char *why)
+{
+    starting = false;
+    out("%s\n", why);
     close_log();
+    if (screens_open) {
+        ui_startup_fail(&startup, why);
+    }
+    int drawn = -1;
     for (;;) {
         while (pads_ok && ui_sdl_button() != UI_BTN_NONE) {
         }
         if (exit_combo()) {
             to_dashboard();
+        }
+        int pan = screens_open ? ui_pan_x(SDL_GetTicks(), ui_pan_range(&screen)) : 0;
+        if (screens_open && pan != drawn) {
+            drawn = pan;
+            ui_sdl_begin(ui_col_bg);
+            ui_startup_draw(&screen, &startup, pan);
+            ui_sdl_present();
         }
         Sleep(PAD_POLL_MS);
     }
@@ -2163,13 +2201,11 @@ static void reload_map(ui_library *lib, game **games, ui_lib_item **items, int *
     ui_lib_item *it = NULL;
     int n = 0;
     if (!build_list(&g, &it, &n)) {
-        out("Out of memory for the list of games\n");
-        halt();
+        halt("Out of memory for the list of games");
     }
     int *s = calloc(n > 0 ? (size_t)n : 1, sizeof *s);
     if (s == NULL) {
-        out("Out of memory for the list of games\n");
-        halt();
+        halt("Out of memory for the list of games");
     }
     ui_library_set_items(lib, it, n, s);
     free(*games);
@@ -2259,8 +2295,7 @@ static void library(game *games, ui_lib_item *items, int count)
     static ui_library lib;
     int *shown = calloc(count > 0 ? (size_t)count : 1, sizeof *shown);
     if (shown == NULL) {
-        out("Out of memory for the list of games\n");
-        halt();
+        halt("Out of memory for the list of games");
     }
     ui_library_open(&lib, items, count, shown);
     ui_library_set_installed(&lib, found_items, found_count);
@@ -2368,20 +2403,33 @@ int main(void)
 {
     InitializeCriticalSection(&view_lock);
     XVideoSetMode(640, 480, 32, REFRESH_DEFAULT);
-    debugPrint("xiso-cartographer %s\n", xc_version_string());
     xc_nx_clock(&clk);
     run_start_ms = now_ms();
     pads_init();
-    debugPrint("Hold LT + RT + Back + Black to return to the dashboard.\n");
+    /* The screens first: from here on, startup is shown on the startup screen. Only if they
+       can't open is the debug console used (ADR 0015 decision 1). */
+    const char *why_not = NULL;
+    if (!ui_sdl_open(&screen, "D:", &why_not)) {
+        debugPrint("xiso-cartographer %s\n", xc_version_string());
+        debugPrint("Hold LT + RT + Back + Black to return to the dashboard.\n");
+        char why[160];
+        snprintf(why, sizeof why, "The screens can't start: %s", why_not);
+        halt(why);
+    }
+    screens_open = true;
+    ui_startup_open(&startup, xc_version_string());
+    starting = true;
+    startup_frame();
     io_buf = malloc(IO_BUF_SIZE);
     recv_buf = malloc(RECV_BUF_SIZE);
-    if (io_buf == NULL || recv_buf == NULL || !xc_nx_mount_e()) {
-        debugPrint("Startup failed (memory or E: drive)\n");
-        halt();
+    if (io_buf == NULL || recv_buf == NULL) {
+        halt("Not enough memory to start");
+    }
+    if (!xc_nx_mount_e()) {
+        halt("The E: drive can't be opened");
     }
     if (!xc_nx_mkdirs(ISO_DIR)) {
-        debugPrint("Could not create " ISO_DIR "\n");
-        halt();
+        halt("Could not create " ISO_DIR);
     }
     open_log();
     out("==== xiso-cartographer %s ====\n", xc_version_string());
@@ -2389,8 +2437,9 @@ int main(void)
     out("Drives: E:%s%s\n", has_f ? ", F:" : "", has_g ? ", G:" : "");
     load_settings();
     if (!xc_nx_mkdirs(settings.install_dir)) {
-        out("Could not create %s\n", settings.install_dir);
-        halt();
+        char why[160];
+        snprintf(why, sizeof why, "Could not create %s", settings.install_dir);
+        halt(why);
     }
     load_credentials();
     load_catalog();
@@ -2412,19 +2461,12 @@ int main(void)
     game *games = NULL;
     ui_lib_item *items = NULL;
     if (!build_list(&games, &items, &count)) {
-        out("Out of memory for the list of games\n");
-        halt();
+        halt("Out of memory for the list of games");
     }
     if (!pads_ok) {
-        out("No controller support (SDL), so nothing can be picked\n");
-        halt();
-    }
-    const char *why_not = NULL;
-    if (!ui_sdl_open(&screen, "D:", &why_not)) {
-        out("The screens can't start: %s\n", why_not);
-        halt();
+        halt("No controller support (SDL), so nothing can be picked");
     }
     out("List: %d game(s). Pick one on the screen; nothing installs until you do.\n", count);
-    screen_up = true;
+    starting = false;             /* the library takes over; out() goes to the log only */
     library(games, items, count); /* returns to the dashboard from there */
 }

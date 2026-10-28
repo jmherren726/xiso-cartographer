@@ -21,6 +21,8 @@ Options considered: SDL2 with our own widgets; SDL2 with Nuklear; pbkit.
 ## Decision
 
 1. **SDL2 and SDL_ttf, as nxdk builds them.** One 640×480 window and one `SDL_Renderer`. Text is drawn with SDL_ttf, and glyphs are cached as textures so a frame doesn't rasterise text again. Nothing draws through the debug console anymore, apart from a fatal startup error.
+
+   *Implemented 2026-10-28:* the screens open first, and a STARTING screen shows what startup logs; a startup that can't go on says why there (STOPPED). The debug console is left for the screens failing to open and for a failed SDL assertion ([ui-style.md](../ui-style.md#startup)).
 2. **Our own small widget set, built for the controller.** It lives in `app/ui/` and has:
    - a focusable list that scrolls and pages, with a highlighted line;
    - text blocks that wrap;

@@ -113,6 +113,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- Startup no longer shows nxdk's debug console (M8, ADR 0015 decision 1, docs/ui-style.md#startup): the screens open first, and a STARTING screen shows the version and the newest lines of what startup logs, with the dashboard shortcut working meanwhile. If startup can't go on, it says why there (STOPPED, CAN'T GO ON). The debug console is left for the screens failing to open and for a failed SDL assertion. Tested on the PC (`test_ui_startup`) and in xemu.
 - `CREDITS.txt` is now the release's credits file: besides the catalog's sources, it gives the FreeType License's credit for nxdk's FreeType 2.4.12, which draws the app's text since M8 (ADR 0015, Consequences), and points to THIRD_PARTY.md for every other component. `test_pipeline` checks the credit.
 - The console's game list draws reliably. nxdk's debug console fits 63 characters per line and clears the whole screen when text passes its last row, so pages with long names wrapped, overflowed and showed only one item, a few, or none. Every line of the list is now cut to fit one row (a cut name ends in `~`), the size sits in its own column before the name, and the highlighted name is shown in full under the list. Found on the first hardware run of the list.
 - README status: what works on the Xbox today, instead of "nothing runs yet".

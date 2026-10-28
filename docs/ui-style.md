@@ -88,6 +88,10 @@ The field shows the end of its text when it's wider, with an `accent` caret afte
 
 Each screen is a plain struct with `*_input` and `*_draw` like the widgets, tested on the PC; `app/main.c` fills it from core. A dialog on a screen draws over the backdrop, saved in the frame it opens.
 
+### Startup
+
+[`startup_view.h`](../app/ui/startup_view.h): the screens open first thing, and until the library opens the title tab says STARTING, one panel shows "xiso-cartographer <version>" and the newest lines of what startup logs (the drives, the install folder, the credentials, the catalog, the network and the map), the newest in `text` and the ones before in `dim`, and the footer says how to return to the dashboard. A frame is drawn for each line, and the buttons are read meanwhile, so LT + RT + Back + Black works while the map loads. If startup can't go on (no memory, no E: drive, a folder that can't be made), the tab says STOPPED and the panel CAN'T GO ON with the reason above those lines; the app then waits for the dashboard shortcut. nxdk's debug console is used only if the screens themselves can't open (the fonts are missing, say), and for a failed SDL assertion.
+
 ### Library
 
 [`library.h`](../app/ui/library.h), in the [layout](#layout) above: the title tab says LIBRARY; the sections; under them SUMMARY, with the number of games listed, installed, and unfinished (failed or stopped in this run, or started in an earlier one); the list of games; the highlighted game's details; and the footer, with a status line (what the last install came to) and the buttons.
