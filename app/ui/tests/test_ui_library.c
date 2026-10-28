@@ -96,8 +96,7 @@ static void test_sections(void)
     }
     TEST_ASSERT_EQUAL_INT(UI_LIB_SETTINGS, lib.section); /* and at the bottom */
     TEST_ASSERT_EQUAL_INT(0, lib.list.cur);              /* the D-pad didn't move the list */
-    (void)ui_library_input(&lib, UI_BTN_UP, 5);
-    (void)ui_library_input(&lib, UI_BTN_UP, 5); /* DOWNLOADS */
+    (void)ui_library_input(&lib, UI_BTN_UP, 5);          /* INSTALLED, with nothing in it */
     (void)ui_library_input(&lib, UI_BTN_A, 5);
     TEST_ASSERT_FALSE(lib.in_sections);
     /* Not GAMES: no list to move, nothing to install. */
@@ -107,7 +106,7 @@ static void test_sections(void)
     TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, lib.asking);
     TEST_ASSERT_EQUAL_INT(UI_LIB_TYPING_NONE, lib.typing_for);
     ui_library_draw(&fake_draw, &lib, 0, NULL);
-    TEST_ASSERT_TRUE(fake_saw("Not here yet"));
+    TEST_ASSERT_TRUE(fake_saw("Nothing installed yet"));
     TEST_ASSERT_FALSE(fake_saw("First game"));
 }
 
@@ -183,7 +182,6 @@ static void test_installed_section(void)
     ui_library_open(&lib, items, 3, shown);
     ui_library_set_installed(&lib, found, 2);
     (void)ui_library_input(&lib, UI_BTN_LEFT, 5);
-    (void)ui_library_input(&lib, UI_BTN_DOWN, 5);
     (void)ui_library_input(&lib, UI_BTN_DOWN, 5);
     TEST_ASSERT_EQUAL_INT(UI_LIB_INSTALLED_GAMES, lib.section);
     (void)ui_library_input(&lib, UI_BTN_RIGHT, 5);
@@ -294,7 +292,7 @@ static void test_search(void)
     (void)ui_library_input(&lib, UI_BTN_DOWN, 5);
     (void)ui_library_input(&lib, UI_BTN_DOWN, 5); /* Racing Three */
     (void)ui_library_input(&lib, UI_BTN_LEFT, 5);
-    (void)ui_library_input(&lib, UI_BTN_DOWN, 5); /* in DOWNLOADS */
+    (void)ui_library_input(&lib, UI_BTN_DOWN, 5); /* in INSTALLED */
     TEST_ASSERT_EQUAL_INT(UI_LIB_NONE, ui_library_input(&lib, UI_BTN_Y, 5));
     TEST_ASSERT_EQUAL_INT(UI_LIB_TYPING_SEARCH, lib.typing_for);
     ui_library_draw(&fake_draw, &lib, 0, NULL);

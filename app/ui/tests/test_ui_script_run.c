@@ -140,8 +140,6 @@ static void test_library_names(void)
     ui_library_input(&lib, UI_BTN_B, 8);
     ui_library_input(&lib, UI_BTN_LEFT, 8); /* to the sections */
     ui_library_input(&lib, UI_BTN_DOWN, 8);
-    see(&lib, "downloads");
-    ui_library_input(&lib, UI_BTN_DOWN, 8);
     see(&lib, "installed");
     ui_library_input(&lib, UI_BTN_DOWN, 8);
     see(&lib, "settings");
