@@ -8,8 +8,7 @@
 
 #define PAD 10
 
-static const char *const section_names[UI_LIB_SECTION_COUNT_] = {"GAMES", "DOWNLOADS", "INSTALLED",
-                                                                 "SETTINGS"};
+static const char *const section_names[UI_LIB_SECTION_COUNT_] = {"GAMES", "INSTALLED", "SETTINGS"};
 
 /* The title-safe area (32, 24, 576 x 432), as docs/ui-style.md#layout. */
 static const ui_rect tab = {32, 24, 240, 46};
@@ -774,11 +773,6 @@ static void draw_list(const ui_draw *d, ui_library *lib)
         }
         return;
     }
-    if (lib->section != UI_LIB_GAMES) {
-        (void)ui_text_wrap(d, UI_FONT_BODY, list_in, ui_col_dim,
-                           "Not here yet: this section comes in a later version.");
-        return;
-    }
     if (lib->count == 0) {
         (void)ui_text_wrap(d, UI_FONT_BODY, list_in, ui_col_dim,
                            "No games. Put a map in E:\\xcat\\map.txt, or images in "
@@ -929,8 +923,6 @@ const char *ui_library_screen(const ui_library *lib)
         break;
     }
     switch (lib->section) {
-    case UI_LIB_DOWNLOADS:
-        return "downloads";
     case UI_LIB_INSTALLED_GAMES:
         return "installed";
     case UI_LIB_SETTINGS:

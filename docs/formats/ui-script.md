@@ -75,7 +75,7 @@ What the app shows, by name. An open keyboard comes first, then an open dialog, 
 
 | Name | Shown |
 |---|---|
-| `games`, `downloads`, `installed`, `settings` | The library's section, its list or its sections highlighted |
+| `games`, `installed`, `settings` | The library's section, its list or its sections highlighted |
 | `folders`, `logins`, `sources` | SETTINGS' pages: Install location, Authentication, Map sources |
 | `keyboard-search`, `keyboard-email`, `keyboard-password`, `keyboard-folder`, `keyboard-source`, `keyboard-title-id` | The keyboard, open for that field |
 | `ask-install`, `ask-exit`, `ask-logout`, `ask-forget`, `ask-remove`, `ask-kind` | The dialog asking before installing, leaving, logging out, removing a login, removing a source, or what kind of source to add |

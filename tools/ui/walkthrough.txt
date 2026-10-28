@@ -41,7 +41,7 @@ expect games
 
 note Installed games
 press left
-press down 2
+press down
 expect installed
 
 note Settings: install location, Authentication, Map sources

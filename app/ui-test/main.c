@@ -37,7 +37,7 @@
 #define PROGRESS_MS 20000u /* the progress bar fills in this long, then starts again */
 #define RESULT_MS 5000u    /* how long the footer shows what a dialog or keyboard returned */
 
-static const char *const sections[] = {"GAMES", "DOWNLOADS", "INSTALLED", "SETTINGS"};
+static const char *const sections[] = {"GAMES", "INSTALLED", "SETTINGS"};
 static const char *const choices[] = {"INSTALL", "DETAILS", "CANCEL"};
 
 /* The title-safe area (32, 24, 576 x 432), split like the library screen. */
@@ -111,7 +111,7 @@ static void draw(const ui_draw *d, int pan, const ui_list *l, uint32_t done, con
 
     ui_panel(d, nav, UI_CHAMFER, ui_col_panel, ui_col_border);
     int lbh = d->line_height(d->ctx, UI_FONT_LABEL);
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < (int)(sizeof sections / sizeof sections[0]); i++) {
         ui_rect item = {nav.x + 8, nav.y + PAD + i * (lbh + 16), nav.w - 16, lbh + 10};
         if (i == 0) {
             ui_panel(d, item, 8, ui_col_highlight, ui_col_highlight_border);

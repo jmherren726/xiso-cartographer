@@ -6,30 +6,14 @@
 
 /* docs/formats/ui-script.md §6: every name ui_library_screen and ui_install_screen give. */
 static const char *const screens[] = {
-    "games",
-    "downloads",
-    "installed",
-    "settings",
-    "folders",
-    "logins",
-    "sources",
-    "keyboard-search",
-    "keyboard-email",
-    "keyboard-password",
-    "keyboard-folder",
-    "keyboard-source",
-    "keyboard-title-id",
-    "ask-install",
-    "ask-exit",
-    "ask-logout",
-    "ask-forget",
-    "ask-remove",
-    "ask-kind",
-    "message",
-    "installing",
-    "ask-stop",
-    "install-ok",
-    "install-failed",
+    "games",           "installed",       "settings",
+    "folders",         "logins",          "sources",
+    "keyboard-search", "keyboard-email",  "keyboard-password",
+    "keyboard-folder", "keyboard-source", "keyboard-title-id",
+    "ask-install",     "ask-exit",        "ask-logout",
+    "ask-forget",      "ask-remove",      "ask-kind",
+    "message",         "installing",      "ask-stop",
+    "install-ok",      "install-failed",
 };
 
 bool ui_script_screen_known(const char *name)

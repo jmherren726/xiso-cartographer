@@ -8,8 +8,8 @@
  * leaving for the dashboard. GAMES lists what can be installed, INSTALLED what's in the install
  * folder, and SETTINGS where games install (docs/formats/settings.md), Authentication (the
  * servers the map uses and their logins, with the archive.org account: log in and out, ADR
- * 0010) and Map sources (the map's own lines, added and removed: map.md §9); DOWNLOADS says it
- * isn't here yet. Y searches GAMES with the on-screen
+ * 0010) and Map sources (the map's own lines, added and removed: map.md §9). Y searches GAMES
+ * with the on-screen
  * keyboard (keyboard.h), which also takes the email and password. Plain C over ui_draw like the
  * widgets, tested on the PC (test_ui_library).
  */
@@ -44,7 +44,6 @@ typedef struct ui_lib_item {
 
 typedef enum ui_lib_section {
     UI_LIB_GAMES,
-    UI_LIB_DOWNLOADS,
     UI_LIB_INSTALLED_GAMES,
     UI_LIB_SETTINGS,
     UI_LIB_SECTION_COUNT_
