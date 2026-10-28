@@ -1220,8 +1220,12 @@ static void fail(xc_err err)
     if (err == XC_ERR_CANCELLED) {
         explain("Stopped. What's written is kept: install the game again to carry on from "
                 "there.");
-    } else {
-        explain("%s.", xc_err_str(err));
+        return;
+    }
+    explain("%s.", xc_err_str(err));
+    if (err != XC_ERR_HTTP_DENIED) { /* refused() says whose login, and what to do */
+        out("  What to do: %s\n", xc_err_action(err));
+        explain("%s", xc_err_action(err));
     }
 }
 
@@ -1255,6 +1259,9 @@ static void refused(void)
     }
     if (why_login) {
         explain("Log in again, and the install carries on where it stopped.");
+    } else {
+        out("  What to do: %s\n", xc_err_action(XC_ERR_HTTP_DENIED));
+        explain("%s", xc_err_action(XC_ERR_HTTP_DENIED));
     }
 }
 
@@ -1804,6 +1811,8 @@ static bool run_install(game *g, ui_lib_item *item)
         ui_install_status(&view, "%s", "");
         if (!ok && why_login) {
             ui_install_end_login(&view, why);
+        } else if (!ok && !xc_err_retry(why_err)) {
+            ui_install_end_back(&view, why); /* ADR 0015 decision 5: RETRY only where it helps */
         } else {
             ui_install_end(&view, ok, why);
         }

@@ -64,6 +64,10 @@ void ui_install_status(ui_install_view *v, const char *fmt, ...)
    OK, or RETRY and BACK. */
 void ui_install_end(ui_install_view *v, bool ok, const char *message);
 
+/* Ends a failed install that trying again can't help (xc_err_retry): NOT INSTALLED with
+   `message` (copied), and BACK alone. */
+void ui_install_end_back(ui_install_view *v, const char *message);
+
 /* Ends a failed install whose server refused the login: NOT INSTALLED with `message` (copied),
    and LOG IN and BACK. LOG IN returns UI_INST_LOGIN. */
 void ui_install_end_login(ui_install_view *v, const char *message);

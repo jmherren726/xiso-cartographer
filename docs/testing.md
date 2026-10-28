@@ -382,6 +382,19 @@ SETTINGS' Map sources page: adding and removing the map's lines on the console (
 
 Afterwards, put the kept `map.txt` back over FTP.
 
+## M8: error messages
+
+Every failed install says what went wrong and what to do, and offers RETRY only when it can help ([ADR 0015](adr/0015-ui-sdl2-own-widgets.md) decision 5, [ui-style.md](ui-style.md#install)). Every code's sentence is checked on the PC (`test_bytes`); these steps check that they reach the screen. Copy `app/bin/` as above. Keep a copy of `E:\xcat\map.txt` (FTP), and add the entries below with Map sources (SETTINGS) or by hand.
+
+| Step | Where | How | Pass |
+|---|---|---|---|
+| 1 | Hardware, LAN | Install a game from a PC on the LAN, and pull the network cable part way | After the retries run out (or B, STOP): NOT INSTALLED with the network error and "Check the network, then try again: what's written is kept", and **RETRY** / BACK. Plug the cable back in, RETRY: it carries on |
+| 2 | Hardware | An image entry whose address is right but the file isn't on the server (`00000001 = http://<your PC>/missing.iso`); install it | NOT INSTALLED: "The file wasn't found on the server", "Check the address in the map: the server doesn't have that file", HTTP 404, and **BACK alone** (no RETRY) |
+| 3 | Hardware | Put a file that isn't an Xbox image (any small file renamed `test.iso`) in `E:\xcat\isos`; launch; install it | NOT INSTALLED: "Not an Xbox disc image", "Use an Xbox disc image: a trimmed .xiso.iso or a full-disc .iso", and BACK alone. Delete the file afterwards |
+| 4 | Hardware | In each case, open `E:\xcat\install.log` | The log has the error, a "What to do:" line with the same sentence, and the details |
+
+Afterwards, put the kept `map.txt` back.
+
 ## FATX probe (M2)
 
 No authoritative list of FATX naming rules exists, and a game's files can't be renamed on install, because the game opens them by name. So the rules in `core/src/fatx.c` ([fatx-names.md](formats/fatx-names.md)) come from the console's own kernel, measured by `app/fatx-probe`.

@@ -42,6 +42,12 @@ void ui_install_end(ui_install_view *v, bool ok, const char *message)
     v->backdrop = false;
 }
 
+void ui_install_end_back(ui_install_view *v, const char *message)
+{
+    ui_install_end(v, false, message);
+    v->dialog = (ui_dialog){"NOT INSTALLED", v->message, {"BACK", NULL, NULL}, 0, 0};
+}
+
 void ui_install_end_login(ui_install_view *v, const char *message)
 {
     ui_install_end(v, false, message);
