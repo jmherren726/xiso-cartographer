@@ -76,6 +76,10 @@ void ui_install_end_login(ui_install_view *v, const char *message);
    if the user confirms; after the end, the result dialog's choice. */
 ui_inst_action ui_install_input(ui_install_view *v, ui_button b);
 
+/* The name of what the screen shows, for the UI script (docs/formats/ui-script.md §6):
+   "installing", "ask-stop", "install-ok" or "install-failed". */
+const char *ui_install_screen(const ui_install_view *v);
+
 /* Draws the screen with the background at pan; over an open dialog, the screen behind stands
    still (ui_backdrop). */
 void ui_install_draw(const ui_draw *d, ui_install_view *v, int pan);

@@ -27,6 +27,7 @@ Newest first. "Build" is the commit or CI artifact tested.
 
 | Date | Milestone | Build | Where | Result | Notes |
 |---|---|---|---|---|---|
+| 2026-10-28 | M8 scripted walkthrough in xemu | branch `feat/ui-script` | xemu, no map (the bundled test image), run by the agent | ✅ xemu | Step 1 of "M8: scripted walkthrough": `app/xiso-cartographer-walkthrough.iso` played the whole walkthrough untouched in about 25 s and ended with "Script passed: 63 commands, 19 screens checked" (read from the guest's framebuffer over QMP). On the way: the search keyboard typing `sma…`, the test image installed, DOWNLOADS, the LEAVE question and SETTINGS' pages. It wrote only what the walkthrough does: the test image's install and `install.log`. With "M8: error messages", the exit test's walkthrough and error messages are met. |
 | 2026-10-28 | M8 error messages on hardware | `main` at `2ba6618` (#96) | Hardware: main console, LAN (owner) | ✅ Hardware | Every step of "M8: error messages" (owner: "all tests pass"): a pulled cable ends NOT INSTALLED with the network error, its action and RETRY, and RETRY carries on; a missing file (HTTP 404) and a file that isn't an Xbox image end with their action and BACK alone; `install.log` has a "What to do:" line for each. With `test_bytes`, the M8 exit test's "every error has a message and an action" is met. Not run in xemu (a failing install would have written the xemu disk's `map.txt`). |
 | 2026-10-27 | M8 map sources on hardware | `main` at `b865b13` (#94) | Hardware: main console, internet (owner) | ✅ Hardware | Every step of "M8: map sources" (owner: "tested all cases and worked"): the three SETTINGS lines and their details (Authentication explains the page); the map's lines listed; adding an archive.org item, an image and a map, with invalid ones refused (NOT ADDED) and the typed text kept; removing a line; the map and game list loaded again after each change, with every other line kept; a new `map.txt` when there was none. With "M8: install location" and "M8: authentication", the settings part of M8 is done. |
 | 2026-10-27 | M8 map sources in xemu | branch `feat/map-sources` | xemu, no map | ✅ xemu | Steps 1 and 3 of "M8: map sources", with timed presses, without adding anything (that would write the xemu disk's `map.txt`): SETTINGS lists three lines, each with details saying what it's for; Map sources lists only "Add source"; the ADD SOURCE question shows ARCHIVE.ORG, MAP and IMAGE, and its keyboard opens and closes. Adding, removing and reloading are covered by `test_map_edit`, `test_ui_library` and `fuzz_map_edit` (34.7M runs); steps 2 and 4–8 need hardware. |
@@ -396,6 +397,17 @@ Every failed install says what went wrong and what to do, and offers RETRY only 
 | 4 | Hardware | In each case, open `E:\xcat\install.log` | The log has the error, a "What to do:" line with the same sentence, and the details |
 
 Afterwards, put the kept `map.txt` back.
+
+## M8: scripted walkthrough
+
+The M8 exit test's walkthrough ([HANDOFF §4.1](HANDOFF.md#41-roadmap)): the app plays [`tools/ui/walkthrough.txt`](../tools/ui/walkthrough.txt) ([ui-script.md](formats/ui-script.md), [ADR 0015](adr/0015-ui-sdl2-own-widgets.md) decision 6) and checks each screen it leads to. It browses GAMES, types a search on the keyboard, installs the bundled test image (its INSTALL question, the install screen and INSTALLED), lists every game again, opens INSTALLED and each of SETTINGS' pages (Install location, Authentication, Map sources and its ADD SOURCE question), and asks to leave and stays. It changes no setting, login or source. On the PC, `test_ui_script_run` checks that the walkthrough reads and names only screens the app has, and that the library and install screens give those names.
+
+| Step | Where | How | Pass |
+|---|---|---|---|
+| 1 | xemu | `make docker-xbe`; **Load Disc** → `app/xiso-cartographer-walkthrough.iso`; wait about a minute without touching the controller | The screens move by themselves; the footer counts the commands, then says `Script passed: 63 commands, 19 screens checked`. `install.log` has a `Screen:` line for each screen and a `Script:` line for each check |
+| 2 | Hardware (optional) | Copy `app/bin/` as usual, plus `tools/ui/walkthrough.txt` as `ui-script.txt` next to `default.xbe`, and `app/bin/samples/small.iso` to `E:\xcat\isos\` if it isn't there; launch | As step 1. Then delete `ui-script.txt` (and the test image's folder in the install folder, if wanted) |
+
+A failed check stops the script there, and the footer says which line, the screen expected and the one shown (`Script FAILED at line …`). The controller works throughout, so the app can be left with Back or LT + RT + Back + Black either way.
 
 ## FATX probe (M2)
 

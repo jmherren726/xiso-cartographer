@@ -238,6 +238,11 @@ int ui_library_rows(const ui_draw *d);
    A on a line asks before UI_LIB_REMOVE_SOURCE. In a dialog or the keyboard, their buttons. */
 ui_lib_action ui_library_input(ui_library *lib, ui_button b, int rows);
 
+/* The name of what the screen shows, for the UI script (docs/formats/ui-script.md §6): an open
+   keyboard ("keyboard-search"), else an open dialog ("ask-install", "message"), else the section
+   or SETTINGS' page ("games", "folders"). */
+const char *ui_library_screen(const ui_library *lib);
+
 /* Draws the screen with the background at pan (ui_pan_x), and `status` (may be NULL) in the
    footer. Under an open dialog or the keyboard, the screen behind stands still (ui_backdrop). */
 void ui_library_draw(const ui_draw *d, ui_library *lib, int pan, const char *status);

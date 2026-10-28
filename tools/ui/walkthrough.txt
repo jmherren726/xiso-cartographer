@@ -1,0 +1,76 @@
+# xcat-ui-script v1
+#
+# The M8 exit test's scripted walkthrough (docs/testing.md, "M8: scripted walkthrough"):
+# browse, search, the details, install, the progress, the installed games and SETTINGS, with
+# the bundled test image, on a console or xemu drive with no map. Format:
+# docs/formats/ui-script.md. `make walkthrough` puts it on a disc image as ui-script.txt.
+
+note Browse
+expect games 60000
+press down
+press up
+
+note Search for the test image: s, m, a, l, l on the keyboard, from q
+press y
+expect keyboard-search
+press down
+press right
+press a
+press down
+press right 5
+press a
+press up
+press left 6
+press a
+press right 8
+press a 2
+press start
+expect games
+
+note Install it: A asks first, then the install screen, then the result
+press a
+expect ask-install
+press a
+# No "expect installing": the test image installs in well under a second.
+expect install-ok 600000
+press a
+expect games
+note List every game again
+press b
+expect games
+
+note Installed games
+press left
+press down 2
+expect installed
+
+note Settings: install location, Authentication, Map sources
+press down
+expect settings
+press right
+press a
+expect folders
+press b
+expect settings
+press down
+press a
+expect logins
+press b
+expect settings
+press down
+press a
+expect sources
+press a
+expect ask-kind
+press b
+expect sources
+press b
+expect settings
+
+note Leave? Stay.
+press back
+expect ask-exit
+press right
+press a
+expect settings
+note Done

@@ -34,6 +34,7 @@ SRCS = $(CURDIR)/main.c \
        $(CORE_DIR)/src/settings.c \
        $(CORE_DIR)/src/source.c \
        $(CORE_DIR)/src/text.c \
+       $(CORE_DIR)/src/ui_script.c \
        $(CORE_DIR)/src/url.c \
        $(CORE_DIR)/src/version.c \
        $(CORE_DIR)/src/xbe.c \
@@ -50,10 +51,15 @@ include $(CURDIR)/tls.mk
 # Zip archives (ADR 0009): core/src/install.c installs their images.
 include $(CURDIR)/zip.mk
 
-# The screens (M8, ADR 0015): app/ui's sources, SDL2 and SDL_ttf.
+# The screens (M8, ADR 0015): app/ui's sources, SDL2 and SDL_ttf; and the UI script's player,
+# which only this XBE has (it needs core/src/ui_script.c).
 include $(ROOT_DIR)/app/ui/ui.mk
+SRCS += $(ROOT_DIR)/app/ui/script.c
 
 NXDK_DIR ?= $(ROOT_DIR)/third_party/nxdk
+
+# The walkthrough's disc (below) goes with `make clean` too; set before nxdk's Makefile reads it.
+CLEANRULES += clean-walkthrough
 
 # TCP tuning shared by every XBE (lwIP options).
 include $(ROOT_DIR)/app/lwip.mk
@@ -74,3 +80,21 @@ $(SAMPLE_ISO): $(ROOT_DIR)/tools/fixtures/fixtures.py $(ROOT_DIR)/tools/fixtures
 
 all: $(SAMPLE_ISO)
 $(GEN_XISO): $(SAMPLE_ISO)
+
+# The M8 exit test's scripted walkthrough (docs/testing.md): the same disc with
+# tools/ui/walkthrough.txt next to the XBE as ui-script.txt, which the app plays
+# (docs/formats/ui-script.md). For xemu and testing only; never shipped.
+WALK_XISO = $(XBE_TITLE)-walkthrough.iso
+WALK_DIR = $(CURDIR)/walkthrough-bin
+$(WALK_XISO): $(GEN_XISO) $(ROOT_DIR)/tools/ui/walkthrough.txt
+	@echo "[ XISO     ] $@"
+	$(VE)rm -rf $(WALK_DIR) && cp -r $(OUTPUT_DIR) $(WALK_DIR)
+	$(VE)cp $(ROOT_DIR)/tools/ui/walkthrough.txt $(WALK_DIR)/ui-script.txt
+	$(VE)$(EXTRACT_XISO) -c $(WALK_DIR) $(XISO_FLAGS) "$@" $(QUIET)
+	$(VE)rm -rf $(WALK_DIR)
+
+all: $(WALK_XISO)
+
+.PHONY: clean-walkthrough
+clean-walkthrough:
+	$(VE)rm -rf $(WALK_XISO) $(WALK_DIR)

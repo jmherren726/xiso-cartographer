@@ -120,7 +120,7 @@ jobs:
         run: make docker-xbe
       - name: Check output
         run: |
-          ls -l app/bin/default.xbe app/xiso-cartographer.iso
+          ls -l app/bin/default.xbe app/xiso-cartographer.iso app/xiso-cartographer-walkthrough.iso
           ls -l app/fatx-probe/bin/default.xbe app/fatx-probe/xcat-fatx-probe.iso
           ls -l app/net-test/bin/default.xbe app/net-test/xcat-net-test.iso
           ls -l app/ui-test/bin/default.xbe app/ui-test/xcat-ui-test.iso app/ui-test/bin/fonts/*.ttf
@@ -137,6 +137,7 @@ jobs:
           path: |
             app/bin/default.xbe
             app/xiso-cartographer.iso
+            app/xiso-cartographer-walkthrough.iso
             app/fatx-probe/bin/default.xbe
             app/fatx-probe/xcat-fatx-probe.iso
             app/net-test/bin/default.xbe

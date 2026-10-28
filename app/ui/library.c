@@ -892,6 +892,57 @@ static void draw_screen(const ui_draw *d, ui_library *lib, int pan, const char *
                       hints(lib));
 }
 
+const char *ui_library_screen(const ui_library *lib)
+{
+    switch (lib->typing_for) {
+    case UI_LIB_TYPING_SEARCH:
+        return "keyboard-search";
+    case UI_LIB_TYPING_EMAIL:
+        return "keyboard-email";
+    case UI_LIB_TYPING_PASSWORD:
+        return "keyboard-password";
+    case UI_LIB_TYPING_FOLDER:
+        return "keyboard-folder";
+    case UI_LIB_TYPING_SOURCE:
+        return "keyboard-source";
+    case UI_LIB_TYPING_TITLE_ID:
+        return "keyboard-title-id";
+    case UI_LIB_TYPING_NONE:
+        break;
+    }
+    switch (lib->asking) {
+    case UI_LIB_INSTALL:
+        return "ask-install";
+    case UI_LIB_EXIT:
+        return "ask-exit";
+    case UI_LIB_LOGOUT:
+        return "ask-logout";
+    case UI_LIB_FORGET:
+        return "ask-forget";
+    case UI_LIB_REMOVE_SOURCE:
+        return "ask-remove";
+    case UI_LIB_SOURCE_KIND:
+        return "ask-kind";
+    case UI_LIB_TELL:
+        return "message";
+    default:
+        break;
+    }
+    switch (lib->section) {
+    case UI_LIB_DOWNLOADS:
+        return "downloads";
+    case UI_LIB_INSTALLED_GAMES:
+        return "installed";
+    case UI_LIB_SETTINGS:
+        return lib->page == UI_LIB_PAGE_FOLDERS   ? "folders"
+               : lib->page == UI_LIB_PAGE_LOGINS  ? "logins"
+               : lib->page == UI_LIB_PAGE_SOURCES ? "sources"
+                                                  : "settings";
+    default:
+        return "games";
+    }
+}
+
 void ui_library_draw(const ui_draw *d, ui_library *lib, int pan, const char *status)
 {
     bool typing = lib->typing_for != UI_LIB_TYPING_NONE;

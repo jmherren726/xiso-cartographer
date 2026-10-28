@@ -1,0 +1,8 @@
+# xcat-ui-script v1
+expect games
+press down 3
+press a
+expect ask-install
+wait 500
+note Install
+expect install-ok 600000
