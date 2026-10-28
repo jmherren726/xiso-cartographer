@@ -43,8 +43,11 @@ bool ui_list_input(ui_list *l, ui_button b, int rows);
 typedef const char *ui_list_line(void *ctx, int i);
 
 /* Draws the lines shown inside r (the inside of a panel), cut with an ellipsis if they're too
-   wide, and a scroll bar at r's right edge when not all lines fit. */
-void ui_list_draw(const ui_draw *d, const ui_list *l, ui_rect r, ui_list_line *line, void *ctx);
+   wide, and a scroll bar at r's right edge when not all lines fit. The highlighted line is in
+   bold in a small panel: bright, or dim (ui_col_idle, ui_col_idle_border, text in ui_col_dim)
+   when `idle`, while the buttons move something else. */
+void ui_list_draw(const ui_draw *d, const ui_list *l, ui_rect r, ui_list_line *line, void *ctx,
+                  bool idle);
 
 /* ---- Progress bar. */
 

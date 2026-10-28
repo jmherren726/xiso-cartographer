@@ -129,7 +129,7 @@ static void draw(const ui_draw *d, int pan, const ui_list *l, uint32_t done, con
                 done, PROGRESS_MS, pct);
 
     ui_panel(d, list, UI_CHAMFER, ui_col_panel, ui_col_border);
-    ui_list_draw(d, l, list_in, line_text, NULL);
+    ui_list_draw(d, l, list_in, line_text, NULL, false);
 
     draw_detail(d, l->cur);
 

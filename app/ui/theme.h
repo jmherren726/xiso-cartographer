@@ -31,6 +31,8 @@ extern const ui_color ui_col_panel;            /* panel fill, translucent */
 extern const ui_color ui_col_border;           /* panel border */
 extern const ui_color ui_col_highlight;        /* the selected line's fill */
 extern const ui_color ui_col_highlight_border; /* the selected line's border */
+extern const ui_color ui_col_idle;             /* the selected line's fill, its list idle */
+extern const ui_color ui_col_idle_border;      /* and its border */
 extern const ui_color ui_col_shade;            /* over the screen behind a dialog or keyboard */
 
 /* How far the background is panned at t_ms, in 0..range pixels: there and back, each way

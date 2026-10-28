@@ -12,6 +12,8 @@ const ui_color ui_col_panel = {6, 22, 8, 210};
 const ui_color ui_col_border = {80, 190, 40, 255};
 const ui_color ui_col_highlight = {40, 110, 20, 235};
 const ui_color ui_col_highlight_border = {160, 255, 70, 255};
+const ui_color ui_col_idle = {16, 46, 12, 225};
+const ui_color ui_col_idle_border = {48, 104, 30, 255};
 const ui_color ui_col_shade = {0, 0, 0, 150};
 
 /* Where ui_background took the background from, for the panels drawn after it; -1 while

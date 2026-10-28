@@ -24,6 +24,8 @@ Owner decisions of 2026-10-21:
 | `border` | 80, 190, 40 | Panel borders |
 | `highlight` | 40, 110, 20, alpha 235 | The selected line or section |
 | `highlight_border` | 160, 255, 70 | Its border |
+| `idle` | 16, 46, 12, alpha 225 | The selected line of a list the buttons aren't moving |
+| `idle_border` | 48, 104, 30 | Its border |
 | `shade` | 0, 0, 0, alpha 150 | Over the screen behind a dialog or the keyboard |
 
 ## Fonts
@@ -64,7 +66,7 @@ The widgets of ADR 0015 decisions 2 and 3, in [`app/ui/widgets.h`](../app/ui/wid
 
 **Buttons** ([`input.h`](../app/ui/input.h)). A chooses, B goes back, Y opens search and Back leaves the app, on every screen. A held D-pad direction presses again after 400 ms, then every 80 ms; no other button repeats, so holding A never chooses twice. The triggers count as pressed past half way and are ready again below a quarter. `input_sdl.c` reads every plugged-in controller.
 
-**List.** One line per item in `UI_FONT_BODY`, 6 pixels apart, cut with "…" when too wide; the highlighted line is a small panel (`highlight`, chamfer 6) in `UI_FONT_BOLD`. Up and Down move a line, LT and RT a page, and the highlight stops at the ends. When not all lines fit, a 4-pixel scroll bar runs down the right edge: the track in `highlight`, the thumb in `highlight_border`.
+**List.** One line per item in `UI_FONT_BODY`, 6 pixels apart, cut with "…" when too wide; the highlighted line is a small panel (`highlight`, chamfer 6) in `UI_FONT_BOLD`. While the buttons move something else (`ui_list_draw`'s `idle`: in the library, while Left has moved them to the sections), the line stays marked but dim: `idle` / `idle_border`, its text in `dim`, so only one thing on the screen is bright. Up and Down move a line, LT and RT a page, and the highlight stops at the ends. When not all lines fit, a 4-pixel scroll bar runs down the right edge: the track in `highlight`, the thumb in `highlight_border`.
 
 **Progress bar.** A small panel (chamfer 6) filled in `highlight` from the left, with its label (say "48 %") centred on it in `UI_FONT_BOLD`. `ui_percent` rounds down, so it shows 100 % only once the last byte is in.
 
