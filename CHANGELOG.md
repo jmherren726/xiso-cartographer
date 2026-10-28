@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-28
+
+The first beta (M9): the on-box installer with its screens, settings, login and catalog, from M0 to M9.
+
 ### Added
 
 - Releases (M9, ADR 0017, docs/release.md): a `v*.*.*` tag makes CI build the XBE and the release zip and create a draft GitHub release, which the owner completes with `catalog.bin` and `CREDITS.txt` and publishes. The zip (`tools/release/package.py`) holds `xiso-cartographer\` with the XBE, its fonts and images, a README, the MIT licence, and every third-party licence the XBE needs (`licenses\`, `THIRD_PARTY.txt`, FreeType's credit); not the test image. It's reproducible, refuses a tag that doesn't match `version.h` or a missing licence, and is packed on every PR as part of the `xbe` artifact. Tested on the PC (`release_package`).
