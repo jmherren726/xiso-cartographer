@@ -26,6 +26,7 @@ add_library(xcat
   src/sntp.c
   src/text.c
   src/tls.c
+  src/ui_script.c
   src/url.c
   src/version.c
   src/xbe.c

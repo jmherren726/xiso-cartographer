@@ -55,6 +55,14 @@ void ui_install_end_login(ui_install_view *v, const char *message)
     v->login = true;
 }
 
+const char *ui_install_screen(const ui_install_view *v)
+{
+    if (v->ended) {
+        return strcmp(v->dialog.title, "INSTALLED") == 0 ? "install-ok" : "install-failed";
+    }
+    return v->stopping ? "ask-stop" : "installing";
+}
+
 ui_inst_action ui_install_input(ui_install_view *v, ui_button b)
 {
     if (v->ended) {

@@ -91,6 +91,8 @@ const char *xc_err_str(xc_err err)
         return "The catalog file is damaged or invalid";
     case XC_ERR_SETTINGS:
         return "The settings file is invalid";
+    case XC_ERR_UI_SCRIPT:
+        return "The UI script is invalid";
     case XC_ERR_COUNT_:
         break;
     }
@@ -183,6 +185,8 @@ const char *xc_err_action(xc_err err)
         return "Delete E:\\Apps\\xcat\\catalog.bin, or replace it with the release's.";
     case XC_ERR_SETTINGS:
         return "Fix or delete E:\\Apps\\xcat\\settings.";
+    case XC_ERR_UI_SCRIPT:
+        return "Fix the line the log names in ui-script.txt, or delete the file.";
     case XC_ERR_COUNT_:
         break;
     }

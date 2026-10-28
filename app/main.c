@@ -25,7 +25,8 @@
  * default, kept in E:\Apps\xcat\settings (docs/formats/settings.md, ADR 0016); it logs in to
  * archive.org with an email and password typed on the console, keeping only the session (ADR
  * 0010, docs/formats/login.md), and logs out. Every message is in the log, never a password or
- * a session.
+ * a session. A UI script next to the XBE (D:\ui-script.txt, docs/formats/ui-script.md) presses
+ * the buttons for the scripted walkthrough, alongside the controller.
  */
 #include <SDL.h>
 #include <hal/debug.h>
@@ -41,6 +42,7 @@
 #include "input_sdl.h"
 #include "install_view.h"
 #include "library.h"
+#include "script.h"
 #include "theme.h"
 #include "xcat/catalog.h"
 #include "xcat/credentials.h"
@@ -52,6 +54,7 @@
 #include "xcat/map_edit.h"
 #include "xcat/nxdk.h"
 #include "xcat/settings.h"
+#include "xcat/ui_script.h"
 #include "xcat/version.h"
 #include "xcat/zip.h"
 
@@ -64,6 +67,7 @@
 #define CATALOG_FILE "E:\\Apps\\xcat\\catalog.bin"
 #define SETTINGS_FILE APPS_DIR "\\settings"
 #define SAMPLE_DIR "D:\\samples"
+#define SCRIPT_FILE "D:\\ui-script.txt" /* next to the XBE (docs/formats/ui-script.md §2) */
 #define IO_BUF_SIZE ((size_t)1024 * 1024)
 #define RECV_BUF_SIZE ((size_t)256 * 1024)
 #define CLUSTER                                                                                    \
@@ -175,6 +179,34 @@ static void halt(void)
     }
 }
 
+/* --- the UI script: presses for the scripted walkthrough (ADR 0015 decision 6) ------------ */
+
+static xc_ui_script *script_data; /* D:\ui-script.txt, if it's there and valid */
+static ui_script player;          /* UI_SCRIPT_OFF without one */
+static char script_problem[320];  /* why D:\ui-script.txt isn't played, for the library */
+static char last_screen[XC_UI_SCRIPT_SCREEN_MAX + 1];
+
+/* The next press: the controller's, else the script's. `screen` is what the screen shows
+   (ui_library_screen, ui_install_screen): an expect waits for it, and each new one is logged
+   while the script runs. */
+static ui_button next_button(const char *screen)
+{
+    ui_button b = ui_sdl_button();
+    if (b != UI_BTN_NONE || player.state != UI_SCRIPT_RUNNING) {
+        return b;
+    }
+    if (strcmp(screen, last_screen) != 0) {
+        snprintf(last_screen, sizeof last_screen, "%s", screen);
+        out("Screen: %s\n", screen);
+    }
+    char log[200];
+    b = ui_script_next(&player, SDL_GetTicks(), screen, log, sizeof log);
+    if (log[0] != '\0') {
+        out("%s\n", log);
+    }
+    return b;
+}
+
 /* "12.3" from tenths: PDCLib's printf has no floating point. */
 static void tenths(char *buf, size_t size, uint64_t t)
 {
@@ -215,7 +247,7 @@ static void install_look(void)
 {
     EnterCriticalSection(&view_lock);
     ui_button b;
-    while ((b = ui_sdl_button()) != UI_BTN_NONE) {
+    while ((b = next_button(ui_install_screen(&view))) != UI_BTN_NONE) {
         view_dirty = true;
         if (ui_install_input(&view, b) == UI_INST_STOP) {
             stop_asked = true;
@@ -684,6 +716,45 @@ static void load_settings(void)
         xc_settings_default(&settings);
     }
     out("Games install to %s\n", settings.install_dir);
+}
+
+/* Reads D:\ui-script.txt (ui-script.md §2): without one, nothing is played. One that can't be
+   played is shown in the library, and the controller alone works, as without one. */
+static void load_script(void)
+{
+    if (!xc_nx_exists(SCRIPT_FILE)) {
+        return;
+    }
+    char *data = NULL;
+    size_t len = 0;
+    xc_ui_script_error serr;
+    memset(&serr, 0, sizeof serr);
+    script_data = malloc(sizeof *script_data);
+    xc_err err = script_data != NULL ? read_local(SCRIPT_FILE, XC_UI_SCRIPT_MAX_FILE, &data, &len)
+                                     : XC_ERR_NOMEM;
+    if (err == XC_OK) {
+        err = xc_ui_script_parse(data, len, script_data, &serr);
+    }
+    free(data);
+    char why[160] = "";
+    if (err == XC_ERR_UI_SCRIPT) {
+        snprintf(why, sizeof why, "line %u: %s", (unsigned)serr.line, serr.message);
+    } else if (err != XC_OK) {
+        snprintf(why, sizeof why, "%s",
+                 err == XC_ERR_LIMIT ? "larger than 64 KiB" : xc_err_str(err));
+    } else {
+        const char *bad = ui_script_check(script_data, why, sizeof why);
+        if (bad == NULL) {
+            out("UI script %s: %u commands; the controller works too\n", SCRIPT_FILE,
+                (unsigned)script_data->count);
+            return;
+        }
+    }
+    free(script_data);
+    script_data = NULL;
+    out("UI script %s not played: %s\n", SCRIPT_FILE, why);
+    snprintf(script_problem, sizeof script_problem, "%s isn't played: %s. %s", SCRIPT_FILE, why,
+             xc_err_action(XC_ERR_UI_SCRIPT));
 }
 
 /* Makes `dir` the install folder (settings.md §6): checks it, makes it, and writes it into
@@ -1823,7 +1894,8 @@ static bool run_install(game *g, ui_lib_item *item)
                 to_dashboard();
             }
             ui_button b;
-            while (a == UI_INST_NONE && (b = ui_sdl_button()) != UI_BTN_NONE) {
+            while (a == UI_INST_NONE &&
+                   (b = next_button(ui_install_screen(&view))) != UI_BTN_NONE) {
                 a = ui_install_input(&view, b);
                 dirty = true;
             }
@@ -2198,6 +2270,13 @@ static void library(game *games, ui_lib_item *items, int count)
     if (settings_problem[0] != '\0') {
         ui_library_tell(&lib, "SETTINGS", settings_problem);
     }
+    if (script_problem[0] != '\0') {
+        ui_library_tell(&lib, "UI SCRIPT", script_problem);
+    }
+    if (script_data != NULL) {
+        ui_script_start(&player, script_data);
+    }
+    char drawn[sizeof player.status] = ""; /* the footer last drawn */
     int rows = ui_library_rows(&screen);
     int range = ui_pan_range(&screen);
     char status[160];
@@ -2210,7 +2289,7 @@ static void library(game *games, ui_lib_item *items, int count)
             to_dashboard();
         }
         ui_button b;
-        while ((b = ui_sdl_button()) != UI_BTN_NONE) {
+        while ((b = next_button(ui_library_screen(&lib))) != UI_BTN_NONE) {
             dirty = true;
             ui_lib_action a = ui_library_input(&lib, b, rows);
             int install_now = -1;
@@ -2268,9 +2347,15 @@ static void library(game *games, ui_lib_item *items, int count)
             pan_now = pan;
             dirty = true;
         }
+        /* While a script plays, the footer says where it is, then how it ended. */
+        const char *footer = player.state != UI_SCRIPT_OFF ? player.status : status;
+        if (strcmp(footer, drawn) != 0) {
+            snprintf(drawn, sizeof drawn, "%s", footer);
+            dirty = true;
+        }
         if (dirty) {
             ui_sdl_begin(ui_col_bg);
-            ui_library_draw(&screen, &lib, pan_now, status);
+            ui_library_draw(&screen, &lib, pan_now, footer);
             ui_sdl_present();
             dirty = false;
         } else {
@@ -2309,6 +2394,7 @@ int main(void)
     }
     load_credentials();
     load_catalog();
+    load_script();
 
     have_map = load_map(&map);
     local_count = list_local(local_files);
