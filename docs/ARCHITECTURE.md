@@ -49,7 +49,7 @@ Status: ✅ exists · 🔜 next milestone · ⏳ later.
 | Module | Responsibility | Milestone | Status |
 |---|---|---|---|
 | `version` | Library version (`xc_version_string`, `xc_version_number`) | M0 | ✅ |
-| `error` | `xc_err` result codes and user-readable messages (`xcat/error.h`) | M1 | ✅ |
+| `error` | `xc_err` result codes, user-readable messages, and for each what the user can do and whether retrying helps (`xcat/error.h`, ADR 0015 decision 5) | M1; actions M8 | ✅ |
 | `source` | `xc_source` random-access byte source + in-memory source (`xcat/source.h`) | M1 | ✅ |
 | `crc32` | CRC-32 (zip/zlib variant) for checking downloads and, in M5b, zip members (`xcat/crc32.h`) | M3 | ✅ |
 | `xdvdfs` | Find the game partition (xiso, XGD1/2/3) and walk the directory trees; produce an offset-sorted file list ([xdvdfs.md](formats/xdvdfs.md), `xcat/xdvdfs.h`) | M1 | ✅ |

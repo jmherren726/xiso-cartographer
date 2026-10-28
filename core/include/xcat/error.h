@@ -1,6 +1,8 @@
 #ifndef XCAT_ERROR_H
 #define XCAT_ERROR_H
 
+#include <stdbool.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -55,6 +57,16 @@ typedef enum xc_err {
 
 /* Returns a short, user-readable description. Never NULL, even for unknown values. */
 const char *xc_err_str(xc_err err);
+
+/*
+ * What the user can do about it, as one sentence for the screen after xc_err_str (ADR 0015
+ * decision 5): retry, log in again, fix a file, or go back. "" for XC_OK; never NULL.
+ */
+const char *xc_err_action(xc_err err);
+
+/* True if trying the same thing again can help without leaving the app: the network, the
+   server, or something the user can change meanwhile (free space over FTP). */
+bool xc_err_retry(xc_err err);
 
 #ifdef __cplusplus
 }

@@ -81,6 +81,36 @@ static void test_error_strings(void)
     TEST_ASSERT_EQUAL_STRING("Unknown error", xc_err_str((xc_err)1000));
 }
 
+/* ADR 0015 decision 5: every error has a message and something to do about it, one sentence
+   that fits the install screen's dialog. Retrying is offered only where it can help. */
+static void test_error_actions(void)
+{
+    TEST_ASSERT_EQUAL_STRING("", xc_err_action(XC_OK));
+    TEST_ASSERT_FALSE(xc_err_retry(XC_OK));
+    for (int e = XC_OK + 1; e < XC_ERR_COUNT_; e++) {
+        const char *a = xc_err_action((xc_err)e);
+        TEST_ASSERT_NOT_NULL(a);
+        size_t n = strlen(a);
+        TEST_ASSERT_TRUE_MESSAGE(n > 0 && n <= 90, xc_err_str((xc_err)e));
+        TEST_ASSERT_TRUE_MESSAGE(a[0] >= 'A' && a[0] <= 'Z', a); /* a sentence */
+        TEST_ASSERT_EQUAL_CHAR_MESSAGE('.', a[n - 1], a);
+        TEST_ASSERT_NULL_MESSAGE(strstr(a, "Go back, and report"), a); /* not the fallback */
+        /* "try again" in the action, and RETRY on the screen, go together. */
+        bool says_retry = strstr(a, "try again") != NULL || strstr(a, "Try again") != NULL;
+        TEST_ASSERT_TRUE_MESSAGE(xc_err_retry((xc_err)e) == says_retry || e == XC_ERR_CANCELLED ||
+                                     e == XC_ERR_HTTP_STATUS,
+                                 a);
+    }
+    TEST_ASSERT_NOT_NULL(strstr(xc_err_action((xc_err)1000), "report"));
+    TEST_ASSERT_FALSE(xc_err_retry((xc_err)1000));
+    /* A few that matter most on the box. */
+    TEST_ASSERT_TRUE(xc_err_retry(XC_ERR_NET_TIMEOUT));
+    TEST_ASSERT_TRUE(xc_err_retry(XC_ERR_NO_SPACE));
+    TEST_ASSERT_FALSE(xc_err_retry(XC_ERR_HTTP_DENIED)); /* LOG IN instead */
+    TEST_ASSERT_FALSE(xc_err_retry(XC_ERR_NOT_INSTALLABLE));
+    TEST_ASSERT_FALSE(xc_err_retry(XC_ERR_HTTP_NOT_FOUND));
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -89,5 +119,6 @@ int main(void)
     RUN_TEST(test_in_bounds);
     RUN_TEST(test_source_read_checks_range);
     RUN_TEST(test_error_strings);
+    RUN_TEST(test_error_actions);
     return UNITY_END();
 }

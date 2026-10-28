@@ -109,6 +109,18 @@ static void test_end(void)
     /* The next ending is an ordinary one again. */
     ui_install_end(&v, false, "No space left on the hard disk.");
     TEST_ASSERT_EQUAL_INT(UI_INST_RETRY, ui_install_input(&v, UI_BTN_A));
+
+    /* Nothing to retry: BACK alone, with A or B. */
+    ui_install_end_back(&v, "Not an Xbox disc image.");
+    TEST_ASSERT_EQUAL_STRING("NOT INSTALLED", v.dialog.title);
+    TEST_ASSERT_EQUAL_STRING("BACK", v.dialog.choices[0]);
+    TEST_ASSERT_NULL(v.dialog.choices[1]);
+    TEST_ASSERT_EQUAL_INT(UI_INST_NONE, ui_install_input(&v, UI_BTN_RIGHT));
+    TEST_ASSERT_EQUAL_INT(UI_INST_DONE, ui_install_input(&v, UI_BTN_A));
+    TEST_ASSERT_EQUAL_INT(UI_INST_DONE, ui_install_input(&v, UI_BTN_B));
+    fake_reset();
+    ui_install_draw(&fake_draw, &v, 0);
+    TEST_ASSERT_EQUAL_INT(-1, fake_find_text("RETRY"));
 }
 
 static void test_draw(void)
