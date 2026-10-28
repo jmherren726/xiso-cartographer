@@ -51,10 +51,10 @@ include $(CURDIR)/tls.mk
 # Zip archives (ADR 0009): core/src/install.c installs their images.
 include $(CURDIR)/zip.mk
 
-# The screens (M8, ADR 0015): app/ui's sources, SDL2 and SDL_ttf; and the UI script's player,
-# which only this XBE has (it needs core/src/ui_script.c).
+# The screens (M8, ADR 0015): app/ui's sources, SDL2 and SDL_ttf; and the screens only this XBE
+# has: the startup screen, and the UI script's player (it needs core/src/ui_script.c).
 include $(ROOT_DIR)/app/ui/ui.mk
-SRCS += $(ROOT_DIR)/app/ui/script.c
+SRCS += $(ROOT_DIR)/app/ui/script.c $(ROOT_DIR)/app/ui/startup_view.c
 
 NXDK_DIR ?= $(ROOT_DIR)/third_party/nxdk
 
