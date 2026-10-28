@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- README: the status is now beta (0.9.0), "What it will do" is "What it does", and a new "Installing" section explains how to put a release on the console.
+
 ## [0.9.0] - 2026-10-28
 
 The first beta (M9): the on-box installer with its screens, settings, login and catalog, from M0 to M9.
