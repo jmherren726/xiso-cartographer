@@ -121,7 +121,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
-- A failed install said what went wrong but rarely what to do, and always offered RETRY. Every error now has an action (`xc_err_action`, ADR 0015 decision 5) shown right after it on the install screen and logged as "What to do:", and RETRY is offered only where trying again can help (`xc_err_retry`); otherwise BACK alone. `test_bytes` checks every error code has a message and an action that agree with it (M8 exit test: "every error has a message and an action").
+- A failed install said what went wrong but rarely what to do, and always offered RETRY. Every error now has an action (`xc_err_action`, ADR 0015 decision 5) shown right after it on the install screen and logged as "What to do:", and RETRY is offered only where trying again can help (`xc_err_retry`); otherwise BACK alone. `test_bytes` checks every error code has a message and an action that agree with it (M8 exit test: "every error has a message and an action"). Tested on the PC and on hardware (docs/testing.md).
 - With Authentication highlighted in SETTINGS, the details showed archive.org's login status; they now explain what the page is for, like the other lines.
 - The install screen said "Writing the game's files to E:\Games" whatever the install folder was; it now names the folder chosen in SETTINGS (found on hardware installing to F:\Games).
 - Catalog pipeline: Wikidata names are the `en` label, else the language-neutral `mul` label. With `en` only, 57 Xbox games (Halo: Combat Evolved among them) and many developer and publisher names were missing.
