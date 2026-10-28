@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-28
+
+The first beta (M9): the on-box installer with its screens, settings, login and catalog, from M0 to M9.
+
 ### Added
 
 - The app has a logo: the XBE carries it as its title image, so dashboards such as UnleashX and XBMC show it (M9, docs/formats/xbe-title-image.md). The owner's art, released under the project's MIT licence (`app/assets/`). `cxbe` can't add a title image, so the build adds one to `default.xbe` after it: `tools/ui/xbe_title_image.py`, standard library only, encodes the 128 × 128 image as DXT1 in an XPR0 resource and adds the section `$$XTIMAGE` in the headers' unused room, changing nothing else. Tested on the PC (`ui_xbe_title_image`), with an independent reader (pyxbe decodes it), and in xemu (the XBE still boots and the walkthrough passes).
