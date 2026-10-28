@@ -59,7 +59,7 @@ void ui_library_set_items(ui_library *lib, const ui_lib_item *items, int count, 
     for (int i = 0; i < count; i++) {
         shown[i] = i;
     }
-    lib->list = (ui_list){count, 0, 0, false};
+    lib->list = (ui_list){count, 0, 0};
     lib->query[0] = '\0';
 }
 
@@ -125,8 +125,7 @@ static void choose_folder(ui_library *lib, int rows)
             cur = i;
         }
     }
-    lib->folder_list =
-        (ui_list){lib->folder_count + 1, cur, cur >= rows ? cur - rows + 1 : 0, false};
+    lib->folder_list = (ui_list){lib->folder_count + 1, cur, cur >= rows ? cur - rows + 1 : 0};
     lib->page = UI_LIB_PAGE_FOLDERS;
 }
 
@@ -185,7 +184,7 @@ static void search(ui_library *lib, int rows)
             lib->shown[n++] = i;
         }
     }
-    lib->list = (ui_list){n, cur, cur >= rows ? cur - rows + 1 : 0, false};
+    lib->list = (ui_list){n, cur, cur >= rows ? cur - rows + 1 : 0};
 }
 
 void ui_library_set_account(ui_library *lib, bool logged_in)
@@ -749,6 +748,8 @@ static void draw_logins(const ui_draw *d, const ui_library *lib)
     }
 }
 
+/* The list of the section shown. In the sections, the D-pad moves between them, so its
+   highlight is drawn dim. */
 static void draw_list(const ui_draw *d, ui_library *lib)
 {
     ui_panel(d, list, UI_CHAMFER, ui_col_panel, ui_col_border);
@@ -758,19 +759,19 @@ static void draw_list(const ui_draw *d, ui_library *lib)
                                "Nothing installed yet. Games go to the install location in "
                                "SETTINGS.");
         } else {
-            ui_list_draw(d, &lib->installed_list, list_in, installed_name, lib);
+            ui_list_draw(d, &lib->installed_list, list_in, installed_name, lib, lib->in_sections);
         }
         return;
     }
     if (lib->section == UI_LIB_SETTINGS) {
         if (lib->page == UI_LIB_PAGE_FOLDERS) {
-            ui_list_draw(d, &lib->folder_list, list_in, folder_name, lib);
+            ui_list_draw(d, &lib->folder_list, list_in, folder_name, lib, lib->in_sections);
         } else if (lib->page == UI_LIB_PAGE_LOGINS) {
-            ui_list_draw(d, &lib->host_list, list_in, host_name, lib);
+            ui_list_draw(d, &lib->host_list, list_in, host_name, lib, lib->in_sections);
         } else if (lib->page == UI_LIB_PAGE_SOURCES) {
-            ui_list_draw(d, &lib->source_list, list_in, source_name, lib);
+            ui_list_draw(d, &lib->source_list, list_in, source_name, lib, lib->in_sections);
         } else {
-            ui_list_draw(d, &lib->settings_list, list_in, setting_name, NULL);
+            ui_list_draw(d, &lib->settings_list, list_in, setting_name, NULL, lib->in_sections);
         }
         return;
     }
@@ -788,7 +789,7 @@ static void draw_list(const ui_draw *d, ui_library *lib)
         (void)ui_text_wrap(d, UI_FONT_BODY, list_in, ui_col_dim, line);
         return;
     }
-    ui_list_draw(d, &lib->list, list_in, item_name, lib);
+    ui_list_draw(d, &lib->list, list_in, item_name, lib, lib->in_sections);
 }
 
 /* While GAMES is searched: what for, and how many games match. */
@@ -938,12 +939,6 @@ const char *ui_library_screen(const ui_library *lib)
 
 void ui_library_draw(const ui_draw *d, ui_library *lib, int pan, const char *status)
 {
-    /* In the sections, the D-pad moves between them: the list's highlight is dim. */
-    ui_list *lists[] = {&lib->list,        &lib->installed_list, &lib->settings_list,
-                        &lib->folder_list, &lib->host_list,      &lib->source_list};
-    for (size_t i = 0; i < sizeof lists / sizeof lists[0]; i++) {
-        lists[i]->idle = lib->in_sections;
-    }
     bool typing = lib->typing_for != UI_LIB_TYPING_NONE;
     if (lib->asking == UI_LIB_NONE && !typing) {
         lib->backdrop = false;

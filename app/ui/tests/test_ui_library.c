@@ -1,6 +1,7 @@
 /* Tests for the library screen (app/ui/library.h, library.c). */
 #include "fake_draw.h"
 #include "library.h"
+#include "theme.h"
 #include "unity.h"
 
 #include <stdio.h>
@@ -28,6 +29,19 @@ static int count_kind(char kind)
         n += fake_log[i].kind == kind;
     }
     return n;
+}
+
+/* Whether s was drawn in colour c. */
+static bool drawn_in(const char *s, ui_color c)
+{
+    for (int i = 0; i < fake_log_n; i++) {
+        const fake_call *f = &fake_log[i];
+        if (f->kind == 't' && strcmp(f->text, s) == 0 && f->c.r == c.r && f->c.g == c.g &&
+            f->c.b == c.b && f->c.a == c.a) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static int count_text(const char *s)
@@ -88,16 +102,19 @@ static void test_sections(void)
     ui_library lib;
     ui_library_open(&lib, items, 3, shown);
     ui_library_draw(&fake_draw, &lib, 0, NULL);
-    TEST_ASSERT_FALSE(lib.list.idle);
+    TEST_ASSERT_TRUE(drawn_in("First game", ui_col_text)); /* the list's highlighted line */
+    TEST_ASSERT_FALSE(drawn_in("First game", ui_col_dim));
     (void)ui_library_input(&lib, UI_BTN_LEFT, 5);
     TEST_ASSERT_TRUE(lib.in_sections);
-    /* In the sections, the games' highlight is dim (ui_list idle). */
+    /* In the sections, the games' highlight is dim. */
+    fake_reset();
     ui_library_draw(&fake_draw, &lib, 0, NULL);
-    TEST_ASSERT_TRUE(lib.list.idle);
-    TEST_ASSERT_TRUE(lib.settings_list.idle);
+    TEST_ASSERT_TRUE(drawn_in("First game", ui_col_dim));
+    TEST_ASSERT_FALSE(drawn_in("First game", ui_col_text));
     (void)ui_library_input(&lib, UI_BTN_RIGHT, 5);
+    fake_reset();
     ui_library_draw(&fake_draw, &lib, 0, NULL);
-    TEST_ASSERT_FALSE(lib.list.idle);
+    TEST_ASSERT_TRUE(drawn_in("First game", ui_col_text));
     (void)ui_library_input(&lib, UI_BTN_LEFT, 5);
     (void)ui_library_input(&lib, UI_BTN_UP, 5); /* stops at the top */
     TEST_ASSERT_EQUAL_INT(UI_LIB_GAMES, lib.section);
@@ -653,7 +670,7 @@ static void test_set_items(void)
     ui_library lib;
     ui_library_open(&lib, items, 3, shown);
     (void)snprintf(lib.query, sizeof lib.query, "%s", "third");
-    lib.list = (ui_list){1, 0, 0, false};
+    lib.list = (ui_list){1, 0, 0};
     ui_library_set_items(&lib, two, 2, shown2);
     TEST_ASSERT_EQUAL_INT(2, lib.list.count);
     TEST_ASSERT_EQUAL_STRING("", lib.query);

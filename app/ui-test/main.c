@@ -129,7 +129,7 @@ static void draw(const ui_draw *d, int pan, const ui_list *l, uint32_t done, con
                 done, PROGRESS_MS, pct);
 
     ui_panel(d, list, UI_CHAMFER, ui_col_panel, ui_col_border);
-    ui_list_draw(d, l, list_in, line_text, NULL);
+    ui_list_draw(d, l, list_in, line_text, NULL, false);
 
     draw_detail(d, l->cur);
 
@@ -152,7 +152,7 @@ int main(void)
         }
     }
     int rows = ui_list_rows(&d, list_in);
-    ui_list l = {LIST_LINES, 0, 0, false};
+    ui_list l = {LIST_LINES, 0, 0};
     mode m = MODE_LIST;
     ui_dialog dialog = {0};
     ui_kbd kbd;

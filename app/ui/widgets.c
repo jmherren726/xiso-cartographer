@@ -102,7 +102,8 @@ bool ui_list_input(ui_list *l, ui_button b, int rows)
     return moved;
 }
 
-void ui_list_draw(const ui_draw *d, const ui_list *l, ui_rect r, ui_list_line *line, void *ctx)
+void ui_list_draw(const ui_draw *d, const ui_list *l, ui_rect r, ui_list_line *line, void *ctx,
+                  bool idle)
 {
     int row_h = ui_list_row_h(d);
     int rows = ui_list_rows(d, r);
@@ -114,11 +115,11 @@ void ui_list_draw(const ui_draw *d, const ui_list *l, ui_rect r, ui_list_line *l
         ui_rect row = {r.x, r.y + i * row_h, w, row_h - 2};
         bool sel = n == l->cur;
         if (sel) {
-            ui_panel(d, row, 6, l->idle ? ui_col_idle : ui_col_highlight,
-                     l->idle ? ui_col_idle_border : ui_col_highlight_border);
+            ui_panel(d, row, 6, idle ? ui_col_idle : ui_col_highlight,
+                     idle ? ui_col_idle_border : ui_col_highlight_border);
         }
         (void)ui_text_fit(d, sel ? UI_FONT_BOLD : UI_FONT_BODY, row.x + TEXT_IN, row.y + 2,
-                          row.w - 2 * TEXT_IN, sel && l->idle ? ui_col_dim : ui_col_text,
+                          row.w - 2 * TEXT_IN, sel && idle ? ui_col_dim : ui_col_text,
                           line(ctx, n));
     }
     if (bar) {
