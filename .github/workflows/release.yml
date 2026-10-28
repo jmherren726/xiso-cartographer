@@ -1,0 +1,44 @@
+# Release: on a tag vX.Y.Z, builds the XBE and the release zip and creates a DRAFT GitHub release
+# with them (docs/release.md, ADR 0017). The owner adds catalog.bin and CREDITS.txt, checks it,
+# and publishes it; nothing is published from here.
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write # to create the draft release
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: release
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+      - name: Build nxdk image and XBE
+        run: make docker-xbe
+      - name: Pack the release zip
+        run: |
+          # Dated by the tagged commit, so the same tag always gives the same zip.
+          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          python3 -I tools/release/package.py --bin app/bin --out dist --tag "$GITHUB_REF_NAME"
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "What changed: see [CHANGELOG.md](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/CHANGELOG.md)."
+            echo
+            echo "Unzip and copy the \`xiso-cartographer\` folder to the console (README.txt inside)."
+            echo "\`catalog.bin\` (the game catalog) and \`CREDITS.txt\` are attached separately."
+          } > dist/notes.md
+          gh release create "$GITHUB_REF_NAME" dist/*.zip dist/*.zip.sha256 \
+            --draft --verify-tag --title "xiso-cartographer ${GITHUB_REF_NAME#v}" \
+            --notes-file dist/notes.md
